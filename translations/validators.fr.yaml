@@ -1,0 +1,2 @@
+error:
+    ticket_key_invalid: "Le ticket ne peut contenir que des lettres, chiffres et tirets."

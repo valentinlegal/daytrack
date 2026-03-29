@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>DayTrack</title>
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+        {{ encore_entry_link_tags('app') }}
+    </head>
+
+    <body>
+        <div id="app" data-jira-configured="{{ jiraConfigured ? 'true' : 'false' }}"></div>
+        {{ encore_entry_script_tags('app') }}
+    </body>
+</html>

@@ -1,0 +1,6 @@
+error:
+    invalid_date_format: "Format de date invalide, attendu : YYYY-MM-DD"
+    future_day_forbidden: "Impossible de créer une journée au-delà du lendemain"
+    day_not_found: "Journée introuvable"
+    entry_not_found: "Entrée introuvable"
+    jira_not_configured: "JIRA n'est pas configuré"

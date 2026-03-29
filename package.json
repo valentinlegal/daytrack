@@ -1,0 +1,33 @@
+{
+    "devDependencies": {
+        "@babel/core": "^7.17.0",
+        "@babel/preset-env": "^7.16.0",
+        "@babel/preset-react": "^7.28.5",
+        "@symfony/webpack-encore": "^6.0.0",
+        "@tailwindcss/postcss": "^4.2.2",
+        "@types/react": "^19.2.14",
+        "@types/react-dom": "^19.2.3",
+        "core-js": "^3.38.0",
+        "postcss": "^8.5.8",
+        "postcss-loader": "^8.2.1",
+        "regenerator-runtime": "^0.13.9",
+        "tailwindcss": "^4.2.2",
+        "ts-loader": "^9.5.4",
+        "typescript": "^6.0.2",
+        "webpack": "^5.72",
+        "webpack-cli": "^6.0.0"
+    },
+    "license": "UNLICENSED",
+    "private": true,
+    "scripts": {
+        "dev-server": "encore dev-server",
+        "dev": "encore dev",
+        "watch": "encore dev --watch",
+        "build": "encore production --progress"
+    },
+    "dependencies": {
+        "react": "^19.2.4",
+        "react-dom": "^19.2.4",
+        "react-router-dom": "^7.13.2"
+    }
+}
