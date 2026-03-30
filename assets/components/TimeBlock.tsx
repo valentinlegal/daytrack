@@ -7,6 +7,7 @@ interface TimeBlockProps {
     slot: string;
     entry: TimeEntry | null;
     isEditing: boolean;
+    noBottomBorder: boolean;
     clipboard: string | null;
     onStartEdit: () => void;
     onSave: (ticketKey: string | null, type: EntryType, comment: string | null) => void;
@@ -17,9 +18,9 @@ interface TimeBlockProps {
 }
 
 export default function TimeBlock({
-    slot,
     entry,
     isEditing,
+    noBottomBorder,
     clipboard,
     onStartEdit,
     onSave,
@@ -28,7 +29,6 @@ export default function TimeBlock({
     onPaste,
     onClear,
 }: TimeBlockProps) {
-    const [inputValue, setInputValue] = useState('');
     const [commentValue, setCommentValue] = useState('');
     const [ticketError, setTicketError] = useState(false);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -39,7 +39,9 @@ export default function TimeBlock({
     useEffect(() => {
         if (isEditing) {
             // Ne pas pré-remplir si l'entrée est une pause (pas de ticket associé)
-            setInputValue(entry?.type === EntryType.BREAK ? '' : (entry?.ticketKey ?? ''));
+            if (inputRef.current) {
+                inputRef.current.value = entry?.type === EntryType.BREAK ? '' : (entry?.ticketKey ?? '');
+            }
             setCommentValue(entry?.type === EntryType.BREAK ? '' : (entry?.comment ?? ''));
             setTimeout(() => inputRef.current?.focus(), 0);
         } else {
@@ -48,7 +50,7 @@ export default function TimeBlock({
     }, [isEditing, entry]);
 
     function save() {
-        const ticketKey = inputValue.trim().toUpperCase() || null;
+        const ticketKey = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') || null;
         const comment = commentValue.trim() || null;
 
         if (ticketKey === null) {
@@ -112,7 +114,7 @@ export default function TimeBlock({
     return (
         <>
             <div
-                className={`relative border-b flex items-center px-2 cursor-pointer select-none ${isEditing ? 'min-h-8 py-1' : 'h-8'} ${blockStyle}`}
+                className={`relative flex items-center px-2 cursor-pointer select-none ${noBottomBorder ? '' : 'border-b'} ${isEditing ? 'min-h-8 py-1' : 'h-8'} ${blockStyle}`}
                 onClick={() => !isEditing && onStartEdit()}
                 onContextMenu={handleContextMenu}
             >
@@ -122,19 +124,19 @@ export default function TimeBlock({
                         <div className="flex items-center gap-1">
                             <input
                                 ref={inputRef}
-                                value={inputValue}
-                                onChange={(e) => { setInputValue(e.target.value.replace(/[^A-Za-z0-9-]/g, '')); setTicketError(false); }}
+                                onInput={() => setTicketError(false)}
                                 onKeyDown={handleTicketKeyDown}
                                 placeholder={t('timeline.ticket_placeholder')}
                                 className={`w-28 text-xs bg-transparent outline-none font-mono uppercase text-gray-800 placeholder:text-gray-400 ${ticketError ? 'placeholder:text-red-400' : ''}`}
                             />
+                            <span className="border-l border-dashed border-gray-300 h-4 mx-1 shrink-0" />
                             <input
                                 ref={commentRef}
                                 value={commentValue}
                                 onChange={(e) => setCommentValue(e.target.value)}
                                 onKeyDown={handleCommentKeyDown}
                                 placeholder={t('timeline.comment_placeholder')}
-                                className="flex-1 text-xs bg-transparent outline-none text-gray-800 placeholder:text-gray-400"
+                                className="flex-1 text-xs bg-transparent outline-none font-mono text-gray-800 placeholder:text-gray-400"
                             />
                             <button
                                 onClick={() => onSave(null, EntryType.BREAK, null)}

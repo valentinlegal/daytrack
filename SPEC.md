@@ -2,17 +2,17 @@
 
 ## Objectif
 
-Webapp locale (via Docker) pour gérer le suivi du temps de travail quotidien, avec une granularité de 15 minutes. Remplace un tableur devenu trop contraignant.
+Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quotidien, avec une granularité de 15 minutes. Remplace un tableur devenu trop contraignant.
 
 ## Fonctionnalités cibles
 
 - Saisir les temps passés sur des tickets (type Jira)
 - Visualiser l'avancement de la journée en temps réel
 - Vérifier si le temps cible journalier est atteint
-- Gérer les dépassements ou manques d'heures (report d'un jour à l'autre)
+- Gérer les dépassements ou manques d'heures
 - Distinguer les temps de travail des pauses (non comptabilisées)
 - Générer un récapitulatif clair de la journée
-- À terme : synchroniser les temps avec Jira via API
+- Synchroniser les temps avec Jira via API
 
 ## Philosophie
 
@@ -26,58 +26,80 @@ Webapp locale (via Docker) pour gérer le suivi du temps de travail quotidien, a
 **Backend**
 - Symfony 8 + Doctrine ORM + SQLite (local, sans dépendance externe)
 - API REST (préfixe `/api/`)
+- `symfony/http-client` pour les appels JIRA
 
 **Frontend**
 - React 19 + Tailwind CSS v4
-- SPA intégrée dans Symfony via Webpack Encore
+- SPA intégrée dans Symfony (Webpack Encore)
 - Servi par Symfony — pas de serveur séparé
 
 **Infrastructure**
 - Docker Compose + FrankenPHP (Caddy + PHP 8.5)
 - Monorepo unique Symfony
+- Build multi-stage (dev / prod) avec assets npm compilés dans l'image
 
-## Architecture frontend
+## Architecture frontend dans Symfony
 
-- `assets/app.jsx` → point d'entrée React
-- `templates/base.html.twig` → shell HTML avec `<div id="app">`
-- `public/build/` → assets compilés
-- React gère toute l'UI, consomme l'API Symfony
+- `/assets/` → code React (point d'entrée : `assets/app.tsx`)
+- `/templates/base.html.twig` → shell HTML avec `<div id="app">`
+- `/public/build/` → assets compilés par Webpack Encore
+- React monte dans `#app` et gère toute l'UI
+- Config serveur → frontend via `data-*` attributes sur `#app` (ex: `data-jira-configured`)
 
-## Cœur de l'application
+## Fonctionnalités implémentées
 
-**Timeline journalière interactive** découpée en blocs de 15 minutes :
-- Assignation rapide de tickets à des blocs (clic ou drag)
-- Marquage des pauses (non comptabilisées dans le temps de travail)
-- Visualisation de l'avancement en temps réel
+### Timeline journalière
+- Grille en blocs de 15 min (8h–19h)
+- Assignation de tickets (format `PROJ-123`)
+- Commentaire optionnel par entrée
+- Marquage des pauses (non comptabilisées)
+- Copy/paste entre créneaux
+- Navigation entre les jours (J-30 à J+30)
 
-## Plan MVP
+### Récapitulatif
+- Total travaillé / objectif / solde
+- Heure de fin estimée
+- Objectif journalier éditable inline (formats : `7h30`, `7:30`, `7.5`, `8`)
 
-### 1. Backend — Modèle de données
-- Entité `WorkDay` : date, objectif heures, report de la veille
-- Entité `TimeEntry` : référence ticket, début, fin, type (travail | pause)
+### Synchronisation JIRA (JIRA Cloud REST API v3)
 
-### 2. Backend — API REST
-- `GET/POST /api/days/{date}` — récupérer ou créer une journée
-- `GET/POST /api/days/{date}/entries` — lister / créer des entrées
-- `PUT/DELETE /api/days/{date}/entries/{id}` — modifier / supprimer
+**Comportement :**
+- Bouton "Sync JIRA" dans le récapitulatif (caché si JIRA non configuré)
+- Modal de confirmation avant sync (avertit que les worklogs JIRA du jour seront écrasés)
+- Groupement des entrées par `(ticketKey, commentaire)` — les entrées fragmentées sont fusionnées
+- Filtrage des commentaires identiques au titre du ticket JIRA (sans valeur ajoutée)
+- Normalisation des commentaires **avant** le groupement pour fusionner correctement
+- Gestion du cas "journée vidée" : nettoyage JIRA même si plus aucune entrée locale (via `jiraSyncedTickets`)
+- Date des worklogs = date du jour synchronisé, heure fixée à 12h00 UTC
 
-**Règles métier :**
-- Interdire la création d'une journée au-delà de J+1 (le lendemain est autorisé, pas au-delà)
+**Stratégie de déduplication :**
+Delete-then-recreate sur les worklogs de l'utilisateur pour la journée. Pas de diff incrémental.
 
-### 3. Frontend — Timeline
-- Grille journalière en blocs de 15 min
-- Assignation d'un ticket par bloc
-- Marquage des pauses
-- Indicateur visuel d'avancement (heures cibles atteintes ou non)
+**Optimisation des requêtes :**
+3 phases parallèles avec Symfony HttpClient (les requêtes sont firées avant d'être lues) :
+1. Batch fetch titres (`/rest/api/3/search/jql`) + GET worklogs par ticket — en parallèle
+2. DELETE worklogs existants — en parallèle
+3. POST nouveaux worklogs — en parallèle
 
-### 4. Frontend — Récapitulatif
-- Total travaillé / objectif / delta
-- Liste des tickets avec temps cumulé
+**Indicateur de statut :**
+- `jiraSyncedAt` sur `WorkDay` → vert "Synchronisé à HH:mm"
+- Reset à `null` à chaque modification d'entrée → orange "Non synchronisé"
 
-## Évolutions prévues (post-MVP)
+**Configuration (variables d'env) :**
+- `JIRA_BASE_URL` — ex: `https://monentreprise.atlassian.net`
+- `JIRA_USER_EMAIL` — email du compte Atlassian
+- `JIRA_API_TOKEN` — token généré sur id.atlassian.com → Security → API tokens
 
-- Synchronisation automatique avec Jira (API)
+### Production
+- Image Docker multi-stage avec assets npm compilés
+- Volume Docker `db_data` pour persister la SQLite
+- Migrations jouées automatiquement au démarrage (`docker-entrypoint.sh`)
+- Ports configurables via `.env.local` (`HTTP_PORT`, `HTTPS_PORT`)
+- TLS automatique via Let's Encrypt (Caddy)
+
+## Évolutions possibles (post-V1)
+
+- Auto-complétion des tickets JIRA
 - Gestion des tickets favoris
-- Auto-complétion des tickets
 - Statistiques hebdomadaires
 - Export des données

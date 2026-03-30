@@ -90,7 +90,7 @@ RUN npm ci --no-audit --no-fund
 COPY --link --exclude=frankenphp/ . ./
 
 RUN <<-EOF
-	mkdir -p var/cache var/log var/share
+	mkdir -p var/cache var/log var/share db
 	composer dump-autoload --classmap-authoritative --no-dev
 	composer dump-env prod
 	composer run-script --no-dev post-install-cmd

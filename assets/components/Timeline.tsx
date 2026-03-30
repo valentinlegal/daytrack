@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { EntryType } from '../types/api';
 import type { TimeEntry, WorkDay } from '../types/api';
-import { buildEntryMap, generateTimeSlots, getNextSlot, isHourSlot } from '../utils/timeline';
+import { TIMELINE_START_HOUR, buildEntryMap, generateTimeSlots, getNextSlot, isHourSlot } from '../utils/timeline';
 import { createEntry, deleteEntry, updateEntry } from '../services/dayService';
 import TimeBlock from './TimeBlock';
 
@@ -75,7 +75,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                 const entry = entryMap.get(slot) ?? null;
 
                 return (
-                    <div key={slot} className="flex items-stretch">
+                    <div key={slot} className={`flex items-stretch ${isHourSlot(slot) && !slot.startsWith(String(TIMELINE_START_HOUR).padStart(2, '0')) ? 'border-t-2 border-gray-200' : ''}`}>
                         {/* Colonne heure — affichée uniquement sur les heures rondes */}
                         <div className="w-12 shrink-0 flex items-start justify-end pr-2 pt-0.5">
                             {isHourSlot(slot) && (
@@ -94,6 +94,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                 slot={slot}
                                 entry={entry}
                                 isEditing={editingSlot === slot}
+                                noBottomBorder={slot.endsWith(':45')}
                                 clipboard={clipboard?.ticketKey ?? null}
                                 onStartEdit={() => setEditingSlot(slot)}
                                 onSave={(ticketKey, type, comment) => void handleSave(slot, ticketKey, type, comment)}

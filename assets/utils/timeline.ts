@@ -1,7 +1,7 @@
 import type { TimeEntry } from '../types/api';
 
-export const TIMELINE_START_HOUR = 8;
-export const TIMELINE_END_HOUR = 19;
+export const TIMELINE_START_HOUR = 7;
+export const TIMELINE_END_HOUR = 20;
 export const SLOT_MINUTES = 15;
 
 // Génère tous les créneaux de la journée (ex: ["08:00", "08:15", ...,"18:45"])

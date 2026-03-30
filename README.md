@@ -56,7 +56,7 @@ cp .env .env.local
 # Clé secrète Symfony — générer avec : openssl rand -hex 32
 APP_SECRET=remplacer_par_une_vraie_cle_secrete
 
-# URL publique de l'application (sans trailing slash)
+# URL publique de l'application
 SERVER_NAME=daytrack.mondomaine.com
 
 # JIRA (optionnel — laisser vide si non utilisé)
