@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { EntryType } from '../types/api';
 import type { TimeEntry, WorkDay } from '../types/api';
-import { TIMELINE_START_HOUR, buildEntryMap, generateTimeSlots, getNextSlot, isHourSlot } from '../utils/timeline';
+import { TIMELINE_START_HOUR, buildEntryMap, generateTimeSlots, getNextSlot, isHourSlot, today } from '../utils/timeline';
 import { createEntry, deleteEntry, updateEntry } from '../services/dayService';
 import TimeBlock from './TimeBlock';
 
@@ -12,9 +12,33 @@ interface TimelineProps {
 
 const TIME_SLOTS = generateTimeSlots();
 
+// Retourne le créneau et l'offset exact dans ce créneau à partir d'un instant donné
+function getNowPosition(date: Date): { slot: string; offsetPercent: number } {
+    const h = date.getHours();
+    const m = date.getMinutes();
+    const slotMinutes = Math.floor(m / 15) * 15;
+    const slot = `${String(h).padStart(2, '0')}:${String(slotMinutes).padStart(2, '0')}`;
+    const offsetPercent = (m % 15) / 15 * 100;
+    return { slot, offsetPercent };
+}
+
 export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     const [editingSlot, setEditingSlot] = useState<string | null>(null);
     const [clipboard, setClipboard] = useState<{ ticketKey: string | null; comment: string | null; type: EntryType } | null>(null);
+    const [tick, setTick] = useState(0);
+
+    // Rafraîchit l'indicateur "maintenant" à chaque passage de minute
+    useEffect(() => {
+        const msUntilNextMinute = (60 * 1000) - (Date.now() % (60 * 1000));
+        const id = setTimeout(() => setTick((t) => t + 1), msUntilNextMinute);
+        return () => clearTimeout(id);
+    }, [tick]);
+
+    const isToday = workDay.date === today();
+    // Un seul new Date() pour slot et offset — évite toute désynchronisation à la frontière d'une minute
+    const { slot: nowSlot, offsetPercent: nowOffsetPercent } = isToday
+        ? getNowPosition(new Date())
+        : { slot: null, offsetPercent: 0 };
 
     const entryMap = buildEntryMap(workDay.entries);
 
@@ -75,9 +99,9 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                 const entry = entryMap.get(slot) ?? null;
 
                 return (
-                    <div key={slot} className={`flex items-stretch ${isHourSlot(slot) && !slot.startsWith(String(TIMELINE_START_HOUR).padStart(2, '0')) ? 'border-t-2 border-gray-200' : ''}`}>
+                    <div key={slot} className={`relative flex items-stretch ${isHourSlot(slot) && !slot.startsWith(String(TIMELINE_START_HOUR).padStart(2, '0')) ? 'border-t-2 border-gray-200' : ''}`}>
                         {/* Colonne heure — affichée uniquement sur les heures rondes */}
-                        <div className="w-12 shrink-0 flex items-start justify-end pr-2 pt-0.5">
+                        <div className="w-12 shrink-0 flex items-center justify-end pr-2">
                             {isHourSlot(slot) && (
                                 <span className="text-xs font-semibold text-gray-500 font-mono">{slot}</span>
                             )}
@@ -87,6 +111,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                         <div className="w-24 shrink-0 flex items-center pr-2">
                             <span className="text-xs text-gray-400 font-mono">{slot}–{getNextSlot(slot)}</span>
                         </div>
+
+                        {slot === nowSlot && <NowIndicator offsetPercent={nowOffsetPercent} />}
 
                         {/* Bloc de 15 minutes */}
                         <div className="flex-1">
@@ -107,6 +133,19 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     </div>
                 );
             })}
+        </div>
+    );
+}
+
+/** Ligne rouge "maintenant" positionnée à l'heure exacte dans le créneau */
+function NowIndicator({ offsetPercent }: { offsetPercent: number }) {
+    return (
+        <div
+            className="absolute left-36 right-0 flex items-center pointer-events-none z-10 -translate-y-1/2"
+            style={{ top: `${offsetPercent}%` }}
+        >
+            <div className="w-2 h-2 rounded-full bg-red-400 shrink-0 -ml-1" />
+            <div className="flex-1 h-px bg-red-400" />
         </div>
     );
 }

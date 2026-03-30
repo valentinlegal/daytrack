@@ -49,17 +49,18 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 ## Fonctionnalités implémentées
 
 ### Timeline journalière
-- Grille en blocs de 15 min (8h–19h)
+- Grille en blocs de 15 min (7h–20h)
 - Assignation de tickets (format `PROJ-123`)
 - Commentaire optionnel par entrée
 - Marquage des pauses (non comptabilisées)
 - Copy/paste entre créneaux
 - Navigation entre les jours (J-30 à J+30)
+- Indicateur "maintenant" (ligne rouge) positionné à l'heure exacte dans le créneau courant, mis à jour à la minute, uniquement sur le jour en cours
 
 ### Récapitulatif
-- Total travaillé / objectif / solde
-- Heure de fin estimée
+- Objectif journalier / total travaillé / solde (dans cet ordre)
 - Objectif journalier éditable inline (formats : `7h30`, `7:30`, `7.5`, `8`)
+- Heure de fin estimée : basée sur l'heure actuelle (floor au quart d'heure inférieur) + minutes restantes ; tient compte des créneaux déjà saisis dont la fin dépasse l'heure actuelle ; affichée uniquement pour le jour en cours et si solde négatif ; affiche `> 23:59` si dépassement minuit ; mise à jour automatique au quart d'heure
 
 ### Synchronisation JIRA (JIRA Cloud REST API v3)
 

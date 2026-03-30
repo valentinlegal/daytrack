@@ -1,26 +1,37 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WorkDay } from '../types/api';
 import { t } from '../i18n/fr';
-import { formatMinutes } from '../utils/timeline';
+import { formatMinutes, today } from '../utils/timeline';
 import { updateDayTarget } from '../services/dayService';
 import JiraSyncButton from './JiraSyncButton';
 
-// Calcule l'heure de fin estimée à partir de la dernière entrée saisie + les minutes restantes
+// Retourne l'heure actuelle en minutes depuis minuit
+function getCurrentMinutes(): number {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+}
+
+// Calcule l'heure de fin estimée en se basant sur l'heure actuelle
 function computeEstimatedEnd(workDay: WorkDay): string | null {
     if (workDay.balanceMinutes >= 0) return null;
+    if (workDay.date !== today()) return null;
 
-    const lastEndedAt = workDay.entries
-        .map((e) => e.endedAt)
-        .filter((t): t is string => null !== t)
-        .sort()
-        .at(-1);
+    const nowFloor = Math.floor(getCurrentMinutes() / 15) * 15;
+    const remaining = -workDay.balanceMinutes;
 
-    if (undefined === lastEndedAt) return null;
+    // Si des créneaux déjà saisis dépassent l'heure actuelle, on part de leur fin
+    const lastFutureEnd = workDay.entries.reduce((max, e) => {
+        if (null === e.endedAt) return max;
+        const [h, m] = e.endedAt.split(':').map(Number);
+        const end = h * 60 + m;
+        return end > nowFloor ? Math.max(max, end) : max;
+    }, 0);
 
-    const [h, m] = lastEndedAt.split(':').map(Number);
-    const totalMinutes = h * 60 + m + Math.abs(workDay.balanceMinutes);
+    const estimatedMinutes = Math.max(nowFloor, lastFutureEnd) + remaining;
 
-    return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+    if (estimatedMinutes >= 24 * 60) return '> 23:59';
+
+    return `${String(Math.floor(estimatedMinutes / 60)).padStart(2, '0')}:${String(estimatedMinutes % 60).padStart(2, '0')}`;
 }
 
 // Arrondit au quart d'heure le plus proche (ex: 46 → 45, 52 → 60)
@@ -53,8 +64,17 @@ interface DaySummaryProps {
 
 export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps) {
     const balance = workDay.balanceMinutes;
-    const estimatedEnd = computeEstimatedEnd(workDay);
+    const [tick, setTick] = useState(0);
     const [editingTarget, setEditingTarget] = useState(false);
+
+    // Rafraîchit l'estimation à chaque passage de quart d'heure
+    useEffect(() => {
+        const msUntilNextQuarter = (15 * 60 * 1000) - (Date.now() % (15 * 60 * 1000));
+        const id = setTimeout(() => setTick((t) => t + 1), msUntilNextQuarter);
+        return () => clearTimeout(id);
+    }, [tick]);
+
+    const estimatedEnd = computeEstimatedEnd(workDay);
     const [targetInput, setTargetInput] = useState('');
     const [targetError, setTargetError] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -93,8 +113,6 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
                 {t('summary.title')}
             </h2>
 
-            <SummaryRow label={t('summary.worked')} value={formatMinutes(workDay.workedMinutes)} />
-
             {/* Objectif — cliquable pour édition inline */}
             <div className="group flex justify-between items-center text-sm">
                 <span className="text-gray-600">{t('summary.target')}</span>
@@ -122,6 +140,8 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
                     </button>
                 )}
             </div>
+
+            <SummaryRow label={t('summary.worked')} value={formatMinutes(workDay.workedMinutes)} />
 
             <div className="border-t border-gray-200 pt-3 flex flex-col gap-3">
                 <SummaryRow
