@@ -19,15 +19,17 @@ function computeEstimatedEnd(workDay: WorkDay): string | null {
     const nowFloor = Math.floor(getCurrentMinutes() / 15) * 15;
     const remaining = -workDay.balanceMinutes;
 
-    // Si des créneaux déjà saisis dépassent l'heure actuelle, on part de leur fin
-    const lastFutureEnd = workDay.entries.reduce((max, e) => {
-        if (null === e.endedAt) return max;
+    // Durée totale des créneaux déjà saisis qui se terminent après l'heure actuelle :
+    // ces créneaux seront "traversés" en travaillant en continu depuis maintenant,
+    // il faut donc les ajouter au temps restant pour obtenir la durée totale depuis maintenant.
+    const futureWorked = workDay.entries.reduce((sum, e) => {
+        if (null === e.endedAt) return sum;
         const [h, m] = e.endedAt.split(':').map(Number);
         const end = h * 60 + m;
-        return end > nowFloor ? Math.max(max, end) : max;
+        return end > nowFloor ? sum + (e.durationMinutes ?? 0) : sum;
     }, 0);
 
-    const estimatedMinutes = Math.max(nowFloor, lastFutureEnd) + remaining;
+    const estimatedMinutes = nowFloor + remaining + futureWorked;
 
     if (estimatedMinutes >= 24 * 60) return '> 23:59';
 
