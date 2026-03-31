@@ -24,7 +24,14 @@ function getNowPosition(date: Date): { slot: string; offsetPercent: number } {
 
 export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     const [editingSlot, setEditingSlot] = useState<string | null>(null);
-    const [clipboard, setClipboard] = useState<{ ticketKey: string | null; comment: string | null; type: EntryType } | null>(null);
+    const [clipboard, setClipboard] = useState<{ ticketKey: string | null; comment: string | null; type: EntryType } | null>(() => {
+        try {
+            const stored = localStorage.getItem('daytrack_clipboard');
+            return stored ? JSON.parse(stored) as { ticketKey: string | null; comment: string | null; type: EntryType } : null;
+        } catch {
+            return null;
+        }
+    });
     const [tick, setTick] = useState(0);
 
     // Rafraîchit l'indicateur "maintenant" à chaque passage de minute
@@ -84,7 +91,9 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     }
 
     function handleCopy(entry: TimeEntry) {
-        setClipboard({ ticketKey: entry.ticketKey, comment: entry.comment, type: entry.type });
+        const value = { ticketKey: entry.ticketKey, comment: entry.comment, type: entry.type };
+        setClipboard(value);
+        localStorage.setItem('daytrack_clipboard', JSON.stringify(value));
     }
 
     async function handlePaste(slot: string) {
