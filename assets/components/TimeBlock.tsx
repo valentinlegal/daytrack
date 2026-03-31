@@ -34,6 +34,21 @@ export default function TimeBlock({
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const commentRef = useRef<HTMLInputElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    // Ferme le menu contextuel au moindre clic (gauche ou droit) en dehors du menu
+    // mousedown se déclenche avant contextmenu, ce qui permet au bloc cible d'ouvrir son propre menu ensuite
+    useEffect(() => {
+        if (null === contextMenu) return;
+
+        function handleMouseDown(e: MouseEvent) {
+            if (menuRef.current?.contains(e.target as Node)) return;
+            closeContextMenu();
+        }
+
+        document.addEventListener('mousedown', handleMouseDown);
+        return () => document.removeEventListener('mousedown', handleMouseDown);
+    }, [contextMenu]);
 
     // Pré-remplit les champs avec les valeurs existantes à l'ouverture
     useEffect(() => {
@@ -176,9 +191,8 @@ export default function TimeBlock({
 
             {/* Menu contextuel (clic droit) */}
             {null !== contextMenu && (
-                <>
-                    <div className="fixed inset-0 z-40" onClick={closeContextMenu} />
                     <div
+                        ref={menuRef}
                         className="fixed z-50 bg-white border border-gray-200 rounded shadow-md py-1 text-sm min-w-32"
                         style={{ top: contextMenu.y, left: contextMenu.x }}
                     >
@@ -194,6 +208,12 @@ export default function TimeBlock({
                                 onClick={() => { onPaste(); closeContextMenu(); }}
                             />
                         )}
+                        {entry?.type !== EntryType.BREAK && (
+                            <ContextMenuItem
+                                label={t('timeline.convert_to_break')}
+                                onClick={() => { onSave(null, EntryType.BREAK, null); closeContextMenu(); }}
+                            />
+                        )}
                         {entry && (
                             <ContextMenuItem
                                 label={t('timeline.clear')}
@@ -201,11 +221,7 @@ export default function TimeBlock({
                                 danger
                             />
                         )}
-                        {!entry && null === clipboard && (
-                            <div className="px-3 py-1 text-gray-400 text-xs">Aucune action</div>
-                        )}
                     </div>
-                </>
             )}
         </>
     );

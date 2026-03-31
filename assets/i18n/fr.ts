@@ -18,6 +18,7 @@ const fr = {
         ticket_placeholder: "PROJ-123",
         comment_placeholder: "Commentaire (optionnel)",
         ticket_required: "ID requis pour enregistrer une saisie",
+        convert_to_break: "Convertir en pause",
     },
     navigation: {
         previous_day: "Jour précédent",
