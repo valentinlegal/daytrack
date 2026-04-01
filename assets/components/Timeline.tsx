@@ -56,6 +56,11 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
             let updated: WorkDay;
 
             if (existing) {
+                // Aucune modification détectée : on n'appelle pas l'API
+                if (existing.type === type && existing.ticketKey === ticketKey && existing.comment === comment) {
+                    setEditingSlot(null);
+                    return;
+                }
                 // Mise à jour d'une entrée existante
                 updated = await updateEntry(workDay.date, existing.id, {
                     ticketKey,
