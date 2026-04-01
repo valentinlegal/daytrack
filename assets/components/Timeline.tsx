@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EntryType } from '../types/api';
 import type { TimeEntry, WorkDay } from '../types/api';
 import { TIMELINE_START_HOUR, buildEntryMap, generateTimeSlots, getNextSlot, isHourSlot, today } from '../utils/timeline';
@@ -23,6 +23,7 @@ function getNowPosition(date: Date): { slot: string; offsetPercent: number } {
 }
 
 export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
+    const scrollRef = useRef<HTMLDivElement>(null);
     const [editingSlot, setEditingSlot] = useState<string | null>(null);
     const [clipboard, setClipboard] = useState<{ ticketKey: string | null; comment: string | null; type: EntryType } | null>(() => {
         try {
@@ -40,6 +41,18 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         const id = setTimeout(() => setTick((t) => t + 1), msUntilNextMinute);
         return () => clearTimeout(id);
     }, [tick]);
+
+    // Restaure la position de scroll mémorisée pour ce jour
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (null === el) return;
+        const saved = sessionStorage.getItem(`daytrack_scroll_${workDay.date}`);
+        if (null !== saved) {
+            el.scrollTop = parseInt(saved, 10);
+        } else {
+            el.scrollTop = 0;
+        }
+    }, [workDay.date]);
 
     const isToday = workDay.date === today();
     // Un seul new Date() pour slot et offset — évite toute désynchronisation à la frontière d'une minute
@@ -107,8 +120,14 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         await handleSave(slot, clipboard.ticketKey, clipboard.type, clipboard.comment);
     }
 
+    function handleScroll() {
+        const el = scrollRef.current;
+        if (null === el) return;
+        sessionStorage.setItem(`daytrack_scroll_${workDay.date}`, String(el.scrollTop));
+    }
+
     return (
-        <div className="flex-1 overflow-y-auto">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
             {TIME_SLOTS.map((slot) => {
                 const entry = entryMap.get(slot) ?? null;
 
