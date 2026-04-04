@@ -53,9 +53,27 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 - Assignation de tickets (format `PROJ-123`)
 - Commentaire optionnel par entrée
 - Marquage des pauses (non comptabilisées)
-- Copy/paste entre créneaux
 - Navigation entre les jours (J-30 à J+30)
 - Indicateur "maintenant" (ligne rouge) positionné à l'heure exacte dans le créneau courant, mis à jour à la minute, uniquement sur le jour en cours
+- Position de scroll mémorisée par jour en session
+
+### Sélection multi-cellule
+- Clic simple : sélectionne une cellule
+- Clic-glisser, Shift+clic, Ctrl+clic : sélection étendue
+- Touches fléchées (± Shift) pour naviguer et étendre la sélection
+- Suppr / Backspace : efface les entrées sélectionnées
+- Clic droit sur la sélection : menu contextuel (copier, coller, effacer, convertir en pause)
+
+### Copier / Coller en bloc
+- Ctrl+C : copie toute la sélection comme un bloc — les offsets relatifs entre créneaux et les cellules vides explicitement sélectionnées sont préservés
+- Ctrl+V avec 1 cellule cible : colle le bloc à partir de cette cellule (débordement tronqué silencieusement) ; une cellule vide copiée efface l'entrée destination
+- Ctrl+V avec plusieurs cellules sélectionnées : modal d'avertissement ("sélectionne une seule cellule cible")
+- Clic droit → Coller : colle toujours sur la cellule cliquée, sans modal
+- Presse-papier stocké en `sessionStorage` (clé `daytrack_clipboard`)
+
+### Undo / Redo
+- Ctrl+Z / Ctrl+Shift+Z (ou Ctrl+Y) sur toutes les opérations (création, modification, suppression, coller, effacer, convertir en pause)
+- Historique limité à 50 snapshots, persisté en `sessionStorage` par jour
 
 ### Récapitulatif
 - Objectif journalier / total travaillé / solde (dans cet ordre)

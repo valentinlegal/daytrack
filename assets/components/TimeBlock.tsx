@@ -7,27 +7,39 @@ interface TimeBlockProps {
     slot: string;
     entry: TimeEntry | null;
     isEditing: boolean;
+    isSelected: boolean;
     noBottomBorder: boolean;
-    clipboard: string | null;
+    hasClipboard: boolean;
+    onSelect: (e: React.MouseEvent) => void;
     onStartEdit: () => void;
     onSave: (ticketKey: string | null, type: EntryType, comment: string | null) => void;
     onCancel: () => void;
     onCopy: () => void;
     onPaste: () => void;
     onClear: () => void;
+    onConvertToBreak: () => void;
+    onContextMenuOpen: () => void;
+    onCellMouseDown: (e: React.MouseEvent) => void;
+    onDragExtend: () => void;
 }
 
 export default function TimeBlock({
     entry,
     isEditing,
+    isSelected,
     noBottomBorder,
-    clipboard,
+    hasClipboard,
+    onSelect,
     onStartEdit,
     onSave,
     onCancel,
     onCopy,
     onPaste,
     onClear,
+    onConvertToBreak,
+    onContextMenuOpen,
+    onCellMouseDown,
+    onDragExtend,
 }: TimeBlockProps) {
     const [commentValue, setCommentValue] = useState('');
     const [ticketError, setTicketError] = useState(false);
@@ -113,6 +125,8 @@ export default function TimeBlock({
 
     function handleContextMenu(e: React.MouseEvent) {
         e.preventDefault();
+        // Sélectionne la cellule si elle n'est pas déjà dans la sélection courante
+        onContextMenuOpen();
         setContextMenu({ x: e.clientX, y: e.clientY });
     }
 
@@ -122,16 +136,27 @@ export default function TimeBlock({
 
     const blockStyle = entry
         ? entry.type === EntryType.BREAK
-            ? 'bg-amber-50 border-amber-200 text-amber-700'
-            : 'bg-indigo-50 border-indigo-200 text-indigo-800'
+            ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+            : 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100'
         : 'bg-white border-gray-100 text-gray-400 hover:bg-gray-50';
+
+    const selectedStyle = isSelected
+        ? entry
+            ? EntryType.BREAK === entry.type
+                ? 'ring-2 ring-inset ring-amber-400'
+                : 'ring-2 ring-inset ring-indigo-400'
+            : 'ring-2 ring-inset ring-gray-400'
+        : '';
 
     return (
         <>
             <div
-                className={`relative flex items-center px-2 cursor-pointer select-none ${noBottomBorder ? '' : 'border-b'} ${isEditing ? 'min-h-8 py-1' : 'h-8'} ${blockStyle}`}
-                onClick={() => !isEditing && onStartEdit()}
+                className={`relative flex items-center px-2 cursor-pointer select-none ${noBottomBorder ? '' : 'border-b'} ${isEditing ? 'min-h-8 py-1' : 'h-8'} ${blockStyle} ${selectedStyle}`}
+                onClick={(e) => { e.stopPropagation(); if (!isEditing) onSelect(e); }}
+                onDoubleClick={() => !isEditing && onStartEdit()}
                 onContextMenu={handleContextMenu}
+                onMouseDown={(e) => { if (!isEditing) onCellMouseDown(e); }}
+                onMouseEnter={() => onDragExtend()}
             >
                 {isEditing ? (
                     // Saisie inline du ticket et du commentaire
@@ -202,7 +227,7 @@ export default function TimeBlock({
                                 onClick={() => { onCopy(); closeContextMenu(); }}
                             />
                         )}
-                        {null !== clipboard && (
+                        {hasClipboard && (
                             <ContextMenuItem
                                 label={t('timeline.paste')}
                                 onClick={() => { onPaste(); closeContextMenu(); }}
@@ -211,7 +236,7 @@ export default function TimeBlock({
                         {entry?.type !== EntryType.BREAK && (
                             <ContextMenuItem
                                 label={t('timeline.convert_to_break')}
-                                onClick={() => { onSave(null, EntryType.BREAK, null); closeContextMenu(); }}
+                                onClick={() => { onConvertToBreak(); closeContextMenu(); }}
                             />
                         )}
                         {entry && (

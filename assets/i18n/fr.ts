@@ -19,6 +19,8 @@ const fr = {
         comment_placeholder: "Commentaire (optionnel)",
         ticket_required: "ID requis pour enregistrer une saisie",
         convert_to_break: "Convertir en pause",
+        paste_multiselection_warning: "Pour coller, sélectionne d'abord une seule cellule cible.",
+        close: "Fermer",
     },
     navigation: {
         previous_day: "Jour précédent",
