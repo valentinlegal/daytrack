@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { WorkDay } from '../types/api';
+import type { WorkDay, TimeEntry } from '../types/api';
+import { EntryType } from '../types/api';
 import { t } from '../i18n/fr';
 import { formatMinutes, today } from '../utils/timeline';
 import { updateDayTarget } from '../services/dayService';
+import { getTicketTypeStyle } from '../config/ticketTypeColors';
 import JiraSyncButton from './JiraSyncButton';
 
 // Retourne l'heure actuelle en minutes depuis minuit
@@ -34,6 +36,48 @@ function computeEstimatedEnd(workDay: WorkDay): string | null {
     if (estimatedMinutes >= 24 * 60) return '> 23:59';
 
     return `${String(Math.floor(estimatedMinutes / 60)).padStart(2, '0')}:${String(estimatedMinutes % 60).padStart(2, '0')}`;
+}
+
+interface TicketRecapEntry {
+    ticketKey: string;
+    ticketSummary: string | null;
+    ticketType: string | null;
+    totalMinutes: number;
+    comments: string[];
+    hasUncommentedEntries: boolean;
+}
+
+// Groupe les entrées WORK par ticketKey et calcule les totaux
+function computeTicketRecap(entries: TimeEntry[]): TicketRecapEntry[] {
+    const map = new Map<string, TicketRecapEntry>();
+
+    for (const entry of entries) {
+        if (entry.type !== EntryType.WORK || !entry.ticketKey) continue;
+
+        const key = entry.ticketKey;
+        if (!map.has(key)) {
+            map.set(key, {
+                ticketKey: key,
+                ticketSummary: entry.ticketSummary ?? null,
+                ticketType: entry.ticketType ?? null,
+                totalMinutes: 0,
+                comments: [],
+                hasUncommentedEntries: false,
+            });
+        }
+
+        const rec = map.get(key)!;
+        rec.totalMinutes += entry.durationMinutes ?? 0;
+
+        const comment = entry.comment?.trim();
+        if (comment) {
+            if (!rec.comments.includes(comment)) rec.comments.push(comment);
+        } else {
+            rec.hasUncommentedEntries = true;
+        }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.totalMinutes - a.totalMinutes);
 }
 
 // Arrondit au quart d'heure le plus proche (ex: 46 → 45, 52 → 60)
@@ -109,8 +153,10 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
         else if (e.key === 'Escape') setEditingTarget(false);
     }
 
+    const ticketRecap = computeTicketRecap(workDay.entries);
+
     return (
-        <div className="w-56 shrink-0 bg-white border-l border-gray-200 p-4 flex flex-col gap-4">
+        <div className="w-72 shrink-0 bg-white border-l border-gray-200 p-4 flex flex-col gap-4 overflow-y-auto">
             <h2 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">
                 {t('summary.title')}
             </h2>
@@ -160,6 +206,38 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
             </div>
 
             <JiraSyncButton workDay={workDay} onWorkDayUpdate={onWorkDayUpdate} />
+
+            {ticketRecap.length > 0 && (
+                <div className="border-t border-gray-200 pt-3 flex flex-col gap-3">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        {t('summary.tickets_title')}
+                    </span>
+                    {ticketRecap.map((rec) => {
+                        const keyColor = getTicketTypeStyle(rec.ticketType).ticketKey;
+                        return (
+                        <div key={rec.ticketKey} className="flex flex-col gap-1">
+                            <div className="flex justify-between items-baseline gap-1">
+                                <span className={`text-xs font-mono font-semibold shrink-0 ${keyColor}`}>{rec.ticketKey}</span>
+                                <span className="text-xs text-gray-400 shrink-0">{formatMinutes(rec.totalMinutes)}</span>
+                            </div>
+                            {rec.ticketSummary && (
+                                <span className="text-sm text-gray-800 truncate leading-snug" title={rec.ticketSummary}>{rec.ticketSummary}</span>
+                            )}
+                            {(rec.comments.length > 0 || rec.hasUncommentedEntries) && (
+                                <ul className="flex flex-col gap-0.5 mt-0.5">
+                                    {rec.comments.map((c) => (
+                                        <li key={c} className="text-xs text-gray-500 pl-2 border-l-2 border-gray-200 truncate" title={c}>{c}</li>
+                                    ))}
+                                    {rec.hasUncommentedEntries && rec.comments.length > 0 && (
+                                        <li className="text-xs text-gray-400 italic pl-2 border-l-2 border-gray-200">{t('summary.no_comment')}</li>
+                                    )}
+                                </ul>
+                            )}
+                        </div>
+                        );
+                    })}
+                </div>
+            )}
         </div>
     );
 }

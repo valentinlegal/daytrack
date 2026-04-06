@@ -79,6 +79,18 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 - Objectif journalier / total travaillé / solde (dans cet ordre)
 - Objectif journalier éditable inline (formats : `7h30`, `7:30`, `7.5`, `8`)
 - Heure de fin estimée : basée sur l'heure actuelle (floor au quart d'heure inférieur) + minutes restantes ; tient compte des créneaux déjà saisis dont la fin dépasse l'heure actuelle ; affichée uniquement pour le jour en cours et si solde négatif ; affiche `> 23:59` si dépassement minuit ; mise à jour automatique au quart d'heure
+- **Récap tickets** : liste des tickets travaillés dans la journée, triés par temps passé décroissant — ID coloré par type, titre du ticket, durée totale, commentaires ; la ligne "(sans commentaire)" n'apparaît que si le ticket a aussi des entrées commentées
+
+### Enrichissement des saisies via Jira
+
+- À la saisie d'un ID ticket, le titre (`summary`) et le type sont récupérés via l'API Jira et stockés sur l'entrée (`ticketSummary`, `ticketType`)
+- Les sous-tâches remontent le type du ticket parent (ex : Story plutôt que Sub-task)
+- Cache 3 couches : `knownTickets` (entrées du jour en mémoire) → `sessionStorage` → appel API
+- Mise à jour instantanée de la couleur depuis le cache local à chaque frappe ; appel API au blur si le ticket a changé
+- Si Jira est configuré et le ticket est introuvable, une erreur est affichée et la sauvegarde est bloquée
+- Affichage en mode lecture : layout 2 colonnes (ID | titre + commentaire) si un titre est disponible
+- Couleur par type configurable via `JIRA_TICKET_TYPES` dans `.env` (format : `Story:emerald,Bug:orange,...`) ; palette statique dans `assets/config/ticketTypeColors.ts` (contrainte Tailwind v4)
+- Le bandeau gauche coloré (4 px) porte l'information de type ; fond neutre pour toutes les entrées WORK
 
 ### Synchronisation JIRA (JIRA Cloud REST API v3)
 
@@ -86,7 +98,6 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 - Bouton "Sync JIRA" dans le récapitulatif (caché si JIRA non configuré)
 - Modal de confirmation avant sync (avertit que les worklogs JIRA du jour seront écrasés)
 - Groupement des entrées par `(ticketKey, commentaire)` — les entrées fragmentées sont fusionnées
-- Filtrage des commentaires identiques au titre du ticket JIRA (sans valeur ajoutée)
 - Normalisation des commentaires **avant** le groupement pour fusionner correctement
 - Gestion du cas "journée vidée" : nettoyage JIRA même si plus aucune entrée locale (via `jiraSyncedTickets`)
 - Date des worklogs = date du jour synchronisé, heure fixée à 12h00 UTC
@@ -108,6 +119,7 @@ Delete-then-recreate sur les worklogs de l'utilisateur pour la journée. Pas de 
 - `JIRA_BASE_URL` — ex: `https://monentreprise.atlassian.net`
 - `JIRA_USER_EMAIL` — email du compte Atlassian
 - `JIRA_API_TOKEN` — token généré sur id.atlassian.com → Security → API tokens
+- `JIRA_TICKET_TYPES` — mapping type → couleur (ex: `Story:emerald,Bug:orange,Epic:purple,Task:indigo`)
 
 ### Production
 - Image Docker multi-stage avec assets npm compilés

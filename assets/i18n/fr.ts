@@ -35,6 +35,8 @@ const fr = {
         balance: "Solde",
         estimated_end: "Fin estimée",
         target_edit_hint: "Cliquer pour modifier l'objectif",
+        tickets_title: "Tickets",
+        no_comment: "(sans commentaire)",
     },
     jira: {
         button: {

@@ -150,6 +150,9 @@ export default function TimeBlock({
     }
 
     function save() {
+        // Si Jira est configuré et le ticket est invalide, on bloque la sauvegarde
+        if (ticketFetchError !== null) return;
+
         const ticketKey = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') || null;
         const comment = commentValue.trim() || null;
 
@@ -275,7 +278,7 @@ export default function TimeBlock({
                 <span className={`text-xs font-mono font-medium shrink-0 self-center ${keyColor}`}>
                     {entry.ticketKey}
                 </span>
-                <span className="border-l border-current opacity-20 self-stretch shrink-0" />
+                <span className="border-l border-gray-300 self-stretch shrink-0" />
                 {/* Colonne droite : titre + commentaire (ou titre seul si pas de commentaire) */}
                 <div className="flex flex-col justify-center min-w-0 flex-1">
                     {showSplitRight ? (
@@ -330,6 +333,10 @@ export default function TimeBlock({
                     {ticketFetchError ? (
                         <span className="text-[10px] font-mono text-red-500 leading-tight truncate">
                             {ticketFetchError}
+                        </span>
+                    ) : ticketError ? (
+                        <span className="text-[10px] font-mono text-red-500 leading-tight truncate">
+                            {t('timeline.ticket_required')}
                         </span>
                     ) : summaryText && (
                         <div className={`flex items-center gap-1 text-[10px] font-mono leading-tight ${summaryColor}`}>
