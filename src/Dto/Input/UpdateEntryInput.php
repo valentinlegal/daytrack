@@ -24,5 +24,11 @@ readonly class UpdateEntryInput
 
         #[Assert\Choice(choices: [EntryType::WORK->value, EntryType::BREAK->value])]
         public ?string $type = null,
+
+        #[Assert\Length(max: 255)]
+        public ?string $ticketSummary = null,
+
+        #[Assert\Length(max: 50)]
+        public ?string $ticketType = null,
     ) {}
 }

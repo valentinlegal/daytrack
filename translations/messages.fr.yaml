@@ -4,3 +4,4 @@ error:
     day_not_found: "Journée introuvable"
     entry_not_found: "Entrée introuvable"
     jira_not_configured: "JIRA n'est pas configuré"
+    jira_ticket_not_found: "Ticket introuvable ou inaccessible"

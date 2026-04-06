@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { EntryType } from '../types/api';
-import type { TimeEntry, WorkDay } from '../types/api';
+import type { JiraTicketInfo, TimeEntry, WorkDay } from '../types/api';
 import { TIMELINE_START_HOUR, buildEntryMap, generateTimeSlots, getNextSlot, isHourSlot, today } from '../utils/timeline';
 import { createEntry, deleteEntry, updateEntry } from '../services/dayService';
 import TimeBlock from './TimeBlock';
@@ -51,6 +51,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     interface ClipboardCell {
         offset: number;
         ticketKey: string | null;
+        ticketSummary: string | null;
+        ticketType: string | null;
         comment: string | null;
         type: EntryType;
         isEmpty: boolean; // true si la cellule était vide lors de la copie
@@ -111,6 +113,17 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         : { slot: null, offsetPercent: 0 };
 
     const entryMap = buildEntryMap(workDay.entries);
+
+    // Cache des infos de tickets déjà connus dans la journée (évite les appels API redondants)
+    const knownTickets = useMemo<Record<string, JiraTicketInfo>>(() => {
+        const map: Record<string, JiraTicketInfo> = {};
+        for (const entry of workDay.entries) {
+            if (entry.ticketKey && entry.ticketSummary && entry.ticketType) {
+                map[entry.ticketKey] = { summary: entry.ticketSummary, type: entry.ticketType };
+            }
+        }
+        return map;
+    }, [workDay.entries]);
 
     // -------------------------------------------------------------------------
     // Sélection
@@ -261,6 +274,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     ticketKey: targetEntry.ticketKey,
                     type: targetEntry.type,
                     comment: targetEntry.comment,
+                    ticketSummary: targetEntry.ticketSummary,
+                    ticketType: targetEntry.ticketType,
                 });
             }
         }
@@ -268,11 +283,19 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         // Entrées à mettre à jour (présentes dans les deux mais avec un contenu différent)
         for (const [, targetEntry] of targetMap) {
             const current = currentMap.get(targetEntry.startedAt);
-            if (current && (current.ticketKey !== targetEntry.ticketKey || current.type !== targetEntry.type || current.comment !== targetEntry.comment)) {
+            if (current && (
+                current.ticketKey !== targetEntry.ticketKey ||
+                current.type !== targetEntry.type ||
+                current.comment !== targetEntry.comment ||
+                current.ticketSummary !== targetEntry.ticketSummary ||
+                current.ticketType !== targetEntry.ticketType
+            )) {
                 updated = await updateEntry(target.date, current.id, {
                     ticketKey: targetEntry.ticketKey,
                     type: targetEntry.type,
                     comment: targetEntry.comment,
+                    ticketSummary: targetEntry.ticketSummary,
+                    ticketType: targetEntry.ticketType,
                 });
             }
         }
@@ -318,7 +341,10 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     // Opération sur une cellule (depuis l'éditeur inline, 1 snapshot par appel)
     // -------------------------------------------------------------------------
 
-    async function handleSave(slot: string, ticketKey: string | null, type: EntryType, comment: string | null) {
+    async function handleSave(slot: string, ticketKey: string | null, type: EntryType, comment: string | null, ticketSummary: string | null, ticketType: string | null) {
+        // Ferme l'édition immédiatement pour un retour visuel instantané
+        setEditingSlot(null);
+
         const existing = entryMap.get(slot);
 
         try {
@@ -326,8 +352,13 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
 
             if (existing) {
                 // Aucune modification détectée : on n'appelle pas l'API
-                if (existing.type === type && existing.ticketKey === ticketKey && existing.comment === comment) {
-                    setEditingSlot(null);
+                if (
+                    existing.type === type &&
+                    existing.ticketKey === ticketKey &&
+                    existing.comment === comment &&
+                    existing.ticketSummary === ticketSummary &&
+                    existing.ticketType === ticketType
+                ) {
                     return;
                 }
                 pushHistory();
@@ -336,6 +367,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     ticketKey,
                     type,
                     comment,
+                    ticketSummary,
+                    ticketType,
                 });
             } else {
                 pushHistory();
@@ -346,14 +379,14 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     ticketKey,
                     type,
                     comment,
+                    ticketSummary,
+                    ticketType,
                 });
             }
 
             onWorkDayUpdate(updated);
         } catch {
             // L'erreur est déjà traduite par le service
-        } finally {
-            setEditingSlot(null);
         }
     }
 
@@ -411,6 +444,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
             return {
                 offset: idx - anchorIdx,
                 ticketKey: entry?.ticketKey ?? null,
+                ticketSummary: entry?.ticketSummary ?? null,
+                ticketType: entry?.ticketType ?? null,
                 comment: entry?.comment ?? null,
                 type: entry?.type ?? EntryType.WORK,
                 isEmpty: null === entry,
@@ -446,6 +481,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                             ticketKey: cell.ticketKey,
                             type: cell.type,
                             comment: cell.comment,
+                            ticketSummary: cell.ticketSummary,
+                            ticketType: cell.ticketType,
                         });
                     } else {
                         updated = await createEntry(workDay.date, {
@@ -454,6 +491,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                             ticketKey: cell.ticketKey,
                             type: cell.type,
                             comment: cell.comment,
+                            ticketSummary: cell.ticketSummary,
+                            ticketType: cell.ticketType,
                         });
                     }
                     onWorkDayUpdate(updated);
@@ -609,9 +648,10 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                 isSelected={selectedSlots.has(slot)}
                                 noBottomBorder={slot.endsWith(':45')}
                                 hasClipboard={null !== clipboard && clipboard.cells.length > 0}
+                                knownTickets={knownTickets}
                                 onSelect={(e) => handleSelect(slot, e)}
                                 onStartEdit={() => setEditingSlot(slot)}
-                                onSave={(ticketKey, type, comment) => void handleSave(slot, ticketKey, type, comment)}
+                                onSave={(ticketKey, type, comment, ticketSummary, ticketType) => void handleSave(slot, ticketKey, type, comment, ticketSummary, ticketType)}
                                 onCancel={() => setEditingSlot(null)}
                                 onCopy={() => handleCopySelection()}
                                 onPaste={() => void handlePaste(slot)}
@@ -626,6 +666,9 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                 onCellMouseDown={(e) => {
                                     if (0 !== e.button) return; // clic gauche uniquement
                                     if (e.shiftKey || e.ctrlKey || e.metaKey) return; // laisser onClick gérer les modificateurs
+                                    // Si une cellule est en cours d'édition, laisser le focus se déplacer naturellement
+                                    // pour que le blur déclenche la sauvegarde — ne pas démarrer de drag
+                                    if (editingSlot !== null) return;
                                     e.preventDefault(); // empêche la sélection de texte pendant le drag
                                     startDrag(slot);
                                 }}

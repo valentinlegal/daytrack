@@ -10,11 +10,18 @@ export type EntryType = typeof EntryType[keyof typeof EntryType];
 export interface TimeEntry {
     id: string;
     ticketKey: string | null;
+    ticketSummary: string | null;
+    ticketType: string | null;
     comment: string | null;
     startedAt: string; // format HH:mm
     endedAt: string | null; // format HH:mm
     type: EntryType;
     durationMinutes: number | null;
+}
+
+export interface JiraTicketInfo {
+    summary: string;
+    type: string;
 }
 
 export interface WorkDay {
@@ -39,6 +46,8 @@ export interface CreateEntryPayload {
     endedAt: string;
     type: EntryType;
     ticketKey?: string | null;
+    ticketSummary?: string | null;
+    ticketType?: string | null;
     comment?: string | null;
 }
 
@@ -47,5 +56,7 @@ export interface UpdateEntryPayload {
     endedAt?: string;
     type?: EntryType;
     ticketKey?: string | null;
+    ticketSummary?: string | null;
+    ticketType?: string | null;
     comment?: string | null;
 }

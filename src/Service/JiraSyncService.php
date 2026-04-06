@@ -50,22 +50,17 @@ class JiraSyncService
         // Les tickets à nettoyer = tickets actuels + tickets du dernier sync (cas journée vidée)
         $ticketsToClean = array_values(array_unique(array_merge($currentKeys, $previousKeys)));
 
-        // 3. Phase 1 (parallèle) : fetch des titres + fetch des worklogs existants en une seule vague
-        $fetched = $this->jira->batchFetchSummariesAndWorklogs($currentKeys, $ticketsToClean, $workDay->date);
-        $summaries = $fetched['summaries'];
+        // 3. Phase 1 (parallèle) : fetch des worklogs existants uniquement
+        //    Les titres des tickets ne sont plus récupérés ici : ils sont désormais stockés localement
+        //    dans TimeEntry::ticketSummary et n'ont pas à être comparés au commentaire.
+        $fetched = $this->jira->batchFetchSummariesAndWorklogs([], $ticketsToClean, $workDay->date);
         $worklogsByTicket = $fetched['worklogs'];
 
-        // 4. Normaliser les commentaires et grouper par (ticketKey, commentNormalisé)
-        //    Fait AVANT la suppression/création pour fusionner correctement les entrées identiques
+        // 4. Grouper les entrées par (ticketKey, commentaire) — le commentaire est envoyé tel quel
         /** @var array<string, array{ticketKey: string, comment: string|null, seconds: int}> $groups */
         $groups = [];
         foreach ($validEntries as $entry) {
             $comment = $entry->comment;
-
-            // Supprimer le commentaire s'il est identique au titre du ticket JIRA (sans valeur ajoutée)
-            if (null !== $comment && isset($summaries[$entry->ticketKey]) && trim($comment) === trim($summaries[$entry->ticketKey])) {
-                $comment = null;
-            }
 
             $groupKey = $entry->ticketKey.'|'.($comment ?? '');
             if (!isset($groups[$groupKey])) {

@@ -51,8 +51,11 @@ class EntryController extends AbstractController
         );
 
         // Les pauses n'ont pas de ticket ni de commentaire associé
-        $entry->ticketKey = EntryType::BREAK === EntryType::from($input->type) ? null : $input->ticketKey;
-        $entry->comment = EntryType::BREAK === EntryType::from($input->type) ? null : $input->comment;
+        $isBreak = EntryType::BREAK === EntryType::from($input->type);
+        $entry->ticketKey = $isBreak ? null : $input->ticketKey;
+        $entry->comment = $isBreak ? null : $input->comment;
+        $entry->ticketSummary = $isBreak ? null : $input->ticketSummary;
+        $entry->ticketType = $isBreak ? null : $input->ticketType;
 
         if (null !== $input->endedAt) {
             $entry->endedAt = $this->parseTime($day, $input->endedAt);
@@ -90,6 +93,8 @@ class EntryController extends AbstractController
             if (EntryType::BREAK === $entry->type) {
                 $entry->ticketKey = null;
                 $entry->comment = null;
+                $entry->ticketSummary = null;
+                $entry->ticketType = null;
             }
         }
 
@@ -99,6 +104,8 @@ class EntryController extends AbstractController
 
         if (EntryType::WORK === $entry->type) {
             $entry->comment = $input->comment;
+            $entry->ticketSummary = $input->ticketSummary;
+            $entry->ticketType = $input->ticketType;
         }
 
         if (null !== $input->startedAt) {

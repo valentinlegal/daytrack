@@ -9,7 +9,10 @@
     </head>
 
     <body>
-        <div id="app" data-jira-configured="{{ jiraConfigured ? 'true' : 'false' }}"></div>
+        <div id="app"
+             data-jira-configured="{{ jiraConfigured ? 'true' : 'false' }}"
+             data-jira-ticket-types="{{ jiraTicketTypes|e('html_attr') }}"
+        ></div>
         {{ encore_entry_script_tags('app') }}
     </body>
 </html>

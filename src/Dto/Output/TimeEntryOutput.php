@@ -11,6 +11,8 @@ readonly class TimeEntryOutput
     public function __construct(
         public string $id,
         public ?string $ticketKey,
+        public ?string $ticketSummary,
+        public ?string $ticketType,
         public ?string $comment,
         public string $startedAt,
         public ?string $endedAt,
@@ -23,6 +25,8 @@ readonly class TimeEntryOutput
         return new self(
             id: (string) $entry->id,
             ticketKey: $entry->ticketKey,
+            ticketSummary: $entry->ticketSummary,
+            ticketType: $entry->ticketType,
             comment: $entry->comment,
             startedAt: $entry->startedAt->format('H:i'),
             endedAt: $entry->endedAt?->format('H:i'),

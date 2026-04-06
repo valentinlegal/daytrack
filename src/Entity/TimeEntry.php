@@ -36,6 +36,14 @@ class TimeEntry
         set(?string $value) => $this->ticketKey = $value !== null ? strtoupper(trim($value)) : null;
     }
 
+    // Titre du ticket récupéré via l'API Jira — null si non configuré ou pas encore récupéré
+    #[ORM\Column(length: 255, nullable: true)]
+    public ?string $ticketSummary = null;
+
+    // Type du ticket Jira (ex : Story, Bug, Epic) — remonte au type parent si sous-tâche
+    #[ORM\Column(length: 50, nullable: true)]
+    public ?string $ticketType = null;
+
     #[ORM\Column(length: 500, nullable: true)]
     public ?string $comment = null;
 

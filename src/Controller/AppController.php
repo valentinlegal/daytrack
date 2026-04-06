@@ -24,6 +24,9 @@ class AppController extends AbstractController
     #[Template('base.html.twig')]
     public function index(): array
     {
-        return ['jiraConfigured' => $this->jiraConfig->isConfigured()];
+        return [
+            'jiraConfigured' => $this->jiraConfig->isConfigured(),
+            'jiraTicketTypes' => json_encode($this->jiraConfig->getTicketTypeColors()),
+        ];
     }
 }

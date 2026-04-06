@@ -30,5 +30,11 @@ readonly class CreateEntryInput
 
         #[Assert\DateTime(format: 'H:i')]
         public ?string $endedAt = null,
+
+        #[Assert\Length(max: 255)]
+        public ?string $ticketSummary = null,
+
+        #[Assert\Length(max: 50)]
+        public ?string $ticketType = null,
     ) {}
 }

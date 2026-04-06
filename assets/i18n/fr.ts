@@ -18,6 +18,7 @@ const fr = {
         ticket_placeholder: "PROJ-123",
         comment_placeholder: "Commentaire (optionnel)",
         ticket_required: "ID requis pour enregistrer une saisie",
+        ticket_fetch_error: "Ticket introuvable ou inaccessible",
         convert_to_break: "Convertir en pause",
         paste_multiselection_warning: "Pour coller, sélectionne d'abord une seule cellule cible.",
         close: "Fermer",

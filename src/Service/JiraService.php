@@ -6,6 +6,7 @@ namespace App\Service;
 
 use DateTimeImmutable;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Throwable;
 
 /**
  * Wrapping des appels à l'API REST JIRA Cloud v3.
@@ -19,6 +20,45 @@ class JiraService
         private readonly HttpClientInterface $httpClient,
         private readonly JiraConfigProvider $config,
     ) {}
+
+    /**
+     * Récupère le titre et le type d'un ticket Jira.
+     * Si le ticket est une sous-tâche, remonte au type du parent (mais conserve le titre de la sous-tâche).
+     *
+     * @return array{summary: string, type: string}
+     * @throws Throwable si le ticket est introuvable ou si l'API est inaccessible
+     */
+    public function fetchTicketInfo(string $ticketKey): array
+    {
+        $response = $this->httpClient->request(
+            'GET',
+            $this->config->getBaseUrl().'/rest/api/3/issue/'.$ticketKey,
+            [
+                'headers' => [
+                    'Authorization' => $this->config->getAuthHeader(),
+                    'Accept' => 'application/json',
+                ],
+                'query' => ['fields' => 'summary,issuetype,parent'],
+            ],
+        );
+
+        $data = $response->toArray();
+        $fields = $data['fields'] ?? [];
+
+        $summary = $fields['summary'] ?? $ticketKey;
+        $issueType = $fields['issuetype'] ?? [];
+
+        // Si c'est une sous-tâche, on remonte au type de la tâche parente
+        $type = $issueType['name'] ?? 'Task';
+        if (($issueType['subtask'] ?? false) && isset($fields['parent']['fields']['issuetype']['name'])) {
+            $type = $fields['parent']['fields']['issuetype']['name'];
+        }
+
+        return [
+            'summary' => $summary,
+            'type' => $type,
+        ];
+    }
 
     /**
      * Phase 1 — lecture seule : récupère en parallèle les titres des tickets et les worklogs existants.

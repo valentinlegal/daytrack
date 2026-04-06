@@ -15,6 +15,8 @@ class JiraConfigProvider
         private readonly string $userEmail,
         #[Autowire(env: 'JIRA_API_TOKEN')]
         private readonly string $apiToken,
+        #[Autowire(env: 'JIRA_TICKET_TYPES')]
+        private readonly string $ticketTypes = '',
     ) {}
 
     /**
@@ -36,10 +38,33 @@ class JiraConfigProvider
     }
 
     /**
-     * Retourne l'en-tête Authorization en Basic Auth (email:token encodé base64). 
+     * Retourne l'en-tête Authorization en Basic Auth (email:token encodé base64).
      */
     public function getAuthHeader(): string
     {
         return 'Basic '.base64_encode($this->userEmail.':'.$this->apiToken);
+    }
+
+    /**
+     * Parse JIRA_TICKET_TYPES et retourne un mapping type → couleur.
+     * Format attendu : "Story:emerald,Bug:orange,Epic:purple"
+     *
+     * @return array<string, string>
+     */
+    public function getTicketTypeColors(): array
+    {
+        if ('' === $this->ticketTypes) {
+            return [];
+        }
+
+        $mapping = [];
+        foreach (explode(',', $this->ticketTypes) as $pair) {
+            $parts = explode(':', trim($pair), 2);
+            if (2 === count($parts) && '' !== $parts[0] && '' !== $parts[1]) {
+                $mapping[trim($parts[0])] = trim($parts[1]);
+            }
+        }
+
+        return $mapping;
     }
 }
