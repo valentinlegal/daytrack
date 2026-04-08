@@ -78,17 +78,17 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         return () => clearTimeout(id);
     }, [tick]);
 
-    // Charge l'historique undo/redo depuis la session pour ce jour (ou réinitialise si absent)
+    // Charge l'historique undo/redo depuis la session
     useEffect(() => {
         try {
-            const storedUndo = sessionStorage.getItem(`daytrack_undo_${workDay.date}`);
-            setUndoStack(storedUndo ? JSON.parse(storedUndo) as WorkDay[] : []);
+            const stored = sessionStorage.getItem(`daytrack_undo_${workDay.date}`);
+            setUndoStack(stored ? JSON.parse(stored) as WorkDay[] : []);
         } catch {
             setUndoStack([]);
         }
         try {
-            const storedRedo = sessionStorage.getItem(`daytrack_redo_${workDay.date}`);
-            setRedoStack(storedRedo ? JSON.parse(storedRedo) as WorkDay[] : []);
+            const stored = sessionStorage.getItem(`daytrack_redo_${workDay.date}`);
+            setRedoStack(stored ? JSON.parse(stored) as WorkDay[] : []);
         } catch {
             setRedoStack([]);
         }
@@ -304,8 +304,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     }
 
     async function handleUndo() {
-        const snapshot = undoStack[undoStack.length - 1];
-        if (!snapshot) return;
+        const targetWorkDay = undoStack[undoStack.length - 1];
+        if (!targetWorkDay) return;
         setEditingSlot(null);
         const newUndoStack = undoStack.slice(0, -1);
         const newRedoStack = [...redoStack, workDay];
@@ -314,15 +314,15 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         sessionStorage.setItem(`daytrack_undo_${workDay.date}`, JSON.stringify(newUndoStack));
         sessionStorage.setItem(`daytrack_redo_${workDay.date}`, JSON.stringify(newRedoStack));
         try {
-            await reconcileWorkDay(snapshot);
+            await reconcileWorkDay(targetWorkDay);
         } catch {
             // L'erreur est déjà traduite par le service
         }
     }
 
     async function handleRedo() {
-        const snapshot = redoStack[redoStack.length - 1];
-        if (!snapshot) return;
+        const targetWorkDay = redoStack[redoStack.length - 1];
+        if (!targetWorkDay) return;
         setEditingSlot(null);
         const newUndoStack = [...undoStack, workDay];
         const newRedoStack = redoStack.slice(0, -1);
@@ -331,7 +331,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         sessionStorage.setItem(`daytrack_undo_${workDay.date}`, JSON.stringify(newUndoStack));
         sessionStorage.setItem(`daytrack_redo_${workDay.date}`, JSON.stringify(newRedoStack));
         try {
-            await reconcileWorkDay(snapshot);
+            await reconcileWorkDay(targetWorkDay);
         } catch {
             // L'erreur est déjà traduite par le service
         }
@@ -409,10 +409,13 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     }
 
     async function handleBulkConvertToBreak(slots: Set<string>) {
-        const toConvert = [...slots]
+        const slotsArr = [...slots];
+        const toConvert = slotsArr
             .map(s => entryMap.get(s))
             .filter((e): e is TimeEntry => !!e && e.type !== EntryType.BREAK);
-        if (0 === toConvert.length) return;
+        // Créneaux vides : créer une entrée pause
+        const emptySlots = slotsArr.filter(s => !entryMap.has(s));
+        if (0 === toConvert.length && 0 === emptySlots.length) return;
         pushHistory();
         for (const entry of toConvert) {
             try {
@@ -420,6 +423,18 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     type: EntryType.BREAK,
                     ticketKey: null,
                     comment: null,
+                });
+                onWorkDayUpdate(updated);
+            } catch {
+                // L'erreur est déjà traduite par le service
+            }
+        }
+        for (const slot of emptySlots) {
+            try {
+                const updated = await createEntry(workDay.date, {
+                    startedAt: slot,
+                    endedAt: getNextSlot(slot),
+                    type: EntryType.BREAK,
                 });
                 onWorkDayUpdate(updated);
             } catch {
@@ -503,6 +518,48 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         }
     }
 
+    /** Colle la cellule unique du presse-papier sur chaque créneau sélectionné */
+    async function handlePasteToMultiple(slots: string[]) {
+        if (null === clipboard || 0 === clipboard.cells.length) return;
+        const cell = clipboard.cells[0]!;
+        pushHistory();
+        for (const slot of slots) {
+            const existing = entryMap.get(slot) ?? null;
+            try {
+                if (cell.isEmpty) {
+                    if (existing) {
+                        const updated = await deleteEntry(workDay.date, existing.id);
+                        onWorkDayUpdate(updated);
+                    }
+                } else {
+                    let updated: WorkDay;
+                    if (existing) {
+                        updated = await updateEntry(workDay.date, existing.id, {
+                            ticketKey: cell.ticketKey,
+                            type: cell.type,
+                            comment: cell.comment,
+                            ticketSummary: cell.ticketSummary,
+                            ticketType: cell.ticketType,
+                        });
+                    } else {
+                        updated = await createEntry(workDay.date, {
+                            startedAt: slot,
+                            endedAt: getNextSlot(slot),
+                            ticketKey: cell.ticketKey,
+                            type: cell.type,
+                            comment: cell.comment,
+                            ticketSummary: cell.ticketSummary,
+                            ticketType: cell.ticketType,
+                        });
+                    }
+                    onWorkDayUpdate(updated);
+                }
+            } catch {
+                // L'erreur est déjà traduite par le service
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Effets clavier et déselection
     // -------------------------------------------------------------------------
@@ -532,7 +589,10 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
             handleCopySelection();
         } else if (ctrlOrCmd && 'v' === e.key) {
             e.preventDefault();
-            if (selectedSlots.size > 1) {
+            if (selectedSlots.size > 1 && null !== clipboard && 1 === clipboard.cells.length) {
+                // Cellule unique copiée : coller sur chaque créneau sélectionné
+                void handlePasteToMultiple([...selectedSlots]);
+            } else if (selectedSlots.size > 1) {
                 setShowPasteWarning(true);
             } else {
                 const target = anchorSlot ?? [...selectedSlots][0];
@@ -637,7 +697,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                             <span className="text-xs text-gray-400 font-mono">{slot}–{getNextSlot(slot)}</span>
                         </div>
 
-                        {slot === nowSlot && <NowIndicator offsetPercent={nowOffsetPercent} />}
+                        {slot === nowSlot && <NowIndicator offsetPercent={nowOffsetPercent} dimmed={editingSlot === slot} />}
 
                         {/* Bloc de 15 minutes */}
                         <div className="flex-1">
@@ -684,10 +744,10 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
 }
 
 /** Ligne rouge "maintenant" positionnée à l'heure exacte dans le créneau */
-function NowIndicator({ offsetPercent }: { offsetPercent: number }) {
+function NowIndicator({ offsetPercent, dimmed }: { offsetPercent: number; dimmed: boolean }) {
     return (
         <div
-            className="absolute left-36 right-0 flex items-center pointer-events-none z-10 -translate-y-1/2"
+            className={`absolute left-36 right-0 flex items-center pointer-events-none -translate-y-1/2 transition-opacity ${dimmed ? 'z-0 opacity-20' : 'z-10'}`}
             style={{ top: `${offsetPercent}%` }}
         >
             <div className="w-3 h-3 rounded-full bg-red-600 shrink-0 -ml-1.5" />

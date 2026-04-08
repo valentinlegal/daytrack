@@ -3,6 +3,7 @@ import type { TimeEntry } from '../types/api';
 export const TIMELINE_START_HOUR = 7;
 export const TIMELINE_END_HOUR = 20;
 export const SLOT_MINUTES = 15;
+export const MAX_DAYS_AHEAD = 30;
 
 // Génère tous les créneaux de la journée (ex: ["08:00", "08:15", ...,"18:45"])
 export function generateTimeSlots(): string[] {
@@ -38,9 +39,6 @@ function formatTime(hours: number, minutes: number): string {
 export function isHourSlot(slot: string): boolean {
     return slot.endsWith(':00');
 }
-
-// Horizon maximum de saisie dans le futur (en jours à partir d'aujourd'hui)
-export const MAX_DAYS_AHEAD = 30;
 
 // Formate une Date en YYYY-MM-DD selon l'heure locale
 export function formatLocalDate(d: Date): string {

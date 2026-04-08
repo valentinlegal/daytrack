@@ -54,6 +54,13 @@ export default function TimeBlock({
     const [localSummary, setLocalSummary] = useState<string | null>(entry?.ticketSummary ?? null);
     const [localTicketType, setLocalTicketType] = useState<string | null>(entry?.ticketType ?? null);
     const [isFetchingTicket, setIsFetchingTicket] = useState(false);
+    // Erreur Jira transiente : visible en affichage après un blur sur erreur, disparaît à la réouverture
+    const [isErrored, setIsErrored] = useState(false);
+
+    // Refs synchrones pour éviter les stale closures dans les callbacks async
+    const isFetchingTicketRef = useRef(false);
+    const isEditingRef = useRef(isEditing);
+    isEditingRef.current = isEditing;
 
     const inputRef = useRef<HTMLInputElement>(null);
     const commentRef = useRef<HTMLInputElement>(null);
@@ -87,6 +94,7 @@ export default function TimeBlock({
             setCommentValue(entry?.type === EntryType.BREAK ? '' : (entry?.comment ?? ''));
             setLocalSummary(entry?.ticketSummary ?? null);
             setLocalTicketType(entry?.ticketType ?? null);
+            setIsErrored(false);
             setTimeout(() => inputRef.current?.focus(), 0);
         } else {
             setTicketError(false);
@@ -127,6 +135,7 @@ export default function TimeBlock({
         // Pas de re-fetch si le ticket n'a pas changé et qu'on a déjà un résumé
         if (rawValue === entry?.ticketKey && entry.ticketSummary) return;
 
+        isFetchingTicketRef.current = true;
         setIsFetchingTicket(true);
         try {
             const info = await fetchTicketInfo(rawValue, knownTickets);
@@ -144,17 +153,23 @@ export default function TimeBlock({
             setLocalSummary(null);
             setLocalTicketType(null);
             setTicketFetchError(err instanceof Error ? err.message : t('timeline.ticket_fetch_error'));
+            // Si la cellule a été fermée pendant le fetch (blur → onCancel avant la fin du fetch),
+            // on marque quand même l'erreur pour qu'elle reste visible en affichage
+            if (!isEditingRef.current) {
+                setIsErrored(true);
+            }
         } finally {
+            isFetchingTicketRef.current = false;
             setIsFetchingTicket(false);
         }
     }
 
     function save() {
-        // Si Jira est configuré et le ticket est invalide, on bloque la sauvegarde
-        if (ticketFetchError !== null) return;
-
         const ticketKey = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') || null;
         const comment = commentValue.trim() || null;
+
+        // Erreur Jira active : rester en édition (l'erreur est visible, l'utilisateur doit corriger)
+        if (ticketFetchError !== null) return;
 
         if (ticketKey === null) {
             if (comment !== null) {
@@ -173,6 +188,17 @@ export default function TimeBlock({
 
     function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
         if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            if (isFetchingTicketRef.current) {
+                // Fetch en cours : annuler immédiatement — le callback du fetch marquera l'erreur si besoin
+                onCancel();
+                return;
+            }
+            if (ticketFetchError !== null) {
+                // Erreur Jira connue : marquer la cellule en erreur puis restaurer l'état précédent
+                setIsErrored(true);
+                onCancel();
+                return;
+            }
             save();
         }
     }
@@ -221,14 +247,18 @@ export default function TimeBlock({
     const blockStyle = entry
         ? isBreak
             ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
-            : `bg-white border-gray-100 hover:bg-gray-50 border-l-4 ${ticketStyle?.leftBorder ?? 'border-l-indigo-300'}`
+            : isErrored
+                ? 'bg-red-50 border-gray-100 hover:bg-red-100 border-l-4 border-l-red-400'
+                : `bg-white border-gray-100 hover:bg-gray-50 border-l-4 ${ticketStyle?.leftBorder ?? 'border-l-indigo-300'}`
         : 'bg-white border-gray-100 text-gray-400 hover:bg-gray-50';
 
     const selectedStyle = isSelected
         ? entry
             ? isBreak
                 ? 'ring-2 ring-inset ring-amber-400'
-                : (ticketStyle?.ring ?? 'ring-2 ring-inset ring-indigo-400')
+                : isErrored
+                    ? 'ring-2 ring-inset ring-red-400'
+                    : (ticketStyle?.ring ?? 'ring-2 ring-inset ring-indigo-400')
             : 'ring-2 ring-inset ring-gray-400'
         : '';
 
@@ -249,21 +279,21 @@ export default function TimeBlock({
 
         if (!entry.ticketKey) return null;
 
-        const keyColor = ticketStyle?.ticketKey ?? 'text-indigo-700';
+        const keyColor = isErrored ? 'text-red-600' : (ticketStyle?.ticketKey ?? 'text-indigo-700');
         const summaryColor = ticketStyle?.summary ?? 'text-indigo-500';
         const commentColor = ticketStyle?.comment ?? 'text-indigo-800';
 
-        // Pas de summary Jira : affichage classique ticket — commentaire
+        // Pas de summary Jira : affichage classique ticket | commentaire
         if (!hasSummary) {
             return (
-                <div className="flex items-center gap-2 w-full min-w-0">
-                    <span className={`text-xs font-mono font-medium shrink-0 ${keyColor}`}>
+                <div className="flex items-stretch gap-2 w-full min-w-0 h-full">
+                    <span className={`w-24 text-xs font-mono font-medium shrink-0 self-center ${keyColor}`}>
                         {entry.ticketKey}
                     </span>
                     {hasComment && (
                         <>
-                            <span className="text-gray-300 shrink-0">—</span>
-                            <span className={`text-xs font-mono truncate ${commentColor}`}>
+                            <span className="border-l border-gray-300 self-stretch shrink-0" />
+                            <span className={`text-xs font-mono truncate self-center ${commentColor}`}>
                                 {entry.comment}
                             </span>
                         </>
@@ -275,7 +305,7 @@ export default function TimeBlock({
         return (
             <div className="flex items-stretch gap-2 w-full min-w-0 h-full">
                 {/* Colonne gauche : ID du ticket */}
-                <span className={`text-xs font-mono font-medium shrink-0 self-center ${keyColor}`}>
+                <span className={`w-24 text-xs font-mono font-medium shrink-0 self-center ${keyColor}`}>
                     {entry.ticketKey}
                 </span>
                 <span className="border-l border-gray-300 self-stretch shrink-0" />
@@ -307,12 +337,13 @@ export default function TimeBlock({
     function renderEditContent() {
         const summaryText = localSummary;
         const editStyle = getTicketTypeStyle(localTicketType);
-        const keyColor = editStyle.ticketKey;
+        // Rouge si erreur Jira active (fetch échoué)
+        const keyColor = ticketFetchError !== null ? 'text-red-600' : editStyle.ticketKey;
         const summaryColor = editStyle.summary;
 
         return (
             <div
-                className="flex items-stretch gap-1.5 w-full"
+                className="flex items-stretch gap-2 w-full"
                 onClick={(e) => e.stopPropagation()}
                 onBlur={handleBlur}
             >
@@ -323,7 +354,7 @@ export default function TimeBlock({
                     onKeyDown={handleTicketKeyDown}
                     onBlur={handleTicketBlur}
                     placeholder={t('timeline.ticket_placeholder')}
-                    className={`w-24 shrink-0 text-xs bg-transparent outline-none font-mono uppercase font-medium self-center ${ticketError ? 'placeholder:text-red-400' : 'placeholder:text-gray-400'} ${keyColor}`}
+                    className={`w-24 shrink-0 text-xs bg-transparent outline-none font-mono uppercase font-medium self-center ${ticketError ? 'placeholder:text-red-500' : 'placeholder:text-gray-400'} ${keyColor}`}
                 />
 
                 <span className="border-l border-dashed border-gray-300 self-stretch shrink-0" />
@@ -331,11 +362,11 @@ export default function TimeBlock({
                 {/* Colonne droite : résumé (readonly) + champ commentaire + erreur fetch */}
                 <div className="flex flex-col flex-1 min-w-0 justify-center gap-0.5">
                     {ticketFetchError ? (
-                        <span className="text-[10px] font-mono text-red-500 leading-tight truncate">
+                        <span className={`text-[10px] font-mono leading-tight truncate ${keyColor}`}>
                             {ticketFetchError}
                         </span>
                     ) : ticketError ? (
-                        <span className="text-[10px] font-mono text-red-500 leading-tight truncate">
+                        <span className="text-[10px] font-mono text-red-600 leading-tight truncate">
                             {t('timeline.ticket_required')}
                         </span>
                     ) : summaryText && (
