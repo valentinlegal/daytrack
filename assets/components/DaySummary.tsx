@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { WorkDay, TimeEntry } from '../types/api';
+import type { WorkDay, TimeEntry, FavoriteTicket } from '../types/api';
 import { EntryType } from '../types/api';
 import { t } from '../i18n/fr';
 import { formatMinutes, today } from '../utils/timeline';
 import { updateDayTarget } from '../services/dayService';
 import { getTicketTypeStyle } from '../config/ticketTypeColors';
+import { listFavorites } from '../services/favoriteService';
 import JiraSyncButton from './JiraSyncButton';
+import FavoriteTickets from './FavoriteTickets';
 
 // Retourne l'heure actuelle en minutes depuis minuit
 function getCurrentMinutes(): number {
@@ -185,6 +187,20 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
         else if (e.key === 'Escape') setEditingTarget(false);
     }
 
+    const [favorites, setFavorites] = useState<FavoriteTicket[]>([]);
+
+    useEffect(() => {
+        void listFavorites().then(setFavorites).catch(() => null);
+    }, []);
+
+    const [ticketsCollapsed, setTicketsCollapsed] = useState(() => localStorage.getItem('daytrack_tickets_collapsed') === 'true');
+
+    function toggleTicketsCollapse() {
+        const next = !ticketsCollapsed;
+        setTicketsCollapsed(next);
+        localStorage.setItem('daytrack_tickets_collapsed', String(next));
+    }
+
     const ticketRecap = computeTicketRecap(workDay.entries);
 
     return (
@@ -246,12 +262,25 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
 
             <JiraSyncButton workDay={workDay} onWorkDayUpdate={onWorkDayUpdate} />
 
+            <FavoriteTickets favorites={favorites} onChange={setFavorites} />
+
             {ticketRecap.length > 0 && (
                 <div className="border-t border-gray-200 pt-3 flex flex-col gap-3">
-                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                        {t('summary.tickets_title')}
-                    </span>
-                    {ticketRecap.map((rec) => {
+                    <button
+                        onClick={toggleTicketsCollapse}
+                        className="flex items-center justify-between w-full group"
+                    >
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            {t('summary.tickets_title')}
+                        </span>
+                        <svg
+                            className={`w-3.5 h-3.5 text-gray-400 transition-transform ${ticketsCollapsed ? '-rotate-90' : ''}`}
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </button>
+                    {!ticketsCollapsed && ticketRecap.map((rec) => {
                         const keyColor = getTicketTypeStyle(rec.ticketType).ticketKey;
                         return (
                         <div key={rec.ticketKey} className="flex flex-col gap-0.5">

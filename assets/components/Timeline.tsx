@@ -68,6 +68,20 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
             return null;
         }
     });
+
+    // Écoute les mises à jour du presse-papier provenant des favoris (FavoriteTickets)
+    useEffect(() => {
+        function onClipboardChanged() {
+            try {
+                const stored = sessionStorage.getItem('daytrack_clipboard');
+                setClipboard(stored ? JSON.parse(stored) as ClipboardData : null);
+            } catch {
+                // sessionStorage indisponible — on ignore
+            }
+        }
+        window.addEventListener('daytrack:clipboard-changed', onClipboardChanged);
+        return () => window.removeEventListener('daytrack:clipboard-changed', onClipboardChanged);
+    }, []);
     const [showPasteWarning, setShowPasteWarning] = useState(false);
     const [tick, setTick] = useState(0);
 

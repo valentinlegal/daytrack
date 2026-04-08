@@ -174,6 +174,9 @@ export default function TimeBlock({
         if (ticketKey === null) {
             if (comment !== null) {
                 setTicketError(true);
+            } else if (entry?.type === EntryType.BREAK) {
+                // Cellule pause : ticket et commentaire toujours vides — annuler sans supprimer
+                onCancel();
             } else if (entry) {
                 onClear();
             } else {
@@ -310,13 +313,13 @@ export default function TimeBlock({
                 </span>
                 <span className="border-l border-gray-300 self-stretch shrink-0" />
                 {/* Colonne droite : titre + commentaire (ou titre seul si pas de commentaire) */}
-                <div className="flex flex-col justify-center min-w-0 flex-1">
+                <div className={`flex flex-col justify-center min-w-0 flex-1 ${showSplitRight ? 'gap-1' : ''}`}>
                     {showSplitRight ? (
                         <>
-                            <span className={`text-[10px] font-mono truncate leading-tight ${summaryColor}`}>
+                            <span className={`text-[10px] font-mono truncate leading-none ${summaryColor}`}>
                                 {entry.ticketSummary}
                             </span>
-                            <span className={`text-xs font-mono truncate leading-tight ${commentColor}`}>
+                            <span className={`text-xs font-mono truncate leading-none ${commentColor}`}>
                                 {entry.comment}
                             </span>
                         </>

@@ -38,6 +38,17 @@ const fr = {
         tickets_title: "Tickets",
         no_comment: "(sans commentaire)",
     },
+    favorites: {
+        title: "Favoris",
+        copy_tooltip: "Cliquer pour copier",
+        copied: "Copié !",
+        add_placeholder: "PROJ-123",
+        add_hint: "Ajouter un ticket favori",
+        rename_placeholder: "Nom du ticket",
+        already_exists: "Ce ticket est déjà dans vos favoris",
+        rename_empty: "Le nom ne peut pas être vide",
+        empty: "Aucun favori — ajoutez un ticket ci-dessous",
+    },
     jira: {
         button: {
             sync: "Sync JIRA",

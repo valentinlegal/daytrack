@@ -5,3 +5,5 @@ error:
     entry_not_found: "Entrée introuvable"
     jira_not_configured: "JIRA n'est pas configuré"
     jira_ticket_not_found: "Ticket introuvable ou inaccessible"
+    favorite_not_found: "Favori introuvable"
+    favorite_already_exists: "Ce ticket est déjà dans vos favoris"

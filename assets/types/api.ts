@@ -60,3 +60,12 @@ export interface UpdateEntryPayload {
     ticketType?: string | null;
     comment?: string | null;
 }
+
+export interface FavoriteTicket {
+    id: string;
+    ticketKey: string;
+    ticketSummary: string | null; // nom Jira original, figé à la création
+    customName: string | null;   // étiquette personnalisée par l'utilisateur
+    ticketType: string | null;
+    position: number;
+}
