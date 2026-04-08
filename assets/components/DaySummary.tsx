@@ -191,21 +191,10 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
         <div className="relative shrink-0 bg-white border-l border-gray-200 flex flex-col" style={{ width: sidebarWidth }}>
             {/* Poignée de redimensionnement — en dehors du conteneur scrollable pour ne pas être clippée */}
             <div
-                className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-300 transition-colors z-10 group/resize"
+                className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-300 transition-colors z-10"
                 onMouseDown={handleResizeMouseDown}
                 onDoubleClick={handleResizeDoubleClick}
-            >
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover/resize:opacity-100 transition-opacity">
-                    <div className="bg-white border border-gray-200 rounded shadow-sm px-1 py-2 flex flex-col gap-[3px]">
-                        {[0, 1, 2].map((i) => (
-                            <div key={i} className="flex gap-[3px]">
-                                <div className="w-[3px] h-[3px] rounded-full bg-gray-400" />
-                                <div className="w-[3px] h-[3px] rounded-full bg-gray-400" />
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
+            />
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
             <h2 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">
                 {t('summary.title')}
@@ -266,14 +255,23 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
                         const keyColor = getTicketTypeStyle(rec.ticketType).ticketKey;
                         return (
                         <div key={rec.ticketKey} className="flex flex-col gap-0.5">
-                            <div className="flex justify-between items-start gap-1 min-w-0">
-                                <div className="min-w-0 flex-1">
-                                    {rec.ticketSummary && (
-                                        <span className="text-sm font-medium text-gray-800 truncate block leading-snug" title={rec.ticketSummary}>{rec.ticketSummary}</span>
-                                    )}
-                                    <span className={`text-xs font-mono ${rec.ticketSummary ? 'text-gray-400' : `font-semibold ${keyColor}`}`}>{rec.ticketKey}</span>
-                                </div>
-                                <span className="text-xs text-gray-400 shrink-0 ml-1">{formatMinutes(rec.totalMinutes)}</span>
+                            <div className="flex flex-col min-w-0">
+                                {rec.ticketSummary ? (
+                                    <>
+                                        <div className="flex items-end gap-1 min-w-0">
+                                            <span className="text-sm font-medium text-gray-800 truncate leading-snug min-w-0" title={rec.ticketSummary}>{rec.ticketSummary}</span>
+                                            <span className="flex-1 shrink-0 min-w-4 border-b border-dashed border-gray-300 mb-[4px]" />
+                                            <span className="text-xs text-gray-400 shrink-0">{formatMinutes(rec.totalMinutes)}</span>
+                                        </div>
+                                        <span className="text-xs font-mono text-gray-400">{rec.ticketKey}</span>
+                                    </>
+                                ) : (
+                                    <div className="flex items-end gap-1 min-w-0">
+                                        <span className={`text-xs font-mono shrink-0 font-semibold ${keyColor}`}>{rec.ticketKey}</span>
+                                        <span className="flex-1 border-b border-dashed border-gray-300 mb-[3px]" />
+                                        <span className="text-xs text-gray-400 shrink-0">{formatMinutes(rec.totalMinutes)}</span>
+                                    </div>
+                                )}
                             </div>
                             {rec.comments.length > 0 && (
                                 <ul className="flex flex-col gap-0.5 mt-0.5">

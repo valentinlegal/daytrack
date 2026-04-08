@@ -246,7 +246,7 @@ export default function TimeBlock({
     // Fond neutre pour WORK — le bandeau gauche coloré porte l'information de type
     const blockStyle = entry
         ? isBreak
-            ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+            ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100 border-l-4 border-l-amber-400'
             : isErrored
                 ? 'bg-red-50 border-gray-100 hover:bg-red-100 border-l-4 border-l-red-400'
                 : `bg-white border-gray-100 hover:bg-gray-50 border-l-4 ${ticketStyle?.leftBorder ?? 'border-l-indigo-300'}`
