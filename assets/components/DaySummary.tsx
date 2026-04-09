@@ -119,7 +119,7 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
 
     const [sidebarWidth, setSidebarWidth] = useState(() => {
         const stored = localStorage.getItem('daytrack_sidebar_width');
-        return stored ? Math.max(DEFAULT_SIDEBAR_WIDTH, Math.min(900, parseInt(stored))) : DEFAULT_SIDEBAR_WIDTH;
+        return stored ? Math.max(DEFAULT_SIDEBAR_WIDTH, Math.min(1280, parseInt(stored))) : DEFAULT_SIDEBAR_WIDTH;
     });
 
     const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
@@ -128,7 +128,7 @@ export default function DaySummary({ workDay, onWorkDayUpdate }: DaySummaryProps
         const startWidth = sidebarWidth;
 
         function onMouseMove(ev: MouseEvent) {
-            const newWidth = Math.max(DEFAULT_SIDEBAR_WIDTH, Math.min(900, startWidth + startX - ev.clientX));
+            const newWidth = Math.max(DEFAULT_SIDEBAR_WIDTH, Math.min(1280, startWidth + startX - ev.clientX));
             setSidebarWidth(newWidth);
             localStorage.setItem('daytrack_sidebar_width', String(newWidth));
         }

@@ -126,17 +126,21 @@ export default function TimeBlock({
         }
     }
 
-    // Récupère les infos du ticket Jira au blur du champ ticket (si la valeur a changé)
-    async function handleTicketBlur() {
-        const rawValue = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') ?? '';
+    /**
+     * Récupère les infos Jira pour rawValue et met à jour le state local.
+     * Retourne { summary, type, error } avec les valeurs fraîches (non-stale).
+     */
+    async function doFetchTicketInfo(rawValue: string): Promise<{ summary: string | null; type: string | null; error: string | null }> {
         if (!rawValue) {
             setLocalSummary(null);
             setLocalTicketType(null);
-            return;
+            return { summary: null, type: null, error: null };
         }
 
         // Pas de re-fetch si le ticket n'a pas changé et qu'on a déjà un résumé
-        if (rawValue === entry?.ticketKey && entry.ticketSummary) return;
+        if (rawValue === entry?.ticketKey && entry.ticketSummary) {
+            return { summary: entry.ticketSummary, type: entry.ticketType ?? null, error: null };
+        }
 
         isFetchingTicketRef.current = true;
         setIsFetchingTicket(true);
@@ -147,24 +151,36 @@ export default function TimeBlock({
                 setLocalSummary(info.summary);
                 setLocalTicketType(info.type);
                 setTicketFetchError(null);
-            } else if (rawValue !== entry?.ticketKey) {
-                setLocalSummary(null);
-                setLocalTicketType(null);
+                return { summary: info.summary, type: info.type, error: null };
+            } else {
+                if (rawValue !== entry?.ticketKey) {
+                    setLocalSummary(null);
+                    setLocalTicketType(null);
+                }
+                return { summary: null, type: null, error: null };
             }
         } catch (err) {
             // Jira configuré mais ticket introuvable ou API inaccessible
+            const errorMsg = err instanceof Error ? err.message : t('timeline.ticket_fetch_error');
             setLocalSummary(null);
             setLocalTicketType(null);
-            setTicketFetchError(err instanceof Error ? err.message : t('timeline.ticket_fetch_error'));
+            setTicketFetchError(errorMsg);
             // Si la cellule a été fermée pendant le fetch (blur → onCancel avant la fin du fetch),
             // on marque quand même l'erreur pour qu'elle reste visible en affichage
             if (!isEditingRef.current) {
                 setIsErrored(true);
             }
+            return { summary: null, type: null, error: errorMsg };
         } finally {
             isFetchingTicketRef.current = false;
             setIsFetchingTicket(false);
         }
+    }
+
+    // Récupère les infos du ticket Jira au blur du champ ticket (si la valeur a changé)
+    async function handleTicketBlur() {
+        const rawValue = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') ?? '';
+        await doFetchTicketInfo(rawValue);
     }
 
     function save() {
@@ -209,9 +225,29 @@ export default function TimeBlock({
         }
     }
 
-    function handleTicketKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    async function handleTicketKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
         if (e.key === 'Enter') {
-            save();
+            const rawValue = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') ?? '';
+            const comment = commentValue.trim() || null;
+            const ticketKey = rawValue || null;
+
+            if (ticketKey === null) {
+                if (comment !== null) {
+                    setTicketError(true);
+                } else if (entry?.type === EntryType.BREAK) {
+                    onCancel();
+                } else if (entry) {
+                    onClear();
+                } else {
+                    onCancel();
+                }
+                return;
+            }
+
+            const { summary, type, error } = await doFetchTicketInfo(rawValue);
+            if (error !== null) return; // erreur Jira : rester en édition
+            setTicketError(false);
+            onSave(ticketKey, EntryType.WORK, comment, summary, type);
         } else if (e.key === 'Tab') {
             e.preventDefault();
             commentRef.current?.focus();
@@ -256,7 +292,10 @@ export default function TimeBlock({
             : isErrored
                 ? 'bg-red-50 border-gray-100 hover:bg-red-100 border-l-4 border-l-red-400'
                 : `bg-white border-gray-100 hover:bg-gray-50 border-l-4 ${ticketStyle?.leftBorder ?? 'border-l-indigo-300'}`
-        : 'bg-white border-gray-100 text-gray-400 hover:bg-gray-50';
+        : isEditing
+            // Cellule vide en édition : conserver le border-l-4 transparent pour aligner le séparateur
+            ? 'bg-white border-gray-100 hover:bg-gray-50 border-l-4 border-l-transparent'
+            : 'bg-white border-gray-100 text-gray-400 hover:bg-gray-50';
 
     const selectedStyle = isSelected
         ? entry
@@ -360,7 +399,7 @@ export default function TimeBlock({
                     onKeyDown={handleTicketKeyDown}
                     onBlur={handleTicketBlur}
                     placeholder={t('timeline.ticket_placeholder')}
-                    className={`w-24 shrink-0 text-xs bg-transparent outline-none font-mono uppercase font-medium self-center ${ticketError ? 'placeholder:text-red-500' : 'placeholder:text-gray-400'} ${keyColor}`}
+                    className={`w-24 shrink-0 p-0 text-xs bg-transparent outline-none font-mono uppercase font-medium self-center ${ticketError ? 'placeholder:text-red-500' : 'placeholder:text-gray-400'} ${keyColor}`}
                 />
 
                 <span className="border-l border-dashed border-gray-300 self-stretch shrink-0" />
@@ -377,7 +416,7 @@ export default function TimeBlock({
                         </span>
                     ) : summaryText && (
                         <div className={`flex items-center gap-1 text-[10px] font-mono leading-tight ${summaryColor}`}>
-                            <span className="truncate">{summaryText}</span>
+                            <span className="truncate select-text cursor-text" tabIndex={-1}>{summaryText}</span>
                             {isFetchingTicket && (
                                 <span className="shrink-0 w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin opacity-60" />
                             )}

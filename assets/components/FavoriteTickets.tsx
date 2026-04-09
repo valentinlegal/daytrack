@@ -49,7 +49,7 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
     const [renameValue, setRenameValue] = useState('');
     const [renameError, setRenameError] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
-    // État du drag natif pour le réordonnancement
+    // État du drag pour le réordonnancement
     const [draggingId, setDraggingId] = useState<string | null>(null);
     const [dropIndex, setDropIndex] = useState<number | null>(null);
 
@@ -188,13 +188,12 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
         setTimeout(() => setCopiedId((prev) => (prev === fav.id ? null : prev)), 1500);
     }
 
-    // ─── Drag natif — réordonnancement et dépôt sur la timeline ─────────────
+    // ─── Drag — réordonnancement et dépôt sur la timeline ────────────────────
 
     function handleItemDragStart(e: React.DragEvent<HTMLDivElement>, fav: FavoriteTicket) {
         e.dataTransfer.effectAllowed = 'copyMove';
         e.dataTransfer.setData('application/daytrack-favorite', fav.id);
         writeToTimelineClipboard(fav);
-        // Léger délai pour que le ghost du navigateur soit rendu avant que React applique opacity
         setTimeout(() => setDraggingId(fav.id), 0);
     }
 
@@ -454,25 +453,27 @@ function FavoriteItem({
         <div
             draggable={!isRenaming}
             style={isDragging ? { display: 'none' } : undefined}
-            className={`group flex items-center gap-1 rounded-md border border-gray-200 border-l-2 ${typeStyle.leftBorder} bg-gray-50 hover:bg-white transition-colors overflow-hidden`}
+            className={`group flex items-center gap-1 rounded-md border border-gray-200 border-l-2 ${typeStyle.leftBorder} bg-gray-50 hover:bg-white transition-colors overflow-hidden cursor-grab active:cursor-grabbing`}
+            onClick={handleContentClick}
+            onDoubleClick={handleContentDoubleClick}
+            title={isRenaming ? undefined : tooltipText}
             onDragStart={onDragStart}
             onDragOver={onDragOver}
             onDrop={onDrop}
         >
-            {/* Poignée — curseur grab pour indiquer le point de saisie du drag */}
-            <div className="px-1 py-1.5 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-400 shrink-0 touch-none">
+            {/* Poignée — curseur grab, stoppe la propagation pour ne pas déclencher copie/renommage */}
+            <div
+                className="px-1 py-1.5 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-400 shrink-0 touch-none"
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+            >
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M8 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
                 </svg>
             </div>
 
-            {/* Contenu — clic simple : copie, double-clic : renommage */}
-            <button
-                className="flex flex-col min-w-0 flex-1 py-1.5 text-left"
-                onClick={handleContentClick}
-                onDoubleClick={handleContentDoubleClick}
-                title={isRenaming ? undefined : tooltipText}
-            >
+            {/* Contenu — les handlers click/dblclick sont remontés sur le div racine */}
+            <button className="flex flex-col min-w-0 flex-1 py-1.5 text-left cursor-grab">
                 <span className={`text-[10px] font-mono leading-none ${typeStyle.ticketKey}`}>
                     {favorite.ticketKey}
                 </span>
@@ -506,12 +507,12 @@ function FavoriteItem({
             </button>
 
             {/* Actions visibles au hover */}
-            <div className="flex items-center gap-0.5 pr-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-0.5 pr-1 shrink-0 self-stretch opacity-0 group-hover:opacity-100 transition-opacity">
                 {/* Renommer */}
                 {!isRenaming && (
                     <button
                         onClick={(e) => { e.stopPropagation(); onStartRename(); }}
-                        className="p-1 rounded text-gray-300 hover:text-indigo-500 transition-colors"
+                        className="p-1 rounded text-gray-300 hover:text-indigo-500 transition-colors cursor-pointer"
                         title="Renommer"
                     >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -523,7 +524,7 @@ function FavoriteItem({
                 {/* Supprimer */}
                 <button
                     onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                    className="p-1 rounded text-gray-300 hover:text-red-500 transition-colors"
+                    className="p-1 rounded text-gray-300 hover:text-red-500 transition-colors cursor-pointer"
                     title="Supprimer"
                 >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
