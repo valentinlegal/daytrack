@@ -737,6 +737,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                         selectSingle(slot);
                                     }
                                 }}
+                                onDropFavorite={() => void handlePaste(slot)}
                                 onCellMouseDown={(e) => {
                                     if (0 !== e.button) return; // clic gauche uniquement
                                     if (e.shiftKey || e.ctrlKey || e.metaKey) return; // laisser onClick gérer les modificateurs

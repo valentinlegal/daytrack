@@ -24,6 +24,7 @@ interface TimeBlockProps {
     onContextMenuOpen: () => void;
     onCellMouseDown: (e: React.MouseEvent) => void;
     onDragExtend: () => void;
+    onDropFavorite: () => void;
 }
 
 export default function TimeBlock({
@@ -44,11 +45,13 @@ export default function TimeBlock({
     onContextMenuOpen,
     onCellMouseDown,
     onDragExtend,
+    onDropFavorite,
 }: TimeBlockProps) {
     const [commentValue, setCommentValue] = useState('');
     const [ticketError, setTicketError] = useState(false);
     const [ticketFetchError, setTicketFetchError] = useState<string | null>(null);
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+    const [isDragOver, setIsDragOver] = useState(false);
 
     // Titre et type du ticket récupérés via Jira (ou depuis l'entrée existante)
     const [localSummary, setLocalSummary] = useState<string | null>(entry?.ticketSummary ?? null);
@@ -421,12 +424,15 @@ export default function TimeBlock({
     return (
         <>
             <div
-                className={`relative flex items-center px-2 cursor-pointer select-none ${noBottomBorder ? '' : 'border-b'} ${isEditing ? 'min-h-8 py-1' : 'h-8'} ${blockStyle} ${selectedStyle}`}
+                className={`relative flex items-center px-2 cursor-pointer select-none ${noBottomBorder ? '' : 'border-b'} ${isEditing ? 'min-h-8 py-1' : 'h-8'} ${blockStyle} ${selectedStyle} ${isDragOver ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50' : ''}`}
                 onClick={(e) => { e.stopPropagation(); if (!isEditing) onSelect(e); }}
                 onDoubleClick={() => !isEditing && onStartEdit()}
                 onContextMenu={handleContextMenu}
                 onMouseDown={(e) => { if (!isEditing) onCellMouseDown(e); }}
                 onMouseEnter={() => onDragExtend()}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true); }}
+                onDragLeave={() => setIsDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setIsDragOver(false); if (e.dataTransfer.getData('application/daytrack-favorite')) onDropFavorite(); }}
             >
                 {isEditing ? renderEditContent() : renderDisplayContent()}
                 {ticketError && !isEditing && (

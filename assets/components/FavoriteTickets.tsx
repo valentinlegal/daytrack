@@ -1,22 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
-import {
-    DndContext,
-    closestCenter,
-    PointerSensor,
-    KeyboardSensor,
-    useSensor,
-    useSensors,
-    type DragEndEvent,
-} from '@dnd-kit/core';
-import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
-import {
-    SortableContext,
-    sortableKeyboardCoordinates,
-    useSortable,
-    verticalListSortingStrategy,
-    arrayMove,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { useState, useRef, useEffect, Fragment } from 'react';
 import { EntryType } from '../types/api';
 import type { FavoriteTicket } from '../types/api';
 import { t } from '../i18n/fr';
@@ -25,7 +7,15 @@ import * as favoriteService from '../services/favoriteService';
 
 const COLLAPSE_KEY = 'daytrack_favorites_collapsed';
 
-/** Écrit un favori dans le presse-papier interne de la timeline (même format que Ctrl+C sur une cellule).
+/** Déplace un élément d'un tableau (immuable). */
+function arrayMove<T>(arr: T[], from: number, to: number): T[] {
+    const result = [...arr];
+    const [item] = result.splice(from, 1);
+    result.splice(to, 0, item);
+    return result;
+}
+
+/** Écrit un favori dans le presse-papier interne de la timeline.
  *  On colle ticketSummary (nom Jira original) et ticketType — jamais le customName. */
 function writeToTimelineClipboard(fav: FavoriteTicket): void {
     const clipboardData = {
@@ -59,9 +49,13 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
     const [renameValue, setRenameValue] = useState('');
     const [renameError, setRenameError] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    // État du drag natif pour le réordonnancement
+    const [draggingId, setDraggingId] = useState<string | null>(null);
+    const [dropIndex, setDropIndex] = useState<number | null>(null);
 
     const addInputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const listRef = useRef<HTMLDivElement>(null);
 
     // Ref toujours à jour — permet de lire l'état courant du renommage sans stale closures
     const renameCallbackRef = useRef<(() => void) | null>(null);
@@ -79,7 +73,7 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
         }
         : null;
 
-    // Ferme le renommage sur mousedown en dehors du composant (les cellules timeline bloquent le blur via preventDefault)
+    // Ferme le renommage sur mousedown en dehors du composant
     useEffect(() => {
         function handleOutsideMouseDown(e: MouseEvent) {
             if (containerRef.current?.contains(e.target as Node)) return;
@@ -88,11 +82,6 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
         document.addEventListener('mousedown', handleOutsideMouseDown);
         return () => document.removeEventListener('mousedown', handleOutsideMouseDown);
     }, []);
-
-    const sensors = useSensors(
-        useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-    );
 
     function toggleCollapse() {
         const next = !collapsed;
@@ -178,7 +167,7 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
         const trimmed = renameValue.trim();
         if (!trimmed) {
             setRenameError(true);
-            return; // Garde le focus, l'utilisateur peut corriger
+            return;
         }
         void doRename(id, trimmed);
     }
@@ -199,16 +188,70 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
         setTimeout(() => setCopiedId((prev) => (prev === fav.id ? null : prev)), 1500);
     }
 
-    function handleDragEnd(event: DragEndEvent) {
-        const { active, over } = event;
-        if (!over || active.id === over.id) return;
+    // ─── Drag natif — réordonnancement et dépôt sur la timeline ─────────────
 
-        const oldIndex = favorites.findIndex((f) => f.id === active.id);
-        const newIndex = favorites.findIndex((f) => f.id === over.id);
-        const reordered = arrayMove(favorites, oldIndex, newIndex);
+    function handleItemDragStart(e: React.DragEvent<HTMLDivElement>, fav: FavoriteTicket) {
+        e.dataTransfer.effectAllowed = 'copyMove';
+        e.dataTransfer.setData('application/daytrack-favorite', fav.id);
+        writeToTimelineClipboard(fav);
+        // Léger délai pour que le ghost du navigateur soit rendu avant que React applique opacity
+        setTimeout(() => setDraggingId(fav.id), 0);
+    }
 
-        onChange(reordered);
-        void favoriteService.reorderFavorites(reordered.map((f) => f.id)).catch(() => null);
+    function handleItemDragOver(e: React.DragEvent<HTMLDivElement>, index: number) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        setDropIndex(e.clientY < midY ? index : index + 1);
+    }
+
+    function handleItemDrop(e: React.DragEvent<HTMLDivElement>) {
+        e.preventDefault();
+        e.stopPropagation();
+        const sourceId = e.dataTransfer.getData('application/daytrack-favorite');
+        if (!sourceId || dropIndex === null) { resetDrag(); return; }
+
+        const fromIndex = favorites.findIndex((f) => f.id === sourceId);
+        if (-1 === fromIndex) { resetDrag(); return; }
+
+        let toIndex = dropIndex;
+        if (toIndex > fromIndex) toIndex--;
+
+        if (fromIndex !== toIndex) {
+            const reordered = arrayMove(favorites, fromIndex, toIndex);
+            onChange(reordered);
+            void favoriteService.reorderFavorites(reordered.map((f) => f.id)).catch(() => null);
+        }
+        resetDrag();
+    }
+
+    /** Efface l'indicateur uniquement si le curseur quitte vraiment la liste. */
+    function handleListDragLeave(e: React.DragEvent<HTMLDivElement>) {
+        if (!listRef.current?.contains(e.relatedTarget as Node)) {
+            setDropIndex(null);
+        }
+    }
+
+    function resetDrag() {
+        setDraggingId(null);
+        setDropIndex(null);
+    }
+
+    // Filet de sécurité : si dragend ne remonte pas (élément source retiré du DOM pendant le drag),
+    // on remet l'état à zéro via un listener document
+    const resetDragRef = useRef(resetDrag);
+    resetDragRef.current = resetDrag;
+    useEffect(() => {
+        function handleDragEnd() { resetDragRef.current(); }
+        document.addEventListener('dragend', handleDragEnd);
+        return () => document.removeEventListener('dragend', handleDragEnd);
+    }, []);
+
+    /** Affiche le placeholder avant l'index donné quand on drag. */
+    function shouldShowPlaceholder(beforeIndex: number): boolean {
+        return draggingId !== null && dropIndex === beforeIndex;
     }
 
     return (
@@ -235,21 +278,23 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
                         <p className="text-xs text-gray-400 italic">{t('favorites.empty')}</p>
                     )}
 
-                    <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-                        onDragEnd={handleDragEnd}
+                    <div
+                        ref={listRef}
+                        className="flex flex-col gap-1"
+                        onDragLeave={handleListDragLeave}
+                        onDragEnd={resetDrag}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleItemDrop}
                     >
-                        <SortableContext
-                            items={favorites.map((f) => f.id)}
-                            strategy={verticalListSortingStrategy}
-                        >
-                            {favorites.map((fav) => (
-                                <SortableFavoriteItem
-                                    key={fav.id}
+                        {favorites.map((fav, index) => (
+                            <Fragment key={fav.id}>
+                                {shouldShowPlaceholder(index) && (
+                                    <div className="h-10 rounded-md border border-dashed border-indigo-300 bg-indigo-50 shrink-0" />
+                                )}
+                                <FavoriteItem
                                     favorite={fav}
                                     isCopied={copiedId === fav.id}
+                                    isDragging={draggingId === fav.id}
                                     isRenaming={renamingId === fav.id}
                                     renameValue={renameValue}
                                     isRenameError={renameError && renamingId === fav.id}
@@ -262,10 +307,16 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
                                         else if (e.key === 'Escape') { setRenamingId(null); setRenameError(false); }
                                     }}
                                     onDelete={() => void handleDelete(fav.id)}
+                                    onDragStart={(e) => handleItemDragStart(e, fav)}
+                                    onDragOver={(e) => handleItemDragOver(e, index)}
+                                    onDrop={handleItemDrop}
                                 />
-                            ))}
-                        </SortableContext>
-                    </DndContext>
+                            </Fragment>
+                        ))}
+                        {shouldShowPlaceholder(favorites.length) && (
+                            <div className="h-10 rounded-md border border-dashed border-indigo-300 bg-indigo-50 shrink-0" />
+                        )}
+                    </div>
 
                     {/* Formulaire d'ajout inline */}
                     {isAdding ? (
@@ -321,9 +372,10 @@ export default function FavoriteTickets({ favorites, onChange }: FavoriteTickets
     );
 }
 
-interface SortableFavoriteItemProps {
+interface FavoriteItemProps {
     favorite: FavoriteTicket;
     isCopied: boolean;
+    isDragging: boolean;
     isRenaming: boolean;
     renameValue: string;
     isRenameError: boolean;
@@ -333,11 +385,15 @@ interface SortableFavoriteItemProps {
     onRenameSubmit: () => void;
     onRenameKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
     onDelete: () => void;
+    onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+    onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+    onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
 }
 
-function SortableFavoriteItem({
+function FavoriteItem({
     favorite,
     isCopied,
+    isDragging,
     isRenaming,
     renameValue,
     isRenameError,
@@ -347,48 +403,74 @@ function SortableFavoriteItem({
     onRenameSubmit,
     onRenameKeyDown,
     onDelete,
-}: SortableFavoriteItemProps) {
-    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-        id: favorite.id,
-    });
-
-    const style: React.CSSProperties = {
-        transform: CSS.Transform.toString(transform),
-        transition,
-        opacity: isDragging ? 0.5 : 1,
-    };
-
+    onDragStart,
+    onDragOver,
+    onDrop,
+}: FavoriteItemProps) {
     const typeStyle = getTicketTypeStyle(favorite.ticketType);
     const displayName = favorite.customName ?? favorite.ticketSummary ?? favorite.ticketKey;
     const tooltipText = `${displayName}\n${t('favorites.copy_tooltip')}`;
     const renameInputRef = useRef<HTMLInputElement>(null);
 
+    // Timer pour discriminer simple clic (copie) et double-clic (renommage)
+    const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Cooldown post-renommage : évite une copie accidentelle au clic qui ferme le mode rename
+    const renameCooldownRef = useRef(false);
+    const wasRenamingRef = useRef(false);
+
     useEffect(() => {
-        if (isRenaming) setTimeout(() => renameInputRef.current?.select(), 0);
+        if (isRenaming) {
+            wasRenamingRef.current = true;
+            setTimeout(() => renameInputRef.current?.select(), 0);
+            return;
+        }
+        if (wasRenamingRef.current) {
+            // Transition isRenaming true → false : blindage contre la copie accidentelle
+            wasRenamingRef.current = false;
+            renameCooldownRef.current = true;
+            const timer = setTimeout(() => { renameCooldownRef.current = false; }, 300);
+            return () => clearTimeout(timer);
+        }
     }, [isRenaming]);
+
+    function handleContentClick() {
+        if (isRenaming || renameCooldownRef.current) return;
+        if (clickTimerRef.current) return;
+        clickTimerRef.current = setTimeout(() => {
+            clickTimerRef.current = null;
+            onCopy();
+        }, 200);
+    }
+
+    function handleContentDoubleClick() {
+        if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+        }
+        onStartRename();
+    }
 
     return (
         <div
-            ref={setNodeRef}
-            style={style}
-            className={`group flex items-center gap-1 rounded-md border border-gray-200 border-l-2 ${typeStyle.leftBorder} bg-gray-50 hover:bg-white transition-colors`}
+            draggable={!isRenaming}
+            style={isDragging ? { display: 'none' } : undefined}
+            className={`group flex items-center gap-1 rounded-md border border-gray-200 border-l-2 ${typeStyle.leftBorder} bg-gray-50 hover:bg-white transition-colors overflow-hidden`}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
         >
-            {/* Poignée drag */}
-            <div
-                {...attributes}
-                {...listeners}
-                className="px-1 py-1.5 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-400 shrink-0 touch-none"
-                title="Déplacer"
-            >
+            {/* Poignée — curseur grab pour indiquer le point de saisie du drag */}
+            <div className="px-1 py-1.5 cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-400 shrink-0 touch-none">
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M8 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
                 </svg>
             </div>
 
-            {/* Contenu cliquable — copie dans le presse-papier interne ou renommage */}
+            {/* Contenu — clic simple : copie, double-clic : renommage */}
             <button
                 className="flex flex-col min-w-0 flex-1 py-1.5 text-left"
-                onClick={isRenaming ? undefined : onCopy}
+                onClick={handleContentClick}
+                onDoubleClick={handleContentDoubleClick}
                 title={isRenaming ? undefined : tooltipText}
             >
                 <span className={`text-[10px] font-mono leading-none ${typeStyle.ticketKey}`}>
@@ -403,7 +485,7 @@ function SortableFavoriteItem({
                             onKeyDown={onRenameKeyDown}
                             onBlur={onRenameSubmit}
                             placeholder={t('favorites.rename_placeholder')}
-                            className={`text-xs bg-transparent border-b outline-none w-full mt-0.5 ${
+                            className={`text-xs bg-transparent border-b outline-none w-full mt-0.5 placeholder:text-gray-400 ${
                                 isRenameError ? 'border-red-400 text-red-500' : 'border-indigo-400 text-gray-700'
                             }`}
                             onClick={(e) => e.stopPropagation()}
