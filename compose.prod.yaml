@@ -12,6 +12,7 @@ services:
       JIRA_BASE_URL: ${JIRA_BASE_URL}
       JIRA_USER_EMAIL: ${JIRA_USER_EMAIL}
       JIRA_API_TOKEN: ${JIRA_API_TOKEN}
+      JIRA_TICKET_TYPES: ${JIRA_TICKET_TYPES}
     volumes:
       - db_data:/app/db
 
