@@ -13,6 +13,7 @@ const fr = {
         save: "Enregistrer",
         cancel: "Annuler",
         copy: "Copier",
+        cut: "Couper",
         paste: "Coller",
         clear: "Effacer",
         ticket_placeholder: "PROJ-123",

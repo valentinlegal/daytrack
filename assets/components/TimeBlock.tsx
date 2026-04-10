@@ -18,6 +18,7 @@ interface TimeBlockProps {
     onSave: (ticketKey: string | null, type: EntryType, comment: string | null, ticketSummary: string | null, ticketType: string | null) => void;
     onCancel: () => void;
     onCopy: () => void;
+    onCut: () => void;
     onPaste: () => void;
     onClear: () => void;
     onConvertToBreak: () => void;
@@ -39,6 +40,7 @@ export default function TimeBlock({
     onSave,
     onCancel,
     onCopy,
+    onCut,
     onPaste,
     onClear,
     onConvertToBreak,
@@ -492,6 +494,12 @@ export default function TimeBlock({
                         <ContextMenuItem
                             label={t('timeline.copy')}
                             onClick={() => { onCopy(); closeContextMenu(); }}
+                        />
+                    )}
+                    {entry && (
+                        <ContextMenuItem
+                            label={t('timeline.cut')}
+                            onClick={() => { onCut(); closeContextMenu(); }}
                         />
                     )}
                     {hasClipboard && (

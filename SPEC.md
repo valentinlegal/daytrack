@@ -62,10 +62,11 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 - Clic-glisser, Shift+clic, Ctrl+clic : sélection étendue
 - Touches fléchées (± Shift) pour naviguer et étendre la sélection
 - Suppr / Backspace : efface les entrées sélectionnées
-- Clic droit sur la sélection : menu contextuel (copier, coller, effacer, convertir en pause)
+- Clic droit sur la sélection : menu contextuel (copier, couper, coller, effacer, convertir en pause)
 
 ### Copier / Coller en bloc
 - Ctrl+C : copie toute la sélection comme un bloc — les offsets relatifs entre créneaux et les cellules vides explicitement sélectionnées sont préservés
+- Ctrl+X : coupe la sélection — copie dans le presse-papier puis efface les entrées sélectionnées
 - Ctrl+V avec 1 cellule cible : colle le bloc à partir de cette cellule (débordement tronqué silencieusement) ; une cellule vide copiée efface l'entrée destination
 - Ctrl+V avec plusieurs cellules sélectionnées : modal d'avertissement ("sélectionne une seule cellule cible")
 - Clic droit → Coller : colle toujours sur la cellule cliquée, sans modal
@@ -86,7 +87,7 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 - À la saisie d'un ID ticket, le titre (`summary`) et le type sont récupérés via l'API Jira et stockés sur l'entrée (`ticketSummary`, `ticketType`)
 - Les sous-tâches remontent le type du ticket parent (ex : Story plutôt que Sub-task)
 - Cache 3 couches : `knownTickets` (entrées du jour en mémoire) → `sessionStorage` → appel API
-- Mise à jour instantanée de la couleur depuis le cache local à chaque frappe ; appel API au blur si le ticket a changé
+- Mise à jour instantanée de la couleur depuis le cache local à chaque frappe ; appel API au blur ou à la validation (Enter) si le ticket a changé
 - Si Jira est configuré et le ticket est introuvable, une erreur est affichée et la sauvegarde est bloquée
 - Affichage en mode lecture : layout 2 colonnes (ID | titre + commentaire) si un titre est disponible
 - Couleur par type configurable via `JIRA_TICKET_TYPES` dans `.env` (format : `Story:emerald,Bug:orange,...`) ; palette statique dans `assets/config/ticketTypeColors.ts` (contrainte Tailwind v4)
@@ -119,7 +120,17 @@ Delete-then-recreate sur les worklogs de l'utilisateur pour la journée. Pas de 
 - `JIRA_BASE_URL` — ex: `https://monentreprise.atlassian.net`
 - `JIRA_USER_EMAIL` — email du compte Atlassian
 - `JIRA_API_TOKEN` — token généré sur id.atlassian.com → Security → API tokens
-- `JIRA_TICKET_TYPES` — mapping type → couleur (ex: `Story:emerald,Bug:orange,Epic:purple,Task:indigo`)
+- `JIRA_TICKET_TYPES` — mapping type → couleur (ex: `Story:emerald,Bug:red,Epic:purple,Task:indigo`)
+
+### Tickets favoris
+
+- Liste de tickets fréquents dans la sidebar (section collapsible)
+- Clic simple : copie le ticket dans le presse-papier interne de la timeline
+- Double-clic : renommage inline avec un nom personnalisé (affiché à la place du titre Jira)
+- Drag & drop pour réordonner la liste
+- Drag vers une cellule de la timeline pour y déposer le ticket directement
+- Coloré par type Jira (même palette que la timeline)
+- Persisté côté serveur
 
 ### Production
 - Image Docker multi-stage avec assets npm compilés
@@ -131,6 +142,5 @@ Delete-then-recreate sur les worklogs de l'utilisateur pour la journée. Pas de 
 ## Évolutions possibles (post-V1)
 
 - Auto-complétion des tickets JIRA
-- Gestion des tickets favoris
 - Statistiques hebdomadaires
 - Export des données

@@ -485,6 +485,12 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         sessionStorage.setItem('daytrack_clipboard', JSON.stringify(value));
     }
 
+    /** Coupe la sélection : copie puis supprime les créneaux sélectionnés */
+    async function handleCutSelection() {
+        handleCopySelection();
+        await handleBulkClear(selectedSlots);
+    }
+
     /** Colle le bloc du presse-papier à partir du créneau cible (tronque silencieusement si débordement) */
     async function handlePaste(targetSlot: string) {
         if (null === clipboard || 0 === clipboard.cells.length) return;
@@ -601,6 +607,9 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         if (ctrlOrCmd && 'c' === e.key) {
             e.preventDefault();
             handleCopySelection();
+        } else if (ctrlOrCmd && 'x' === e.key) {
+            e.preventDefault();
+            void handleCutSelection();
         } else if (ctrlOrCmd && 'v' === e.key) {
             e.preventDefault();
             if (selectedSlots.size > 1 && null !== clipboard && 1 === clipboard.cells.length) {
@@ -728,6 +737,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                 onSave={(ticketKey, type, comment, ticketSummary, ticketType) => void handleSave(slot, ticketKey, type, comment, ticketSummary, ticketType)}
                                 onCancel={() => setEditingSlot(null)}
                                 onCopy={() => handleCopySelection()}
+                                onCut={() => void handleCutSelection()}
                                 onPaste={() => void handlePaste(slot)}
                                 onClear={() => void handleBulkClear(effectiveSelection)}
                                 onConvertToBreak={() => void handleBulkConvertToBreak(effectiveSelection)}
