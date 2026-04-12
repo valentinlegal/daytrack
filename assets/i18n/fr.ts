@@ -1,11 +1,18 @@
 // Fichier de traduction français — source unique pour tous les messages affichés côté frontend
 const fr = {
+    app: {
+        name: "DayTrack",
+    },
     error: {
         load_day: "Impossible de charger la journée",
         create_entry: "Impossible de créer l'entrée",
         update_entry: "Impossible de mettre à jour l'entrée",
         delete_entry: "Impossible de supprimer l'entrée",
         update_day: "Impossible de mettre à jour la journée",
+    },
+    common: {
+        loading: "Chargement…",
+        close: "Fermer",
     },
     timeline: {
         empty_slot: "Ajouter un ticket",
@@ -21,7 +28,7 @@ const fr = {
         ticket_required: "ID requis pour enregistrer une saisie",
         ticket_fetch_error: "Ticket introuvable ou inaccessible",
         convert_to_break: "Convertir en pause",
-        paste_multiselection_warning: "Pour coller, sélectionne d'abord une seule cellule cible.",
+        paste_multiselection_warning: "Pour coller, sélectionnez d'abord une seule cellule cible.",
         close: "Fermer",
     },
     navigation: {
@@ -29,8 +36,17 @@ const fr = {
         next_day: "Jour suivant",
         today: "Aujourd'hui",
     },
+    header: {
+        worked: "Travaillé",
+        target: "Objectif",
+        balance: "Solde",
+        estimated_end: "Fin",
+        target_edit_hint: "Modifier l'objectif",
+        report: "Rapport",
+    },
     summary: {
         title: "Récapitulatif",
+        empty: "Aucune saisie pour cette journée.",
         worked: "Travaillé",
         target: "Objectif",
         balance: "Solde",
@@ -44,11 +60,11 @@ const fr = {
         copy_tooltip: "Cliquer pour copier",
         copied: "Copié !",
         add_placeholder: "PROJ-123",
-        add_hint: "Ajouter un ticket favori",
+        add_hint: "Ajouter un favori",
         rename_placeholder: "Nom du ticket",
         already_exists: "Ce ticket est déjà dans vos favoris",
         rename_empty: "Le nom ne peut pas être vide",
-        empty: "Aucun favori — ajoutez un ticket ci-dessous",
+        empty: "Aucun favori",
     },
     jira: {
         button: {
@@ -58,6 +74,9 @@ const fr = {
         status: {
             synced: "Synchronisé à",
             not_synced: "Non synchronisé",
+            dirty: "Modifié depuis la dernière sync — cliquer pour re-synchroniser",
+            nothing_to_sync: "Aucune saisie à synchroniser",
+            synced_cleanup: "Synchroniser pour effacer les saisies JIRA du jour",
         },
         modal: {
             title: "Synchroniser vers JIRA",
@@ -70,6 +89,7 @@ const fr = {
             success: "{n} worklog(s) synchronisé(s) avec succès",
             success_empty: "Saisies JIRA du jour supprimées",
             partial_error: "Synchronisation partielle — certains tickets ont échoué",
+            synced: "Synchronisé !",
         },
         error: {
             sync_failed: "Échec de la synchronisation JIRA",

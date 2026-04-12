@@ -1,4 +1,5 @@
-import type { TimeEntry } from '../types/api';
+import type { TimeEntry, WorkDay } from '../types/api';
+import { EntryType } from '../types/api';
 
 export const TIMELINE_START_HOUR = 7;
 export const TIMELINE_END_HOUR = 20;
@@ -57,10 +58,107 @@ export function shiftDate(date: string, days: number): string {
     return formatLocalDate(d);
 }
 
-// Formate un nombre de minutes en chaîne lisible (ex: 450 → "7h30")
+// Formate un nombre de minutes en chaîne lisible (ex: 450 → "7h30", -30 → "-0h30")
 export function formatMinutes(minutes: number): string {
     const h = Math.floor(Math.abs(minutes) / 60);
     const m = Math.abs(minutes) % 60;
     const sign = minutes < 0 ? '-' : '';
     return m === 0 ? `${sign}${h}h` : `${sign}${h}h${String(m).padStart(2, '0')}`;
+}
+
+// Arrondit au quart d'heure le plus proche (ex: 46 → 45, 52 → 60)
+export function roundToQuarter(minutes: number): number {
+    return Math.round(minutes / 15) * 15;
+}
+
+/** Interprète une saisie utilisateur en minutes (ex: "7h30" → 450, "7:30" → 450, "7.5" → 450, "8" → 480) */
+export function parseTarget(value: string): number | null {
+    let raw: number | null = null;
+
+    const hm = value.trim().match(/^(\d+)h(\d{1,2})?$/i);
+    if (hm) raw = parseInt(hm[1]) * 60 + (hm[2] ? parseInt(hm[2]) : 0);
+
+    const colon = value.trim().match(/^(\d+):(\d{2})$/);
+    if (colon) raw = parseInt(colon[1]) * 60 + parseInt(colon[2]);
+
+    const decimal = value.trim().match(/^(\d+(?:[.,]\d+)?)$/);
+    if (decimal) raw = Math.round(parseFloat(decimal[1].replace(',', '.')) * 60);
+
+    if (raw === null) return null;
+    const rounded = roundToQuarter(raw);
+    return rounded > 0 && rounded <= 1440 ? rounded : null;
+}
+
+/** Retourne l'heure actuelle en minutes depuis minuit */
+export function getCurrentMinutes(): number {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+}
+
+/** Calcule l'heure de fin estimée pour aujourd'hui si le solde est négatif */
+export function computeEstimatedEnd(workDay: WorkDay): string | null {
+    if (workDay.balanceMinutes >= 0) return null;
+    if (workDay.date !== today()) return null;
+
+    const nowFloor = Math.floor(getCurrentMinutes() / 15) * 15;
+    const remaining = -workDay.balanceMinutes;
+
+    const futureWorked = workDay.entries.reduce((sum, e) => {
+        if (null === e.endedAt) return sum;
+        const [h, m] = e.endedAt.split(':').map(Number);
+        const end = h * 60 + m;
+        return end > nowFloor ? sum + (e.durationMinutes ?? 0) : sum;
+    }, 0);
+
+    const estimatedMinutes = nowFloor + remaining + futureWorked;
+    if (estimatedMinutes >= 24 * 60) return '> 23:59';
+    return `${String(Math.floor(estimatedMinutes / 60)).padStart(2, '0')}:${String(estimatedMinutes % 60).padStart(2, '0')}`;
+}
+
+export interface TicketRecapEntry {
+    ticketKey: string;
+    ticketSummary: string | null;
+    ticketType: string | null;
+    totalMinutes: number;
+    comments: string[];
+    hasUncommentedEntries: boolean;
+}
+
+/** Groupe les entrées WORK par ticketKey et calcule les totaux */
+export function computeTicketRecap(entries: TimeEntry[]): TicketRecapEntry[] {
+    const map = new Map<string, TicketRecapEntry>();
+
+    for (const entry of entries) {
+        if (entry.type !== EntryType.WORK || !entry.ticketKey) continue;
+
+        const key = entry.ticketKey;
+        if (!map.has(key)) {
+            map.set(key, {
+                ticketKey: key,
+                ticketSummary: entry.ticketSummary ?? null,
+                ticketType: entry.ticketType ?? null,
+                totalMinutes: 0,
+                comments: [],
+                hasUncommentedEntries: false,
+            });
+        }
+
+        const rec = map.get(key)!;
+        rec.totalMinutes += entry.durationMinutes ?? 0;
+
+        const comment = entry.comment?.trim();
+        if (comment) {
+            if (!rec.comments.includes(comment)) rec.comments.push(comment);
+        } else {
+            rec.hasUncommentedEntries = true;
+        }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.totalMinutes - a.totalMinutes);
+}
+
+/** Formate une date ISO en heure locale HH:mm */
+export function formatIsoTime(isoString: string): string {
+    const d = new Date(isoString);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }

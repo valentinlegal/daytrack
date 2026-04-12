@@ -8,7 +8,12 @@
         "strict": true,
         "esModuleInterop": true,
         "allowSyntheticDefaultImports": true,
-        "skipLibCheck": true
+        "skipLibCheck": true,
+        "ignoreDeprecations": "6.0",
+        "baseUrl": ".",
+        "paths": {
+            "@/*": ["./assets/*"]
+        }
     },
     "include": ["assets/**/*"],
     "exclude": ["node_modules", "public"]

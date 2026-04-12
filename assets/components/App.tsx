@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { today } from '../utils/timeline';
+import { today } from '@/utils/timeline';
 import TimelinePage from './TimelinePage';
 
 export default function App() {

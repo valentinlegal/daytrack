@@ -1,4 +1,5 @@
 const Encore = require('@symfony/webpack-encore');
+const path = require('path');
 
 // Manually configure the runtime environment if not already configured yet by the "encore" command.
 // It's useful when you use tools that rely on webpack.config.js file.
@@ -64,6 +65,9 @@ Encore
 
     .enableTypeScriptLoader()
     .enablePostCssLoader()
+    .addAliases({
+        '@': path.resolve(__dirname, 'assets'),
+    })
 
     // Évite la boucle infinie en mode watch : exclut le dossier de sortie de la surveillance
     .configureWatchOptions(watchOptions => {

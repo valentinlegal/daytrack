@@ -96,7 +96,7 @@ Webapp auto-hébergée (via Docker) pour gérer le suivi du temps de travail quo
 ### Synchronisation JIRA (JIRA Cloud REST API v3)
 
 **Comportement :**
-- Bouton "Sync JIRA" dans le récapitulatif (caché si JIRA non configuré)
+- Bouton icône dans le header (caché si JIRA non configuré), avec tooltip d'état
 - Modal de confirmation avant sync (avertit que les worklogs JIRA du jour seront écrasés)
 - Groupement des entrées par `(ticketKey, commentaire)` — les entrées fragmentées sont fusionnées
 - Normalisation des commentaires **avant** le groupement pour fusionner correctement
@@ -112,9 +112,12 @@ Delete-then-recreate sur les worklogs de l'utilisateur pour la journée. Pas de 
 2. DELETE worklogs existants — en parallèle
 3. POST nouveaux worklogs — en parallèle
 
-**Indicateur de statut :**
-- `jiraSyncedAt` sur `WorkDay` → vert "Synchronisé à HH:mm"
-- Reset à `null` à chaque modification d'entrée → orange "Non synchronisé"
+**Indicateur de statut (dirty detection côté frontend) :**
+- Après une sync réussie, un fingerprint des entrées synchronisées est stocké en mémoire (`id:endedAt` de chaque entrée WORK avec ticket, triés et joints)
+- Si les entrées n'ont pas changé depuis la dernière sync → icône verte "Synchronisé"
+- Si des entrées ont changé depuis la dernière sync → icône orange "Modifié depuis la dernière sync"
+- Jamais synchronisé mais des entrées syncables existent → icône orange
+- `jiraSyncedAt` sur `WorkDay` persiste l'heure de dernière sync (affiché dans le tooltip)
 
 **Configuration (variables d'env) :**
 - `JIRA_BASE_URL` — ex: `https://monentreprise.atlassian.net`

@@ -1,15 +1,20 @@
+import { useState, useEffect } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import type { WorkDay } from '../types/api';
-import { useWorkDay } from '../hooks/useWorkDay';
-import { MAX_DAYS_AHEAD, shiftDate, today } from '../utils/timeline';
-import DayNavigation from './DayNavigation';
-import DaySummary from './DaySummary';
-import Timeline from './Timeline';
+import type { FavoriteTicket, WorkDay } from '@/types/api';
+import { useWorkDay } from '@/hooks/useWorkDay';
+import { MAX_DAYS_AHEAD, shiftDate, today } from '@/utils/timeline';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import AppHeader from '@/components/layout/AppHeader';
+import FavoritesPanel from '@/components/layout/FavoritesPanel';
+import SummaryDrawer from '@/components/layout/SummaryDrawer';
+import Timeline from '@/components/timeline/Timeline';
+import { listFavorites } from '@/services/favoriteService';
+import { t } from '@/i18n/fr';
 
 // Date minimale acceptée (évite les dates absurdes genre 0001-01-01)
 const MIN_DATE = '2000-01-01';
 
-// Vérifie qu'une chaîne est une date YYYY-MM-DD valide dans les bornes acceptées
+/** Vérifie qu'une chaîne est une date YYYY-MM-DD valide dans les bornes acceptées */
 function isValidDate(date: string): boolean {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
     const d = new Date(date + 'T00:00:00');
@@ -19,9 +24,7 @@ function isValidDate(date: string): boolean {
 
 export default function TimelinePage() {
     const { date: dateParam } = useParams<{ date: string }>();
-    const navigate = useNavigate();
 
-    // Redirection vers aujourd'hui si la date est absente, invalide ou hors bornes
     if (!dateParam || !isValidDate(dateParam)) {
         return <Navigate to={`/${today()}`} replace />;
     }
@@ -33,40 +36,66 @@ export default function TimelinePage() {
 function TimelinePageContent({ date }: { date: string }) {
     const navigate = useNavigate();
     const { workDay, isLoading, error, setWorkDay } = useWorkDay(date);
+    const [summaryOpen, setSummaryOpen] = useState(false);
+    const [favorites, setFavorites] = useState<FavoriteTicket[]>([]);
+
+    useEffect(() => {
+        void listFavorites().then(setFavorites).catch(() => null);
+    }, []);
 
     function handleWorkDayUpdate(updated: WorkDay) {
         setWorkDay(updated);
     }
 
     return (
-        <div className="h-screen flex flex-col bg-gray-50">
-            <DayNavigation
-                date={date}
-                onPrevious={() => navigate(`/${shiftDate(date, -1)}`)}
-                onNext={() => navigate(`/${shiftDate(date, 1)}`)}
-                onToday={() => navigate(`/${today()}`)}
-            />
+        <TooltipProvider delayDuration={400}>
+            <div className="h-screen flex flex-col bg-white overflow-hidden">
+                {/* Header global */}
+                <AppHeader
+                    date={date}
+                    workDay={workDay}
+                    onWorkDayUpdate={handleWorkDayUpdate}
+                    onPrevious={() => navigate(`/${shiftDate(date, -1)}`)}
+                    onNext={() => navigate(`/${shiftDate(date, 1)}`)}
+                    onToday={() => navigate(`/${today()}`)}
+                    onOpenReport={() => setSummaryOpen(true)}
+                />
 
-            <div className="flex flex-1 overflow-hidden">
-                {isLoading && (
-                    <div className="flex-1 flex items-center justify-center text-gray-400">
-                        Chargement…
-                    </div>
-                )}
+                {/* Corps */}
+                <div className="flex flex-1 overflow-hidden">
+                    {/* Panneau favoris (gauche) */}
+                    <FavoritesPanel favorites={favorites} onChange={setFavorites} />
 
-                {null !== error && (
-                    <div className="flex-1 flex items-center justify-center text-red-500">
-                        {error}
-                    </div>
-                )}
+                    {/* Zone centrale */}
+                    <main className="flex-1 flex flex-col overflow-hidden">
+                        {isLoading && (
+                            <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+                                {t('common.loading')}
+                            </div>
+                        )}
 
-                {!isLoading && null === error && null !== workDay && (
-                    <>
-                        <Timeline workDay={workDay} onWorkDayUpdate={handleWorkDayUpdate} />
-                        <DaySummary workDay={workDay} onWorkDayUpdate={handleWorkDayUpdate} />
-                    </>
+                        {null !== error && (
+                            <div className="flex-1 flex items-center justify-center text-red-500 text-sm">
+                                {error}
+                            </div>
+                        )}
+
+                        {!isLoading && null === error && null !== workDay && (
+                            <Timeline workDay={workDay} onWorkDayUpdate={handleWorkDayUpdate} />
+                        )}
+                    </main>
+                </div>
+
+                {/* Drawer récapitulatif (droite) */}
+                {workDay && (
+                    <SummaryDrawer
+                        open={summaryOpen}
+                        onClose={() => setSummaryOpen(false)}
+                        workDay={workDay}
+                        onWorkDayUpdate={handleWorkDayUpdate}
+                    />
                 )}
             </div>
-        </div>
+        </TooltipProvider>
     );
 }
