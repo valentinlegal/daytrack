@@ -44,21 +44,18 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                                                 <div className="flex flex-col min-w-0">
                                                     {rec.ticketSummary ? (
                                                         <>
+                                                            <span className="text-sm font-medium text-gray-800 break-words leading-snug">
+                                                                {rec.ticketSummary}
+                                                            </span>
                                                             <div className="flex items-end gap-1 min-w-0">
-                                                                <span
-                                                                    className="text-sm font-medium text-gray-800 truncate leading-snug min-w-0"
-                                                                    title={rec.ticketSummary}
-                                                                >
-                                                                    {rec.ticketSummary}
+                                                                <span className={cn('text-xs font-mono shrink-0', style.ticketKey)}>
+                                                                    {rec.ticketKey}
                                                                 </span>
-                                                                <span className="flex-1 shrink-0 min-w-4 border-b border-dashed border-gray-300 mb-[4px]" />
+                                                                <span className="flex-1 border-b border-dashed border-gray-300 mb-[3px]" />
                                                                 <span className="text-xs text-gray-400 shrink-0 font-mono">
                                                                     {formatMinutes(rec.totalMinutes)}
                                                                 </span>
                                                             </div>
-                                                            <span className={cn('text-xs font-mono', style.ticketKey)}>
-                                                                {rec.ticketKey}
-                                                            </span>
                                                         </>
                                                     ) : (
                                                         <div className="flex items-end gap-1 min-w-0">
@@ -77,8 +74,7 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                                                         {rec.comments.map((c) => (
                                                             <li
                                                                 key={c}
-                                                                className="text-xs text-gray-500 pl-2 border-l-2 border-gray-200 truncate"
-                                                                title={c}
+                                                                className="text-xs text-gray-500 pl-2 border-l-2 border-gray-200 break-words"
                                                             >
                                                                 {c}
                                                             </li>
