@@ -68,7 +68,7 @@ const fr = {
     },
     jira: {
         button: {
-            sync: "Sync JIRA",
+            sync: "Synchroniser vers Jira",
             syncing: "Synchronisation…",
         },
         status: {
@@ -76,23 +76,23 @@ const fr = {
             not_synced: "Non synchronisé",
             dirty: "Modifié depuis la dernière sync — cliquer pour re-synchroniser",
             nothing_to_sync: "Aucune saisie à synchroniser",
-            synced_cleanup: "Synchroniser pour effacer les saisies JIRA du jour",
+            synced_cleanup: "Synchroniser pour effacer les saisies Jira du jour",
         },
         modal: {
-            title: "Synchroniser vers JIRA",
-            body: "Les saisies d'heure existantes dans JIRA pour cette journée seront écrasées par vos saisies locales.",
-            body_empty: "Aucune saisie à synchroniser. Les saisies d'heure existantes dans JIRA pour cette journée seront supprimées.",
+            title: "Synchroniser vers Jira",
+            body: "Les saisies d'heure existantes dans Jira pour cette journée seront écrasées par vos saisies locales.",
+            body_empty: "Aucune saisie à synchroniser. Les saisies d'heure existantes dans Jira pour cette journée seront supprimées.",
             cancel: "Annuler",
             confirm: "Synchroniser",
         },
         feedback: {
             success: "{n} worklog(s) synchronisé(s) avec succès",
-            success_empty: "Saisies JIRA du jour supprimées",
+            success_empty: "Saisies Jira du jour supprimées",
             partial_error: "Synchronisation partielle — certains tickets ont échoué",
             synced: "Synchronisé !",
         },
         error: {
-            sync_failed: "Échec de la synchronisation JIRA",
+            sync_failed: "Échec de la synchronisation Jira",
         },
     },
 } as const;
