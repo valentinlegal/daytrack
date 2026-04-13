@@ -216,7 +216,7 @@ export default function TimeBlock({
     // Fond et bordure selon état
     const blockBg = entry
         ? isBreak
-            ? 'bg-amber-50 hover:bg-amber-100'
+            ? 'bg-gray-50 hover:bg-gray-100'
             : isErrored
                 ? 'bg-red-50 hover:bg-red-100'
                 : (ticketStyle?.blockBg ?? 'bg-indigo-50') + ' hover:brightness-95'
@@ -228,7 +228,7 @@ export default function TimeBlock({
     // On n'utilise pas border-l-{color} car tailwind-merge peut confondre width et color (même préfixe).
     const leftIndicatorBg = entry
         ? isBreak
-            ? 'bg-amber-400'
+            ? 'bg-gray-400'
             : isErrored
                 ? 'bg-red-400'
                 : (ticketStyle?.dotColor ?? 'bg-indigo-400')
@@ -243,7 +243,7 @@ export default function TimeBlock({
     const selectedStyle = isSelected
         ? entry
             ? isBreak
-                ? 'ring-2 ring-inset ring-amber-400'
+                ? 'ring-2 ring-inset ring-gray-400'
                 : isErrored
                     ? 'ring-2 ring-inset ring-red-400'
                     : (ticketStyle?.ring ?? 'ring-2 ring-inset ring-indigo-400')
@@ -272,9 +272,9 @@ export default function TimeBlock({
         if (isBreak) {
             return (
                 <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-mono text-amber-700">{t('timeline.break_label')}</span>
+                    <span className="text-xs font-mono text-gray-700">{t('timeline.break_label')}</span>
                     {isRunLast && runDurationMinutes > 15 && (
-                        <span className="text-[10px] font-mono text-amber-500 select-none">
+                        <span className="text-[10px] font-mono text-gray-500 select-none">
                             {formatMinutes(runDurationMinutes)}
                         </span>
                     )}
@@ -306,7 +306,7 @@ export default function TimeBlock({
                 {hasSummary || hasComment ? (
                     <div className={cn('flex flex-col justify-center min-w-0 flex-1', hasSummary && hasComment ? 'gap-0.5' : '')}>
                         {hasSummary && (
-                            <span className={cn('text-[10px] font-mono truncate leading-none', summaryColor)}>
+                            <span className={cn('font-mono truncate leading-none', hasComment ? cn('text-[10px]', summaryColor) : cn('text-xs', commentColor))}>
                                 {entry.ticketSummary}
                             </span>
                         )}
