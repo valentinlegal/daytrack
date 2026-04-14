@@ -438,7 +438,7 @@ export default function TimeBlock({
                     {/* Indicateur de couleur gauche (4px) */}
                     <div className={cn('w-1 shrink-0 self-stretch', leftIndicatorBg)} />
                     {/* Contenu */}
-                    <div className={cn('flex flex-1 items-center px-2', isEditing && 'py-1')}>
+                    <div className={cn('flex flex-1 min-w-0 items-center px-2', isEditing && 'py-1')}>
                         {isEditing ? renderEditContent() : renderDisplayContent()}
                     </div>
                 </div>

@@ -44,7 +44,7 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                                                 <div className="flex flex-col min-w-0">
                                                     {rec.ticketSummary ? (
                                                         <>
-                                                            <span className="text-sm font-medium text-gray-800 break-words leading-snug">
+                                                            <span className="text-sm font-medium text-gray-800 break-all leading-snug">
                                                                 {rec.ticketSummary}
                                                             </span>
                                                             <div className="flex items-end gap-1 min-w-0">
@@ -74,7 +74,7 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                                                         {rec.comments.map((c) => (
                                                             <li
                                                                 key={c}
-                                                                className="text-xs text-gray-500 pl-2 border-l-2 border-gray-200 break-words"
+                                                                className="text-xs text-gray-500 pl-2 border-l-2 border-gray-200 break-all"
                                                             >
                                                                 {c}
                                                             </li>
