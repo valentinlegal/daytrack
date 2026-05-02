@@ -25,7 +25,7 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                     <SheetTitle className="text-sm">{t('summary.title')}</SheetTitle>
                 </SheetHeader>
 
-                <ScrollArea className="flex-1">
+                <ScrollArea className="flex-1 min-h-0">
                     <div className="px-5 py-4 flex flex-col gap-5">
                         {/* Sync JIRA */}
                         <JiraSyncButton workDay={workDay} onWorkDayUpdate={onWorkDayUpdate} />
