@@ -1,4 +1,4 @@
-import { useRef, useEffect, Fragment, type KeyboardEvent, type DragEvent } from 'react';
+import { useRef, useEffect, useState, Fragment, type KeyboardEvent, type DragEvent, type MouseEvent } from 'react';
 import { Plus, Trash2, Pencil, GripVertical } from 'lucide-react';
 import type { FavoriteTicket } from '@/types/api';
 import { t } from '@/i18n/fr';
@@ -14,6 +14,10 @@ import { useFavoriteRename } from '@/hooks/useFavoriteRename';
 import { useFavoriteDragDrop } from '@/hooks/useFavoriteDragDrop';
 import { useFavoriteCopy } from '@/hooks/useFavoriteCopy';
 
+const MIN_WIDTH = 240; // w-60
+const MAX_WIDTH = 480;
+const STORAGE_KEY = 'favorites-panel-width';
+
 interface FavoritesPanelProps {
     favorites: FavoriteTicket[];
     onChange: (favorites: FavoriteTicket[]) => void;
@@ -21,6 +25,42 @@ interface FavoritesPanelProps {
 
 export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
+
+    const [width, setWidth] = useState(() => {
+        const saved = sessionStorage.getItem(STORAGE_KEY);
+        return saved ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parseInt(saved, 10))) : MIN_WIDTH;
+    });
+    const widthRef = useRef(width);
+    widthRef.current = width;
+
+    function handleResizeMouseDown(e: MouseEvent) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = widthRef.current;
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        function onMouseMove(ev: globalThis.MouseEvent) {
+            setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + ev.clientX - startX)));
+        }
+
+        function onMouseUp() {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            sessionStorage.setItem(STORAGE_KEY, String(widthRef.current));
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        }
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    }
+
+    function handleResizeDoubleClick() {
+        setWidth(MIN_WIDTH);
+        sessionStorage.removeItem(STORAGE_KEY);
+    }
 
     const add = useFavoriteAdd(favorites, onChange);
     const rename = useFavoriteRename(favorites, onChange, containerRef);
@@ -38,9 +78,10 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
     }
 
     return (
+        <div className="relative shrink-0" style={{ width }}>
         <aside
             ref={containerRef}
-            className="w-60 py-4 ps-2 pe-4 shrink-0 bg-neutral-50 border-r border-neutral-200 flex flex-col overflow-hidden"
+            className="w-full h-full py-4 ps-2 pe-4 bg-neutral-50 flex flex-col overflow-hidden"
         >
             {/* En-tête : titre à gauche aligné sur les pills, bouton "+" à droite */}
             <div className="pl-3 pb-2 shrink-0 flex items-center justify-between">
@@ -137,6 +178,16 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
                 )}
             </div>
         </aside>
+
+        {/* Poignée de redimensionnement — remplace le border-r de l'aside */}
+        <div
+            className="absolute inset-y-0 right-0 w-[5px] cursor-col-resize group z-10"
+            onMouseDown={handleResizeMouseDown}
+            onDoubleClick={handleResizeDoubleClick}
+        >
+            <div className="absolute inset-y-0 right-0 w-px group-hover:w-[2px] bg-neutral-200 group-hover:bg-neutral-900 transition-all" />
+        </div>
+        </div>
     );
 }
 
