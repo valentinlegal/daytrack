@@ -1,6 +1,64 @@
 # DayTrack
 
-chec
+Une webapp pour suivre facilement son temps de travail au quotidien, avec intégration Jira.
+
+## Installation (auto-hébergement)
+
+> Usage **personnel** — à déployer sur votre propre machine, **non exposée au public**.
+
+### Prérequis
+
+- Docker Engine 24+ avec le plugin Compose v2
+
+### Démarrer
+
+```bash
+curl -O https://raw.githubusercontent.com/valentinlegal/daytrack/main/docker-compose.yml
+docker compose up -d
+```
+
+L'application est accessible sur **https://daytrack.localhost**.
+
+Pour utiliser un domaine personnalisé, éditer `docker-compose.yml` et remplacer `daytrack.localhost` par votre domaine. Caddy gère automatiquement le certificat TLS via Let's Encrypt (ports 80 et 443 doivent être accessibles depuis Internet).
+
+### Mise à jour
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### Données et sauvegardes
+
+La base de données SQLite est stockée dans le dossier `./data/` créé automatiquement à côté du `docker-compose.yml`.
+
+```bash
+# Sauvegarder
+cp ./data/data_prod.db ./backup-$(date +%Y%m%d).db
+
+# Restaurer
+docker compose down
+cp ./backup-20260101.db ./data/data_prod.db
+docker compose up -d
+```
+
+### Commandes utiles
+
+```bash
+# Voir les logs
+docker compose logs -f
+
+# Lancer une commande Symfony
+docker compose exec daytrack php bin/console <commande>
+
+# Ouvrir un shell
+docker compose exec daytrack sh
+
+# Arrêter
+docker compose down
+```
+
+---
 
 ## Mode développement
 
@@ -24,121 +82,4 @@ docker cp $(docker compose ps -q php):/data/caddy/pki/authorities/local/root.crt
 
 # Windows
 docker compose cp php:/data/caddy/pki/authorities/local/root.crt %TEMP%/root.crt && certutil -addstore -f "ROOT" %TEMP%/root.crt
-```
-
----
-
-## Déploiement en production (auto-hébergé)
-
-### Prérequis
-
-- Docker Engine 24+ avec le plugin Compose v2
-- Git
-
-### Installation initiale
-
-**1. Cloner le dépôt**
-
-```bash
-git clone <url-du-repo> daytrack
-cd daytrack
-```
-
-**2. Créer le fichier de configuration**
-
-```bash
-cp .env .env.local
-```
-
-Éditer `.env.local` et renseigner les valeurs suivantes :
-
-```dotenv
-# Clé secrète Symfony — générer avec : openssl rand -hex 32
-APP_SECRET=remplacer_par_une_vraie_cle_secrete
-
-# URL publique de l'application
-SERVER_NAME=daytrack.mondomaine.com
-
-# JIRA (optionnel — laisser vide si non utilisé)
-JIRA_BASE_URL=https://monentreprise.atlassian.net
-JIRA_USER_EMAIL=prenom.nom@monentreprise.com
-JIRA_API_TOKEN=mon_token_api_jira
-```
-
-Pour générer un `APP_SECRET` sécurisé :
-
-```bash
-openssl rand -hex 32
-```
-
-**3. Builder et démarrer**
-
-```bash
-docker compose -f compose.yaml -f compose.prod.yaml build --pull --no-cache
-docker compose -f compose.yaml -f compose.prod.yaml up -d --wait
-```
-
-Le démarrage exécute automatiquement les migrations Doctrine. L'application est prête quand le healthcheck passe.
-
-**4. Vérifier que tout fonctionne**
-
-```bash
-docker compose -f compose.yaml -f compose.prod.yaml ps
-docker compose -f compose.yaml -f compose.prod.yaml logs php
-```
-
-L'application est accessible sur **https://daytrack.localhost** (ou l'URL définie dans `SERVER_NAME`). Caddy gère automatiquement le certificat TLS via Let's Encrypt.
-
-> **Note** : Le port 80 et 443 doivent être accessibles depuis Internet pour que Let's Encrypt puisse émettre le certificat.
-
----
-
-### Mise à jour
-
-Pour déployer une nouvelle version :
-
-```bash
-git pull
-docker compose -f compose.yaml -f compose.prod.yaml build --pull
-docker compose -f compose.yaml -f compose.prod.yaml up -d --wait
-```
-
-Le conteneur redémarre avec la nouvelle image. Les migrations sont jouées automatiquement au démarrage. La base de données est préservée dans le volume Docker `db_data`.
-
----
-
-### Données et sauvegardes
-
-La base de données SQLite est stockée dans un volume Docker nommé `db_data`, monté sur `/app/db` dans le conteneur.
-
-Pour sauvegarder :
-
-```bash
-docker compose -f compose.yaml -f compose.prod.yaml exec php cp /app/db/data_prod.db /tmp/backup.db
-docker compose -f compose.yaml -f compose.prod.yaml cp php:/tmp/backup.db ./backup-$(date +%Y%m%d).db
-```
-
-Pour restaurer :
-
-```bash
-docker compose -f compose.yaml -f compose.prod.yaml cp ./backup-20260101.db php:/app/db/data_prod.db
-docker compose -f compose.yaml -f compose.prod.yaml restart php
-```
-
----
-
-### Commandes utiles en prod
-
-```bash
-# Voir les logs en temps réel
-docker compose -f compose.yaml -f compose.prod.yaml logs -f php
-
-# Lancer une commande Symfony
-docker compose -f compose.yaml -f compose.prod.yaml exec php php bin/console <commande>
-
-# Ouvrir un shell
-docker compose -f compose.yaml -f compose.prod.yaml exec php sh
-
-# Arrêter l'application
-docker compose -f compose.yaml -f compose.prod.yaml down
 ```
