@@ -30,15 +30,15 @@ docker compose up -d
 
 ### Données et sauvegardes
 
-La base de données SQLite est stockée dans le dossier `./data/` créé automatiquement à côté du `docker-compose.yml`.
+La base de données SQLite est stockée dans le volume Docker `db_data`, géré automatiquement.
 
 ```bash
 # Sauvegarder
-cp ./data/data_prod.db ./backup-$(date +%Y%m%d).db
+docker compose cp daytrack:/app/db/data_prod.db ./backup-$(date +%Y%m%d).db
 
 # Restaurer
 docker compose down
-cp ./backup-20260101.db ./data/data_prod.db
+docker compose run --rm -v "$(pwd)/backup-20260101.db:/tmp/restore.db" daytrack cp /tmp/restore.db /app/db/data_prod.db
 docker compose up -d
 ```
 
