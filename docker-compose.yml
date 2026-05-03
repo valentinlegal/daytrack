@@ -1,13 +1,14 @@
 services:
   daytrack:
     image: ghcr.io/valentinlegal/daytrack:latest
+    container_name: daytrack
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./data:/app/db # BDD (SQLite)
+      - db_data:/app/db # BDD (SQLite)
       - caddy_data:/data # Certificats TLS (géré automatiquement par Caddy)
       - caddy_config:/config
     environment:
@@ -15,6 +16,7 @@ services:
       # En local : laisser "daytrack.localhost" (certificat auto-signé).
       # En production : mettre votre domaine (ex: daytrack.mondomaine.com).
       # Caddy obtient automatiquement un certificat Let's Encrypt.
+      # Pour désactiver HTTPS : mettre ":80" à la place du domaine.
       # Ne pas modifier ", php:80" — requis pour le fonctionnement interne.
       SERVER_NAME: "daytrack.localhost, php:80"
 
@@ -27,5 +29,6 @@ services:
       JIRA_TICKET_TYPES: "Story:green,Bug:red,Epic:purple,Task:blue,Sub-task:sky,Subtask:sky"
 
 volumes:
+  db_data:
   caddy_data:
   caddy_config:
