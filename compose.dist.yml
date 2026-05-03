@@ -1,0 +1,32 @@
+services:
+  daytrack:
+    # Remplacer "latest" par un tag de version spécifique pour épingler (ex: 1.0.0)
+    image: ghcr.io/valentinlegal/daytrack:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./data:/app/db # données persistantes — dossier créé automatiquement
+      - caddy_data:/data # certificats TLS (géré automatiquement par Caddy)
+      - caddy_config:/config
+    environment:
+      # Domaine de l'application.
+      # En local : laisser "daytrack.localhost" (certificat auto-signé).
+      # En production : mettre votre domaine (ex: daytrack.monentreprise.com).
+      # Caddy obtient automatiquement un certificat Let's Encrypt.
+      # Ne pas modifier ", php:80" — requis pour le fonctionnement interne.
+      SERVER_NAME: "daytrack.localhost, php:80"
+
+      # Intégration JIRA (optionnel — laisser vide pour désactiver)
+      JIRA_BASE_URL:
+      JIRA_USER_EMAIL:
+      JIRA_API_TOKEN:
+      # Types de tickets et couleurs (format: Type:couleur,Type:couleur)
+      # Couleurs disponibles : emerald, orange, red, purple, indigo, sky, amber, pink, teal, yellow
+      JIRA_TICKET_TYPES:
+
+volumes:
+  caddy_data:
+  caddy_config:
