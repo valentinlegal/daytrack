@@ -6,6 +6,27 @@ if [ "$1" = 'frankenphp' ] || [ "$1" = 'php' ] || [ "$1" = 'bin/console' ]; then
 		composer install --prefer-dist --no-progress --no-interaction
 	fi
 
+	# Génère et persiste APP_SECRET au premier démarrage si non fourni
+	if [ -z "${APP_SECRET}" ]; then
+		SECRET_FILE="/app/db/.app_secret"
+		if [ -f "$SECRET_FILE" ]; then
+			APP_SECRET=$(cat "$SECRET_FILE")
+		else
+			APP_SECRET=$(php -r "echo bin2hex(random_bytes(32));")
+			mkdir -p /app/db
+			printf '%s' "$APP_SECRET" > "$SECRET_FILE"
+			chmod 600 "$SECRET_FILE"
+			echo 'APP_SECRET generated and saved.'
+		fi
+		export APP_SECRET
+	fi
+
+	# Dérive DEFAULT_URI depuis SERVER_NAME si non fourni
+	if [ -z "${DEFAULT_URI}" ] && [ -n "${SERVER_NAME}" ]; then
+		FIRST_HOST=$(echo "${SERVER_NAME}" | cut -d',' -f1 | tr -d ' ')
+		export DEFAULT_URI="https://${FIRST_HOST}"
+	fi
+
 	# Display information about the current project
 	# Or about an error in project initialization
 	php bin/console -V
