@@ -1,6 +1,5 @@
-import { useState, useRef, useEffect, Fragment } from 'react';
+import { useRef, useEffect, Fragment, type KeyboardEvent, type DragEvent } from 'react';
 import { Plus, Trash2, Pencil, GripVertical } from 'lucide-react';
-import { EntryType } from '@/types/api';
 import type { FavoriteTicket } from '@/types/api';
 import { t } from '@/i18n/fr';
 import { getTicketTypeStyle } from '@/config/ticketTypeColors';
@@ -10,31 +9,10 @@ import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import * as favoriteService from '@/services/favoriteService';
-
-/** Déplace un élément d'un tableau (immuable). */
-function arrayMove<T>(arr: T[], from: number, to: number): T[] {
-    const result = [...arr];
-    const [item] = result.splice(from, 1);
-    result.splice(to, 0, item);
-    return result;
-}
-
-/** Écrit un favori dans le presse-papier interne de la timeline. */
-function writeToTimelineClipboard(fav: FavoriteTicket): void {
-    const clipboardData = {
-        cells: [{
-            offset: 0,
-            ticketKey: fav.ticketKey,
-            ticketSummary: fav.ticketSummary,
-            ticketType: fav.ticketType,
-            comment: null,
-            type: EntryType.WORK,
-            isEmpty: false,
-        }],
-    };
-    sessionStorage.setItem('daytrack_clipboard', JSON.stringify(clipboardData));
-    window.dispatchEvent(new CustomEvent('daytrack:clipboard-changed'));
-}
+import { useFavoriteAdd } from '@/hooks/useFavoriteAdd';
+import { useFavoriteRename } from '@/hooks/useFavoriteRename';
+import { useFavoriteDragDrop } from '@/hooks/useFavoriteDragDrop';
+import { useFavoriteCopy } from '@/hooks/useFavoriteCopy';
 
 interface FavoritesPanelProps {
     favorites: FavoriteTicket[];
@@ -42,96 +20,12 @@ interface FavoritesPanelProps {
 }
 
 export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelProps) {
-    const [isAdding, setIsAdding] = useState(false);
-    const [addInput, setAddInput] = useState('');
-    const [addError, setAddError] = useState<string | null>(null);
-    const [isAddLoading, setIsAddLoading] = useState(false);
-    const [renamingId, setRenamingId] = useState<string | null>(null);
-    const [renameValue, setRenameValue] = useState('');
-    const [copiedId, setCopiedId] = useState<string | null>(null);
-    const [draggingId, setDraggingId] = useState<string | null>(null);
-    const [dropIndex, setDropIndex] = useState<number | null>(null);
-
-    const addInputRef = useRef<HTMLInputElement>(null);
-    const listRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // Ferme le renommage sur mousedown en dehors du composant
-    const renameCallbackRef = useRef<(() => void) | null>(null);
-    renameCallbackRef.current = renamingId
-        ? () => {
-            const trimmed = renameValue.trim();
-            const id = renamingId;
-            setRenamingId(null);
-            if (trimmed) {
-                void favoriteService.renameFavorite(id, trimmed)
-                    .then((updated) => onChange(favorites.map((f) => (f.id === id ? updated : f))))
-                    .catch(() => null);
-            }
-        }
-        : null;
-
-    useEffect(() => {
-        function handleOutside(e: MouseEvent) {
-            if (containerRef.current?.contains(e.target as Node)) return;
-            renameCallbackRef.current?.();
-        }
-        document.addEventListener('mousedown', handleOutside);
-        return () => document.removeEventListener('mousedown', handleOutside);
-    }, []);
-
-    useEffect(() => {
-        if (isAdding) setTimeout(() => addInputRef.current?.focus(), 0);
-    }, [isAdding]);
-
-    function openAdd() {
-        setAddInput('');
-        setAddError(null);
-        setIsAdding(true);
-    }
-
-    function cancelAdd() {
-        setIsAdding(false);
-        setAddInput('');
-        setAddError(null);
-    }
-
-    async function submitAdd() {
-        const key = addInput.trim().toUpperCase();
-        if (!key) return;
-        setIsAddLoading(true);
-        setAddError(null);
-        try {
-            const created = await favoriteService.createFavorite(key);
-            onChange([...favorites, created]);
-            setIsAdding(false);
-            setAddInput('');
-        } catch (err) {
-            setAddError(err instanceof Error ? err.message : t('favorites.already_exists'));
-        } finally {
-            setIsAddLoading(false);
-        }
-    }
-
-    function handleAddKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-        if (e.key === 'Enter') void submitAdd();
-        else if (e.key === 'Escape') cancelAdd();
-    }
-
-    function startRename(fav: FavoriteTicket) {
-        setRenamingId(fav.id);
-        setRenameValue(fav.customName ?? fav.ticketSummary ?? fav.ticketKey);
-    }
-
-    async function commitRename(id: string) {
-        const trimmed = renameValue.trim();
-        setRenamingId(null);
-        if (!trimmed) return;
-        try {
-            const updated = await favoriteService.renameFavorite(id, trimmed);
-            onChange(favorites.map((f) => (f.id === id ? updated : f)));
-        } catch { /* revert silencieux */ }
-    }
+    const add = useFavoriteAdd(favorites, onChange);
+    const rename = useFavoriteRename(favorites, onChange, containerRef);
+    const drag = useFavoriteDragDrop(favorites, onChange);
+    const copy = useFavoriteCopy();
 
     async function handleDelete(id: string) {
         onChange(favorites.filter((f) => f.id !== id));
@@ -143,69 +37,6 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
         }
     }
 
-    function handleCopy(fav: FavoriteTicket) {
-        writeToTimelineClipboard(fav);
-        setCopiedId(fav.id);
-        setTimeout(() => setCopiedId((prev) => (prev === fav.id ? null : prev)), 1500);
-    }
-
-    // ── Drag & drop ──────────────────────────────────────────────────────────
-
-    function handleItemDragStart(e: React.DragEvent<HTMLDivElement>, fav: FavoriteTicket) {
-        e.dataTransfer.effectAllowed = 'copyMove';
-        e.dataTransfer.setData('application/daytrack-favorite', fav.id);
-        writeToTimelineClipboard(fav);
-        setTimeout(() => setDraggingId(fav.id), 0);
-    }
-
-    function handleItemDragOver(e: React.DragEvent<HTMLDivElement>, index: number) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = 'move';
-        const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-        setDropIndex(e.clientY < rect.top + rect.height / 2 ? index : index + 1);
-    }
-
-    function handleItemDrop(e: React.DragEvent<HTMLDivElement>) {
-        e.preventDefault();
-        e.stopPropagation();
-        const sourceId = e.dataTransfer.getData('application/daytrack-favorite');
-        if (!sourceId || dropIndex === null) { resetDrag(); return; }
-        const fromIndex = favorites.findIndex((f) => f.id === sourceId);
-        if (-1 === fromIndex) { resetDrag(); return; }
-        let toIndex = dropIndex;
-        if (toIndex > fromIndex) toIndex--;
-        if (fromIndex !== toIndex) {
-            const reordered = arrayMove(favorites, fromIndex, toIndex);
-            onChange(reordered);
-            void favoriteService.reorderFavorites(reordered.map((f) => f.id)).catch(() => null);
-        }
-        resetDrag();
-    }
-
-    function handleListDragLeave(e: React.DragEvent<HTMLDivElement>) {
-        if (!listRef.current?.contains(e.relatedTarget as Node)) setDropIndex(null);
-    }
-
-    function resetDrag() {
-        setDraggingId(null);
-        setDropIndex(null);
-    }
-
-    const resetDragRef = useRef(resetDrag);
-    resetDragRef.current = resetDrag;
-    useEffect(() => {
-        function onDragEnd() { resetDragRef.current(); }
-        document.addEventListener('dragend', onDragEnd);
-        return () => document.removeEventListener('dragend', onDragEnd);
-    }, []);
-
-    function shouldShowPlaceholder(beforeIndex: number): boolean {
-        return draggingId !== null && dropIndex === beforeIndex;
-    }
-
-    const isDragInProgress = draggingId !== null;
-
     return (
         <aside
             ref={containerRef}
@@ -216,7 +47,7 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
                 <span className="text-xs font-semibold text-neutral-500">
                     {t('favorites.title')}
                 </span>
-                <Popover open={isAdding} onOpenChange={(open) => open ? openAdd() : cancelAdd()}>
+                <Popover open={add.isAdding} onOpenChange={(open) => open ? add.openAdd() : add.cancelAdd()}>
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <PopoverTrigger asChild>
@@ -236,39 +67,39 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
                         <p className="text-xs font-semibold text-gray-700">{t('favorites.add_title')}</p>
                         <div className="flex items-center gap-1">
                             <Input
-                                ref={addInputRef}
-                                value={addInput}
-                                onChange={(e) => { setAddInput(e.target.value); setAddError(null); }}
-                                onKeyDown={handleAddKeyDown}
+                                ref={add.addInputRef}
+                                value={add.addInput}
+                                onChange={(e) => { add.setAddInput(e.target.value); }}
+                                onKeyDown={add.handleAddKeyDown}
                                 placeholder={t('favorites.add_placeholder')}
-                                disabled={isAddLoading}
+                                disabled={add.isAddLoading}
                                 className={cn(
                                     'h-7 text-xs font-mono',
-                                    addError ? 'border-red-400 bg-red-50 focus-visible:ring-red-400' : '',
+                                    add.addError ? 'border-red-400 bg-red-50 focus-visible:ring-red-400' : '',
                                 )}
                             />
                             <Button
                                 size="icon"
-                                onClick={() => void submitAdd()}
-                                disabled={isAddLoading}
+                                onClick={() => void add.submitAdd()}
+                                disabled={add.isAddLoading}
                                 className="h-7 w-7 shrink-0 bg-gray-900 enabled:hover:bg-gray-800"
                             >
                                 <Plus className="h-3 w-3" />
                             </Button>
                         </div>
-                        {addError && <p className="text-[10px] text-red-500">{addError}</p>}
+                        {add.addError && <p className="text-[10px] text-red-500">{add.addError}</p>}
                     </PopoverContent>
                 </Popover>
             </div>
 
             {/* Liste — pl-4 pour laisser la place à la poignée externe */}
             <div
-                ref={listRef}
+                ref={drag.listRef}
                 className="flex-1 overflow-y-auto py-1 pl-3 pr-1 flex flex-col gap-2"
-                onDragLeave={handleListDragLeave}
-                onDragEnd={resetDrag}
+                onDragLeave={drag.handleListDragLeave}
+                onDragEnd={drag.resetDrag}
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={handleItemDrop}
+                onDrop={drag.handleItemDrop}
             >
                 {favorites.length === 0 && (
                     <p className="text-xs text-gray-400 italic px-1 py-2">{t('favorites.empty')}</p>
@@ -276,32 +107,32 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
 
                 {favorites.map((fav, index) => (
                     <Fragment key={fav.id}>
-                        {shouldShowPlaceholder(index) && (
+                        {drag.shouldShowPlaceholder(index) && (
                             <div className="h-[50px] rounded-md border border-dashed border-gray-300 shrink-0" />
                         )}
                         <FavoriteItem
                             favorite={fav}
-                            isCopied={copiedId === fav.id}
-                            isDragging={draggingId === fav.id}
-                            isDragInProgress={isDragInProgress}
-                            isRenaming={renamingId === fav.id}
-                            renameValue={renameValue}
-                            onCopy={() => handleCopy(fav)}
-                            onStartRename={() => startRename(fav)}
-                            onRenameChange={setRenameValue}
-                            onRenameSubmit={() => void commitRename(fav.id)}
+                            isCopied={copy.copiedId === fav.id}
+                            isDragging={drag.draggingId === fav.id}
+                            isDragInProgress={drag.isDragInProgress}
+                            isRenaming={rename.renamingId === fav.id}
+                            renameValue={rename.renameValue}
+                            onCopy={() => copy.handleCopy(fav)}
+                            onStartRename={() => rename.startRename(fav)}
+                            onRenameChange={rename.onRenameChange}
+                            onRenameSubmit={() => void rename.commitRename(fav.id)}
                             onRenameKeyDown={(e) => {
-                                if (e.key === 'Enter') void commitRename(fav.id);
-                                else if (e.key === 'Escape') setRenamingId(null);
+                                if (e.key === 'Enter') void rename.commitRename(fav.id);
+                                else if (e.key === 'Escape') rename.setRenamingId(null);
                             }}
                             onDelete={() => void handleDelete(fav.id)}
-                            onDragStart={(e) => handleItemDragStart(e, fav)}
-                            onDragOver={(e) => handleItemDragOver(e, index)}
-                            onDrop={handleItemDrop}
+                            onDragStart={(e) => drag.handleItemDragStart(e, fav)}
+                            onDragOver={(e) => drag.handleItemDragOver(e, index)}
+                            onDrop={drag.handleItemDrop}
                         />
                     </Fragment>
                 ))}
-                {shouldShowPlaceholder(favorites.length) && (
+                {drag.shouldShowPlaceholder(favorites.length) && (
                     <div className="h-[50px] rounded-md border border-dashed border-gray-300 shrink-0" />
                 )}
             </div>
@@ -322,11 +153,11 @@ interface FavoriteItemProps {
     onStartRename: () => void;
     onRenameChange: (v: string) => void;
     onRenameSubmit: () => void;
-    onRenameKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+    onRenameKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
     onDelete: () => void;
-    onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
-    onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
-    onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+    onDragStart: (e: DragEvent<HTMLDivElement>) => void;
+    onDragOver: (e: DragEvent<HTMLDivElement>) => void;
+    onDrop: (e: DragEvent<HTMLDivElement>) => void;
 }
 
 function FavoriteItem({
@@ -439,8 +270,9 @@ function FavoriteItem({
                                         onBlur={onRenameSubmit}
                                         placeholder={t('favorites.rename_placeholder')}
                                         className={cn(
-                                            'text-xs bg-transparent border-b border-current outline-none w-full placeholder:opacity-40',
+                                            'text-xs bg-transparent border-b outline-none w-full placeholder:opacity-40',
                                             typeStyle.ticketKey,
+                                            typeStyle.borderColor,
                                         )}
                                         onClick={(e) => e.stopPropagation()}
                                     />
