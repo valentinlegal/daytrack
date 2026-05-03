@@ -228,9 +228,9 @@ export default function TimeBlock({
     // On n'utilise pas border-l-{color} car tailwind-merge peut confondre width et color (même préfixe).
     const leftIndicatorBg = entry
         ? isBreak
-            ? 'bg-gray-400'
+            ? 'bg-gray-700'
             : isErrored
-                ? 'bg-red-400'
+                ? 'bg-red-700'
                 : (ticketStyle?.barColor ?? 'bg-indigo-700')
         : 'bg-transparent';
 
@@ -243,11 +243,11 @@ export default function TimeBlock({
     const selectedStyle = isSelected
         ? entry
             ? isBreak
-                ? 'ring-2 ring-inset ring-gray-400'
+                ? 'ring-2 ring-inset ring-gray-700'
                 : isErrored
-                    ? 'ring-2 ring-inset ring-red-400'
-                    : (ticketStyle?.ring ?? 'ring-2 ring-inset ring-indigo-400')
-            : 'ring-2 ring-inset ring-gray-400'
+                    ? 'ring-2 ring-inset ring-red-700'
+                    : (ticketStyle?.ring ?? 'ring-2 ring-inset ring-indigo-700')
+            : 'ring-2 ring-inset ring-gray-700'
         : '';
 
     // ── Affichage lecture ────────────────────────────────────────────────────

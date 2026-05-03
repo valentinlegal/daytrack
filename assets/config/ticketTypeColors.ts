@@ -18,7 +18,7 @@ export interface TicketTypeStyle {
 const PALETTE: Record<string, TicketTypeStyle> = {
     green: {
         leftBorder: 'border-l-green-400',
-        ring: 'ring-2 ring-inset ring-green-400',
+        ring: 'ring-2 ring-inset ring-green-700',
         ticketKey: 'text-green-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -29,7 +29,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     blue: {
         leftBorder: 'border-l-blue-400',
-        ring: 'ring-2 ring-inset ring-blue-400',
+        ring: 'ring-2 ring-inset ring-blue-700',
         ticketKey: 'text-blue-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -40,7 +40,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     emerald: {
         leftBorder: 'border-l-emerald-400',
-        ring: 'ring-2 ring-inset ring-emerald-400',
+        ring: 'ring-2 ring-inset ring-emerald-700',
         ticketKey: 'text-emerald-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -51,7 +51,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     orange: {
         leftBorder: 'border-l-orange-400',
-        ring: 'ring-2 ring-inset ring-orange-400',
+        ring: 'ring-2 ring-inset ring-orange-700',
         ticketKey: 'text-orange-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -62,7 +62,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     red: {
         leftBorder: 'border-l-red-400',
-        ring: 'ring-2 ring-inset ring-red-400',
+        ring: 'ring-2 ring-inset ring-red-700',
         ticketKey: 'text-red-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -73,7 +73,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     purple: {
         leftBorder: 'border-l-purple-400',
-        ring: 'ring-2 ring-inset ring-purple-400',
+        ring: 'ring-2 ring-inset ring-purple-700',
         ticketKey: 'text-purple-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -84,7 +84,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     indigo: {
         leftBorder: 'border-l-indigo-400',
-        ring: 'ring-2 ring-inset ring-indigo-400',
+        ring: 'ring-2 ring-inset ring-indigo-700',
         ticketKey: 'text-indigo-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -95,7 +95,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     sky: {
         leftBorder: 'border-l-sky-400',
-        ring: 'ring-2 ring-inset ring-sky-400',
+        ring: 'ring-2 ring-inset ring-sky-700',
         ticketKey: 'text-sky-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -106,7 +106,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     amber: {
         leftBorder: 'border-l-amber-400',
-        ring: 'ring-2 ring-inset ring-amber-400',
+        ring: 'ring-2 ring-inset ring-amber-700',
         ticketKey: 'text-amber-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -117,7 +117,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     pink: {
         leftBorder: 'border-l-pink-400',
-        ring: 'ring-2 ring-inset ring-pink-400',
+        ring: 'ring-2 ring-inset ring-pink-700',
         ticketKey: 'text-pink-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -128,7 +128,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     teal: {
         leftBorder: 'border-l-teal-400',
-        ring: 'ring-2 ring-inset ring-teal-400',
+        ring: 'ring-2 ring-inset ring-teal-700',
         ticketKey: 'text-teal-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -139,7 +139,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
     },
     yellow: {
         leftBorder: 'border-l-yellow-400',
-        ring: 'ring-2 ring-inset ring-yellow-400',
+        ring: 'ring-2 ring-inset ring-yellow-700',
         ticketKey: 'text-yellow-700',
         summary: 'text-gray-500',
         comment: 'text-gray-800',
@@ -153,7 +153,7 @@ const PALETTE: Record<string, TicketTypeStyle> = {
 // Style par défaut quand Jira n'est pas configuré ou que le type est absent du mapping
 export const DEFAULT_TICKET_STYLE: TicketTypeStyle = {
     leftBorder: 'border-l-indigo-300',
-    ring: 'ring-2 ring-inset ring-indigo-400',
+    ring: 'ring-2 ring-inset ring-indigo-700',
     ticketKey: 'text-indigo-700',
     summary: 'text-gray-500',
     comment: 'text-gray-800',
