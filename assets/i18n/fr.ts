@@ -61,6 +61,7 @@ const fr = {
         copied: "Copié !",
         add_placeholder: "PROJ-123",
         add_hint: "Ajouter un favori",
+        add_title: "Nouveau favori",
         rename_placeholder: "Nom du ticket",
         already_exists: "Ce ticket est déjà dans vos favoris",
         rename_empty: "Le nom ne peut pas être vide",

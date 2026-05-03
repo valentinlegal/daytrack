@@ -231,7 +231,7 @@ export default function TimeBlock({
             ? 'bg-gray-400'
             : isErrored
                 ? 'bg-red-400'
-                : (ticketStyle?.dotColor ?? 'bg-indigo-400')
+                : (ticketStyle?.barColor ?? 'bg-indigo-700')
         : 'bg-transparent';
 
     // Bordure séparatrice uniquement en bas du dernier créneau d'un bloc ou d'un créneau vide.
