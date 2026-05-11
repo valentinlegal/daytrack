@@ -826,7 +826,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                     className="absolute left-0 right-0 rounded-md"
                                     style={{
                                         top: slotIdx * SLOT_HEIGHT + 1,
-                                        height: SLOT_HEIGHT - 2,
+                                        height: SLOT_HEIGHT - 1,
                                         boxShadow: `inset 0 0 0 2px ${colors?.ring ?? 'oklch(0.708 0 0)'}`,
                                         background: colors ? `${colors.ring}1a` : undefined,
                                         pointerEvents: 'none',
@@ -874,7 +874,7 @@ function WorkBlock({ top, height, slotCount, ticket, summary, comment, colors, r
             className="absolute left-1 right-1 rounded-lg overflow-hidden flex"
             style={{
                 top: top + 1,
-                height: height - 2,
+                height: height - 1,
                 background: colors.bg,
                 border: `1px solid ${colors.border}`,
                 zIndex: 2,
@@ -982,7 +982,7 @@ function PauseBlock({ top, height, slotCount, runDurationMinutes }: PauseBlockPr
             className="absolute left-1 right-1 rounded-lg overflow-hidden flex items-center justify-center"
             style={{
                 top: top + 1,
-                height: height - 2,
+                height: height - 1,
                 background: 'repeating-linear-gradient(135deg,oklch(0.96 0 0) 0px,oklch(0.96 0 0) 6px,oklch(0.93 0 0) 6px,oklch(0.93 0 0) 7px)',
                 border: '1px solid oklch(0.92 0 0)',
                 zIndex: 2,
