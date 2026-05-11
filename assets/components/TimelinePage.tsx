@@ -49,44 +49,42 @@ function TimelinePageContent({ date }: { date: string }) {
 
     return (
         <TooltipProvider delayDuration={400}>
-            <div className="h-screen flex flex-col bg-white overflow-hidden">
-                {/* Header global */}
-                <AppHeader
-                    date={date}
-                    workDay={workDay}
-                    onWorkDayUpdate={handleWorkDayUpdate}
-                    onPrevious={() => navigate(`/${shiftDate(date, -1)}`)}
-                    onNext={() => navigate(`/${shiftDate(date, 1)}`)}
-                    onToday={() => navigate(`/${today()}`)}
-                    onOpenReport={() => setSummaryOpen(true)}
-                />
+            {/* Drawer en full-height → même flex-row que le header */}
+            <div className="h-screen flex overflow-hidden bg-white">
+                {/* Colonne principale : header + body */}
+                <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+                    <AppHeader
+                        date={date}
+                        workDay={workDay}
+                        onWorkDayUpdate={handleWorkDayUpdate}
+                        onPrevious={() => navigate(`/${shiftDate(date, -1)}`)}
+                        onNext={() => navigate(`/${shiftDate(date, 1)}`)}
+                        onToday={() => navigate(`/${today()}`)}
+                        onOpenReport={() => setSummaryOpen((prev) => !prev)}
+                    />
 
-                {/* Corps */}
-                <div className="flex flex-1 overflow-hidden">
-                    {/* Panneau favoris (gauche) */}
-                    <FavoritesPanel favorites={favorites} onChange={setFavorites} />
+                    <div className="flex flex-1 overflow-hidden">
+                        <FavoritesPanel favorites={favorites} onChange={setFavorites} />
 
-                    {/* Zone centrale */}
-                    <main className="flex-1 flex flex-col overflow-hidden">
-                        {isLoading && (
-                            <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-                                {t('common.loading')}
-                            </div>
-                        )}
-
-                        {null !== error && (
-                            <div className="flex-1 flex items-center justify-center text-red-500 text-sm">
-                                {error}
-                            </div>
-                        )}
-
-                        {!isLoading && null === error && null !== workDay && (
-                            <Timeline workDay={workDay} onWorkDayUpdate={handleWorkDayUpdate} />
-                        )}
-                    </main>
+                        <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+                            {isLoading && (
+                                <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+                                    {t('common.loading')}
+                                </div>
+                            )}
+                            {null !== error && (
+                                <div className="flex-1 flex items-center justify-center text-red-500 text-sm">
+                                    {error}
+                                </div>
+                            )}
+                            {!isLoading && null === error && null !== workDay && (
+                                <Timeline workDay={workDay} onWorkDayUpdate={handleWorkDayUpdate} />
+                            )}
+                        </main>
+                    </div>
                 </div>
 
-                {/* Drawer récapitulatif (droite) */}
+                {/* Drawer récapitulatif — pleine hauteur, pousse le contenu */}
                 {workDay && (
                     <SummaryDrawer
                         open={summaryOpen}

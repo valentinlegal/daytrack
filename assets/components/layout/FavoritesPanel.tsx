@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, Fragment, type KeyboardEvent, type DragEve
 import { Plus, Trash2, Pencil, GripVertical } from 'lucide-react';
 import type { FavoriteTicket } from '@/types/api';
 import { t } from '@/i18n/fr';
-import { getTicketTypeStyle } from '@/config/ticketTypeColors';
+import { getBlockColors } from '@/config/ticketTypeColors';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,7 +14,7 @@ import { useFavoriteRename } from '@/hooks/useFavoriteRename';
 import { useFavoriteDragDrop } from '@/hooks/useFavoriteDragDrop';
 import { useFavoriteCopy } from '@/hooks/useFavoriteCopy';
 
-const MIN_WIDTH = 240; // w-60
+const MIN_WIDTH = 256;
 const MAX_WIDTH = 480;
 const STORAGE_KEY = 'favorites-panel-width';
 
@@ -228,7 +228,7 @@ function FavoriteItem({
     onDragOver,
     onDrop,
 }: FavoriteItemProps) {
-    const typeStyle = getTicketTypeStyle(favorite.ticketType);
+    const colors = getBlockColors(favorite.ticketType);
     const displayName = favorite.customName ?? favorite.ticketSummary ?? favorite.ticketKey;
     const renameInputRef = useRef<HTMLInputElement>(null);
 
@@ -295,21 +295,23 @@ function FavoriteItem({
 
                     {/* Pill */}
                     <div
-                        className={cn(
-                            'flex rounded-md shadow-sm overflow-hidden h-[50px]',
-                            'cursor-pointer transition-colors',
-                            typeStyle.blockBg,
-                        )}
+                        className="relative flex rounded-lg overflow-hidden h-[50px] cursor-pointer"
+                        style={{ backgroundColor: colors.bg, border: `1px solid ${colors.border}` }}
                         onClick={handleClick}
                         onDoubleClick={handleDoubleClick}
                     >
+                        {/* Overlay hover — teinte la couleur du ticket sans en changer la nature */}
+                        <div
+                            className="absolute inset-0 pointer-events-none transition-opacity opacity-0 group-hover:opacity-[0.08]"
+                            style={{ backgroundColor: colors.bar }}
+                        />
                         {/* Barre colorée gauche — non arrondie, clippée par overflow-hidden */}
-                        <div className={cn('w-[4px] self-stretch shrink-0', typeStyle.barColor)} />
+                        <div className="w-[4px] self-stretch shrink-0" style={{ backgroundColor: colors.bar }} />
 
                         {/* Contenu + actions */}
                         <div className="flex items-stretch gap-0.5 flex-1 min-w-0 pr-2">
                             <div className="flex flex-col justify-between gap-0.5 min-w-0 flex-1 py-2 pl-2">
-                                <span className={cn('text-xs font-semibold leading-none', typeStyle.ticketKey)}>
+                                <span className="text-xs font-semibold leading-none" style={{ color: colors.text }}>
                                     {favorite.ticketKey}
                                 </span>
                                 {isRenaming ? (
@@ -320,15 +322,12 @@ function FavoriteItem({
                                         onKeyDown={onRenameKeyDown}
                                         onBlur={onRenameSubmit}
                                         placeholder={t('favorites.rename_placeholder')}
-                                        className={cn(
-                                            'text-xs bg-transparent border-b outline-none w-full placeholder:opacity-40',
-                                            typeStyle.ticketKey,
-                                            typeStyle.borderColor,
-                                        )}
+                                        className="text-xs bg-transparent border-b outline-none w-full placeholder:opacity-40"
+                                        style={{ color: colors.text, borderColor: colors.bar }}
                                         onClick={(e) => e.stopPropagation()}
                                     />
                                 ) : (
-                                    <span className={cn('text-xs truncate leading-snug', typeStyle.ticketKey)}>
+                                    <span className="text-xs truncate leading-snug" style={{ color: colors.text }}>
                                         {isCopied ? (
                                             <span className="opacity-60 font-medium">{t('favorites.copied')}</span>
                                         ) : displayName}
@@ -342,11 +341,8 @@ function FavoriteItem({
                                     <button
                                         type="button"
                                         onClick={(e) => { e.stopPropagation(); onStartRename(); }}
-                                        className={cn(
-                                            'h-6 w-6 flex items-center justify-center rounded-sm',
-                                            'transition-opacity opacity-50 hover:opacity-100 focus:outline-none',
-                                            typeStyle.ticketKey,
-                                        )}
+                                        className="h-6 w-6 flex items-center justify-center rounded-sm transition-opacity opacity-50 hover:opacity-100 focus:outline-none"
+                                        style={{ color: colors.text }}
                                     >
                                         <Pencil className="w-4 h-4 shrink-0" />
                                     </button>
@@ -354,11 +350,8 @@ function FavoriteItem({
                                 <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                                    className={cn(
-                                        'h-6 w-6 flex items-center justify-center rounded-sm',
-                                        'transition-opacity opacity-50 hover:opacity-100 focus:outline-none',
-                                        typeStyle.ticketKey,
-                                    )}
+                                    className="h-6 w-6 flex items-center justify-center rounded-sm transition-opacity opacity-50 hover:opacity-100 focus:outline-none"
+                                    style={{ color: colors.text }}
                                 >
                                     <Trash2 className="w-4 h-4 shrink-0" />
                                 </button>

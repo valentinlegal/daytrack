@@ -200,11 +200,10 @@ export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = fal
                 )}
 
                 <Button
-                    variant="outline"
-                    size="sm"
+                    variant="default"
                     onClick={() => setShowModal(true)}
                     disabled={syncStatus === 'syncing'}
-                    className="gap-1.5 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    className="gap-1.5 w-full"
                 >
                     <RefreshCw className={cn('w-3.5 h-3.5', syncStatus === 'syncing' && 'animate-spin')} />
                     {syncStatus === 'syncing' ? t('jira.button.syncing') : t('jira.button.sync')}
