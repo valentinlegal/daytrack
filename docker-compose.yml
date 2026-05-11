@@ -20,7 +20,16 @@ services:
       # Ne pas modifier ", php:80" — requis pour le fonctionnement interne.
       SERVER_NAME: "daytrack.localhost, php:80"
 
-      # Intégration JIRA (optionnel — laisser vide pour désactiver)
+      # Intégration Jira (optionnel — laisser vide pour désactiver)
+      # Deux types de jetons possibles (générer sur https://id.atlassian.com → Security → API tokens) :
+      #
+      #   Jeton avec périmètres (recommandé) → "Create API token with scopes"
+      #     Périmètres à cocher : read:jira-work  et  write:jira-work
+      #     Cloud ID : curl https://monentreprise.atlassian.net/_edge/tenant_info
+      #     JIRA_BASE_URL: https://api.atlassian.com/ex/jira/<CLOUD_ID>
+      #
+      #   Jeton classique → "Create API token"
+      #     JIRA_BASE_URL: https://monentreprise.atlassian.net
       JIRA_BASE_URL:
       JIRA_USER_EMAIL:
       JIRA_API_TOKEN:

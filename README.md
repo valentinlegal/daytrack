@@ -21,6 +21,54 @@ L'application est accessible sur **https://daytrack.localhost**.
 
 Pour utiliser un domaine personnalisé, éditer `docker-compose.yml` et remplacer `daytrack.localhost` par votre domaine. Caddy gère automatiquement le certificat TLS via Let's Encrypt (ports 80 et 443 doivent être accessibles depuis Internet).
 
+### Configuration de l'intégration Jira (optionnel)
+
+L'intégration Jira permet de synchroniser automatiquement vos entrées de temps sous forme de *worklogs* dans Jira.
+
+#### Jeton avec périmètres (recommandé)
+
+Les jetons avec périmètres limitent l'accès à ce dont DayTrack a strictement besoin, contrairement aux jetons classiques qui ont les mêmes droits que votre compte.
+
+**Périmètres requis :** `read:jira-work` et `write:jira-work`
+
+**Étapes :**
+
+1. Rendez-vous sur **https://id.atlassian.com/manage-profile/security/api-tokens**
+2. Cliquez sur **"Create API token with scopes"** (et non "Create API token")
+3. Donnez un nom au jeton (ex : `DayTrack`) et choisissez une date d'expiration
+4. Sélectionnez l'application **Jira**
+5. Cochez les périmètres **`read:jira-work`** et **`write:jira-work`**
+6. Cliquez sur **Create** et copiez le jeton immédiatement (il ne sera plus affiché)
+
+**Trouver votre Cloud ID** (nécessaire pour les jetons avec périmètres) :
+
+```bash
+curl https://monentreprise.atlassian.net/_edge/tenant_info
+```
+
+**Variables d'environnement à configurer** dans `docker-compose.yml` (ou `.env`) :
+
+```yaml
+environment:
+  JIRA_BASE_URL: https://api.atlassian.com/ex/jira/<CLOUD_ID>
+  JIRA_USER_EMAIL: prenom.nom@monentreprise.com
+  JIRA_API_TOKEN: <JETON>
+  JIRA_TICKET_TYPES: Story:green,Bug:red,Epic:purple,Task:blue # optionnel
+```
+
+#### Jeton classique (périmètre total)
+
+Si vous préférez utiliser un jeton classique (droits complets), la configuration est la même mais l'URL de base est différente :
+
+```yaml
+environment:
+  JIRA_BASE_URL: https://monentreprise.atlassian.net
+  JIRA_USER_EMAIL: prenom.nom@monentreprise.com
+  JIRA_API_TOKEN: <JETON>
+```
+
+---
+
 ### Mise à jour
 
 ```bash
