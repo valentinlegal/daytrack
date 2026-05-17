@@ -94,8 +94,8 @@ export default function AppHeader({
 
     return (
         <header className="shrink-0 bg-background border-b flex items-center ps-5.5 pe-6 h-14">
-            {/* ── Logo — largeur fixe alignée avec la sidebar favorites (w-52 - ps-5.5 = w-46.5) ── */}
-            <div className="w-46.5 shrink-0 flex items-center gap-1.5">
+            {/* ── Logo — largeur fixe alignée avec la sidebar favorites (256px - ps-5.5=22px = 234px) ── */}
+            <div className="w-[234px] shrink-0 flex items-center gap-1.5">
                 <div className="flex items-center justify-center w-9 h-9">
                     <CalendarClock className="w-7 h-7" />
                 </div>

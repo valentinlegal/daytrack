@@ -1,5 +1,5 @@
-import type { TimeEntry, WorkDay } from '../types/api';
-import { EntryType } from '../types/api';
+import type { TimeEntry, WorkDay } from '@/types/api';
+import { EntryType } from '@/types/api';
 
 export const TIMELINE_START_HOUR = 7;
 export const TIMELINE_END_HOUR = 20;
@@ -58,11 +58,12 @@ export function shiftDate(date: string, days: number): string {
     return formatLocalDate(d);
 }
 
-// Formate un nombre de minutes en chaîne lisible (ex: 450 → "7h30", -30 → "-0h30")
+// Formate un nombre de minutes en chaîne lisible (ex: 450 → "7h30", 15 → "15min", -30 → "-30min")
 export function formatMinutes(minutes: number): string {
     const h = Math.floor(Math.abs(minutes) / 60);
     const m = Math.abs(minutes) % 60;
     const sign = minutes < 0 ? '-' : '';
+    if (h === 0) return `${sign}${m}min`;
     return m === 0 ? `${sign}${h}h` : `${sign}${h}h${String(m).padStart(2, '0')}`;
 }
 
