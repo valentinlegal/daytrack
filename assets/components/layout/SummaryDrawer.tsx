@@ -63,17 +63,19 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                                                 key={rec.ticketKey}
                                                 className="flex flex-col gap-1.5 py-3 border-b border-gray-100 last:border-b-0"
                                             >
-                                                <div className="flex items-baseline gap-2.5 min-w-0">
+                                                <div className="flex items-baseline justify-between gap-2.5">
                                                     <span className={cn('text-[12px] font-mono font-semibold shrink-0 tabular-nums', style.ticketKey)}>
                                                         {rec.ticketKey}
-                                                    </span>
-                                                    <span className="text-[13.5px] font-medium text-foreground truncate flex-1 min-w-0">
-                                                        {rec.ticketSummary ?? ''}
                                                     </span>
                                                     <span className="text-[13px] font-mono font-semibold text-foreground tabular-nums shrink-0">
                                                         {formatMinutes(rec.totalMinutes)}
                                                     </span>
                                                 </div>
+                                                {rec.ticketSummary && (
+                                                    <span className="text-[13.5px] font-medium text-foreground [overflow-wrap:anywhere]">
+                                                        {rec.ticketSummary}
+                                                    </span>
+                                                )}
 
                                                 {rec.comments.length > 0 && (
                                                     <ul className="flex flex-col gap-0.5 ml-px pl-2.5 border-l-2 border-gray-200">
