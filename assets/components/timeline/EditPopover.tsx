@@ -233,6 +233,7 @@ export default function EditPopover({
                     placeholder={t('timeline.ticket_placeholder')}
                     className={cn(
                         'h-8 px-2.5 border rounded-md bg-background font-mono text-[13px] font-semibold uppercase outline-none w-full',
+                        'placeholder:text-muted-foreground placeholder:font-normal placeholder:normal-case',
                         'transition-[border-color,box-shadow]',
                         'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
                         ticketError || ticketFetchError ? 'border-red-400' : 'border-input',
