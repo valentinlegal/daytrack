@@ -203,9 +203,9 @@ export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = fal
                     variant="default"
                     onClick={() => setShowModal(true)}
                     disabled={syncStatus === 'syncing'}
-                    className="gap-1.5 w-full"
+                    className="gap-1.5 w-full h-auto min-h-8 py-1.5 shrink whitespace-normal text-center"
                 >
-                    <RefreshCw className={cn('w-3.5 h-3.5', syncStatus === 'syncing' && 'animate-spin')} />
+                    <RefreshCw className={cn('w-3.5 h-3.5 shrink-0', syncStatus === 'syncing' && 'animate-spin')} />
                     {syncStatus === 'syncing' ? t('jira.button.syncing') : t('jira.button.sync')}
                 </Button>
             </div>
