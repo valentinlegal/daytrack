@@ -48,7 +48,7 @@ export default function JiraSyncModal({ open, workDay, onConfirm, onCancel }: Ji
                     <Button variant="outline" size="sm" onClick={onCancel}>
                         {t('jira.modal.cancel')}
                     </Button>
-                    <Button size="sm" onClick={onConfirm} className="bg-blue-600 hover:bg-blue-700 text-white">
+                    <Button size="sm" onClick={onConfirm}>
                         {t('jira.modal.confirm')}
                     </Button>
                 </DialogFooter>
