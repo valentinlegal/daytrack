@@ -13,6 +13,7 @@ import { useFavoriteAdd } from '@/hooks/useFavoriteAdd';
 import { useFavoriteRename } from '@/hooks/useFavoriteRename';
 import { useFavoriteDragDrop } from '@/hooks/useFavoriteDragDrop';
 import { useFavoriteCopy } from '@/hooks/useFavoriteCopy';
+import VersionFooter from '@/components/layout/VersionFooter';
 
 const MIN_WIDTH = 256;
 const MAX_WIDTH = 480;
@@ -177,6 +178,8 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
                     <div className="h-[50px] rounded-md border border-dashed border-gray-300 shrink-0" />
                 )}
             </div>
+
+            <VersionFooter />
         </aside>
 
         {/* Poignée de redimensionnement — remplace le border-r de l'aside */}

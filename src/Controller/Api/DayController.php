@@ -73,13 +73,19 @@ class DayController extends AbstractController
             );
         }
 
+        // Comparaison par chaîne pour éviter les décalages liés à la partie heure de createFromFormat
+        if ($parsedDate->format('Y-m-d') > (new DateTimeImmutable('+30 days'))->format('Y-m-d')) {
+            return $this->json(
+                ['error' => $this->translator->trans('error.future_day_forbidden')],
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+            );
+        }
+
         $day = $this->workDayRepository->findByDate($parsedDate);
 
         if (null === $day) {
-            return $this->json(
-                ['error' => $this->translator->trans('error.day_not_found')],
-                Response::HTTP_NOT_FOUND,
-            );
+            $day = new WorkDay($parsedDate);
+            $this->em->persist($day);
         }
 
         $day->targetMinutes = $input->targetMinutes;

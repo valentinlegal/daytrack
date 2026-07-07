@@ -3,6 +3,7 @@ error:
     future_day_forbidden: "Impossible de créer une journée au-delà du lendemain"
     day_not_found: "Journée introuvable"
     entry_not_found: "Entrée introuvable"
+    entry_time_conflict: "Une saisie existe déjà à cet horaire"
     jira_not_configured: "JIRA n'est pas configuré"
     jira_ticket_not_found: "Ticket introuvable ou inaccessible"
     favorite_not_found: "Favori introuvable"

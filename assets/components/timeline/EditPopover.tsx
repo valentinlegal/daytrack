@@ -179,13 +179,17 @@ export default function EditPopover({
         );
     }
 
+    async function submitTicket() {
+        const raw = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') ?? '';
+        if (!raw) { save(); return; }
+        const { summary, type, error } = await doFetch(raw);
+        if (error !== null) return;
+        save(summary, type);
+    }
+
     async function handleTicketKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
         if (e.key === 'Enter') {
-            const raw = inputRef.current?.value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '') ?? '';
-            if (!raw) { save(); return; }
-            const { summary, type, error } = await doFetch(raw);
-            if (error !== null) return;
-            save(summary, type);
+            await submitTicket();
         } else if (e.key === 'Tab') {
             e.preventDefault();
             commentRef.current?.focus();
@@ -281,9 +285,16 @@ export default function EditPopover({
 
             {/* Pied : actions */}
             <div
-                className="flex items-center gap-1 pt-1 mt-0.5"
+                className="flex items-center gap-1.5 pt-2 mt-1"
                 style={{ borderTop: '1px solid var(--border)' }}
             >
+                <button
+                    onClick={() => void submitTicket()}
+                    className="inline-flex items-center justify-center h-7 px-3 rounded-md text-[12.5px] font-medium transition-colors bg-primary text-primary-foreground enabled:hover:bg-primary/90"
+                >
+                    {t('timeline.save')}
+                </button>
+                <div className="flex-1" />
                 <button
                     onClick={() => onSave(null, EntryType.BREAK, null, null, null)}
                     className="inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-[12.5px] font-medium transition-colors hover:bg-accent"
@@ -292,14 +303,15 @@ export default function EditPopover({
                     <Coffee className="w-3.5 h-3.5 shrink-0" />
                     Convertir en pause
                 </button>
-                <div className="flex-1" />
-                <button
-                    onClick={() => onClear()}
-                    className="inline-flex items-center justify-center w-7 h-7 rounded-md transition-colors text-destructive hover:bg-destructive/10"
-                    aria-label={t('timeline.clear')}
-                >
-                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
-                </button>
+                {entry && (
+                    <button
+                        onClick={() => onClear()}
+                        className="inline-flex items-center justify-center w-7 h-7 rounded-md transition-colors text-destructive hover:bg-destructive/10"
+                        aria-label={t('timeline.clear')}
+                    >
+                        <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                    </button>
+                )}
             </div>
         </div>
     );

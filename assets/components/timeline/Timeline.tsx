@@ -104,6 +104,9 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     const [activeSlot, setActiveSlot] = useState<string | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const dragMovedRef = useRef(false);
+    // Créneaux dont la création/mise à jour est en cours (empêche l'empilement de saisies
+    // lors d'une double soumission rapide : Entrée répétée, paste/conversion en pause spammés…).
+    const pendingSlotsRef = useRef<Set<string>>(new Set());
 
     const [undoStack, setUndoStack] = useState<WorkDay[]>([]);
     const [redoStack, setRedoStack] = useState<WorkDay[]>([]);
@@ -374,6 +377,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         ticketSummary: string | null,
         ticketType: string | null,
     ) {
+        if (pendingSlotsRef.current.has(slot)) return;
+        pendingSlotsRef.current.add(slot);
         setEditingSlot(null);
         const existing = entryMap.get(slot);
         try {
@@ -401,7 +406,11 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                 });
             }
             onWorkDayUpdate(updated);
-        } catch { /* service gère */ }
+        } catch {
+            /* service gère */
+        } finally {
+            pendingSlotsRef.current.delete(slot);
+        }
     }
 
     async function handleBulkClear(slots: Set<string>) {
@@ -431,10 +440,16 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
             } catch { /* service gère */ }
         }
         for (const slot of emptySlots) {
+            if (pendingSlotsRef.current.has(slot)) continue;
+            pendingSlotsRef.current.add(slot);
             try {
                 const updated = await createEntry(workDay.date, { startedAt: slot, endedAt: getNextSlot(slot), type: EntryType.BREAK });
                 onWorkDayUpdate(updated);
-            } catch { /* service gère */ }
+            } catch {
+                /* service gère */
+            } finally {
+                pendingSlotsRef.current.delete(slot);
+            }
         }
         setEditingSlot(null);
     }
@@ -477,6 +492,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
             const destIdx = targetIdx + cell.offset;
             if (destIdx < 0 || destIdx >= TIME_SLOTS.length) continue;
             const destSlot = TIME_SLOTS[destIdx] as string;
+            if (pendingSlotsRef.current.has(destSlot)) continue;
+            pendingSlotsRef.current.add(destSlot);
             const existing = entryMap.get(destSlot) ?? null;
             try {
                 if (cell.isEmpty) {
@@ -497,7 +514,11 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     }
                     onWorkDayUpdate(updated);
                 }
-            } catch { /* service gère */ }
+            } catch {
+                /* service gère */
+            } finally {
+                pendingSlotsRef.current.delete(destSlot);
+            }
         }
     }
 
@@ -506,6 +527,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         const cell = clipboard.cells[0]!;
         pushHistory();
         for (const slot of slots) {
+            if (pendingSlotsRef.current.has(slot)) continue;
+            pendingSlotsRef.current.add(slot);
             const existing = entryMap.get(slot) ?? null;
             try {
                 if (cell.isEmpty) {
@@ -526,7 +549,11 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                     }
                     onWorkDayUpdate(updated);
                 }
-            } catch { /* service gère */ }
+            } catch {
+                /* service gère */
+            } finally {
+                pendingSlotsRef.current.delete(slot);
+            }
         }
     }
 
