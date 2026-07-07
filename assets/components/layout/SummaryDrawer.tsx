@@ -1,3 +1,4 @@
+import { useRef, useState, type MouseEvent } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { t } from '@/i18n/fr';
@@ -6,6 +7,10 @@ import { computeTicketRecap, formatMinutes } from '@/utils/timeline';
 import { getTicketTypeStyle } from '@/config/ticketTypeColors';
 import JiraSyncButton from '@/components/jira/JiraSyncButton';
 import { XIcon } from 'lucide-react';
+
+const MIN_WIDTH = 384;
+const MAX_WIDTH = 640;
+const STORAGE_KEY = 'summary-panel-width';
 
 interface SummaryDrawerProps {
     open: boolean;
@@ -17,17 +22,60 @@ interface SummaryDrawerProps {
 export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate }: SummaryDrawerProps) {
     const ticketRecap = computeTicketRecap(workDay.entries);
 
+    const [width, setWidth] = useState(() => {
+        const saved = sessionStorage.getItem(STORAGE_KEY);
+        return saved ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parseInt(saved, 10))) : MIN_WIDTH;
+    });
+    const widthRef = useRef(width);
+    widthRef.current = width;
+    const [isResizing, setIsResizing] = useState(false);
+
+    function handleResizeMouseDown(e: MouseEvent) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = widthRef.current;
+
+        setIsResizing(true);
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        function onMouseMove(ev: globalThis.MouseEvent) {
+            setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth - (ev.clientX - startX))));
+        }
+
+        function onMouseUp() {
+            setIsResizing(false);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            sessionStorage.setItem(STORAGE_KEY, String(widthRef.current));
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        }
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    }
+
+    function handleResizeDoubleClick() {
+        setWidth(MIN_WIDTH);
+        sessionStorage.removeItem(STORAGE_KEY);
+    }
+
     return (
+        <div className="relative shrink-0">
         <div
             className={cn(
-                'shrink-0 flex flex-col border-l border-border bg-background',
-                'overflow-hidden transition-[width] duration-[220ms] ease-out',
+                'shrink-0 overflow-hidden',
+                !isResizing && 'transition-[width] duration-[220ms] ease-out',
             )}
-            style={{ width: open ? 'min(24rem, 90vw)' : 0 }}
+            style={{ width: open ? width : 0 }}
             aria-hidden={!open}
         >
-            {/* Contenu — toujours monté pour éviter le flash au réouverture */}
-            <div className="w-[min(24rem,90vw)] flex flex-col h-full min-h-0">
+            {/* Contenu — toujours monté pour éviter le flash au réouverture, largeur fixe pour ne pas wrap pendant l'animation */}
+            <div
+                className="flex flex-col h-full min-h-0 border-l border-border bg-background"
+                style={{ width }}
+            >
                 {/* Header */}
                 <div className="flex items-center justify-between h-14 px-4 border-b shrink-0">
                     <span className="text-sm font-semibold">{t('summary.title')}</span>
@@ -99,6 +147,17 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                     </div>
                 </ScrollArea>
             </div>
+        </div>
+
+        {open && (
+            <div
+                className="absolute inset-y-0 left-0 w-[5px] cursor-col-resize group z-10"
+                onMouseDown={handleResizeMouseDown}
+                onDoubleClick={handleResizeDoubleClick}
+            >
+                <div className="absolute inset-y-0 left-0 w-px group-hover:w-[2px] bg-neutral-200 group-hover:bg-neutral-900 transition-all" />
+            </div>
+        )}
         </div>
     );
 }
