@@ -44,9 +44,21 @@ class EntryController extends AbstractController
             return $day;
         }
 
+        $startedAt = $this->parseTime($day, $input->startedAt);
+
+        // Empêche l'empilement de saisies : deux entrées ne peuvent pas démarrer au même horaire.
+        foreach ($day->entries as $existingEntry) {
+            if ($existingEntry->startedAt->getTimestamp() === $startedAt->getTimestamp()) {
+                return $this->json(
+                    ['error' => $this->translator->trans('error.entry_time_conflict')],
+                    Response::HTTP_CONFLICT,
+                );
+            }
+        }
+
         $entry = new TimeEntry(
             workDay: $day,
-            startedAt: $this->parseTime($day, $input->startedAt),
+            startedAt: $startedAt,
             type: EntryType::from($input->type),
         );
 
