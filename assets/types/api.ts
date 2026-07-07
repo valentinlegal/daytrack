@@ -69,3 +69,9 @@ export interface FavoriteTicket {
     ticketType: string | null;
     position: number;
 }
+
+export interface VersionInfo {
+    current: string;
+    latest: string | null;
+    updateAvailable: boolean;
+}

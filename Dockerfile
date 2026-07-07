@@ -73,6 +73,10 @@ FROM frankenphp_base AS frankenphp_prod_builder
 
 ENV APP_ENV=prod
 
+# Version applicative injectée au build (tag git côté CI, "dev" par défaut en local)
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
+
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
 
 COPY --link frankenphp/conf.d/20-app.prod.ini $PHP_INI_DIR/app.conf.d/
@@ -124,6 +128,11 @@ SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
 ENV APP_ENV=prod
 ENV PHP_INI_SCAN_DIR=":/usr/local/etc/php/app.conf.d"
+
+# ARG/ENV ne traversent pas les stages : redéclarés ici pour que l'image finale
+# (FROM debian:13-slim, stage distinct du builder) porte la bonne version au runtime.
+ARG VERSION=dev
+ENV APP_VERSION=$VERSION
 
 COPY --from=frankenphp_prod_builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 COPY --from=frankenphp_prod_builder /usr/local/bin/php /usr/local/bin/php

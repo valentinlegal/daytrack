@@ -96,6 +96,13 @@ const fr = {
             sync_failed: "Échec de la synchronisation Jira",
         },
     },
+    update: {
+        available: "Nouvelle version disponible",
+        current_to_latest: "{current} → {latest}",
+        how_to: "Pour mettre à jour, exécutez dans le dossier du projet :",
+        copy: "Copier",
+        copied: "Copié !",
+    },
 } as const;
 
 export type TranslationKey = string;
