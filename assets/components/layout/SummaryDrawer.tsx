@@ -5,6 +5,7 @@ import { t } from '@/i18n/fr';
 import type { WorkDay } from '@/types/api';
 import { computeTicketRecap, formatMinutes } from '@/utils/timeline';
 import { getTicketTypeStyle } from '@/config/ticketTypeColors';
+import type { JiraSyncState } from '@/hooks/useJiraSync';
 import JiraSyncButton from '@/components/jira/JiraSyncButton';
 import { XIcon } from 'lucide-react';
 
@@ -16,10 +17,10 @@ interface SummaryDrawerProps {
     open: boolean;
     onClose: () => void;
     workDay: WorkDay;
-    onWorkDayUpdate: (workDay: WorkDay) => void;
+    jiraSync: JiraSyncState;
 }
 
-export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate }: SummaryDrawerProps) {
+export default function SummaryDrawer({ open, onClose, workDay, jiraSync }: SummaryDrawerProps) {
     const ticketRecap = computeTicketRecap(workDay.entries);
 
     const [width, setWidth] = useState(() => {
@@ -92,7 +93,7 @@ export default function SummaryDrawer({ open, onClose, workDay, onWorkDayUpdate 
                     <div className="flex flex-col">
                         {/* Section sync Jira */}
                         <div className="px-4 py-4 border-b flex flex-col gap-3">
-                            <JiraSyncButton workDay={workDay} onWorkDayUpdate={onWorkDayUpdate} />
+                            <JiraSyncButton workDay={workDay} jiraSync={jiraSync} />
                         </div>
 
                         {/* Récapitulatif par ticket */}

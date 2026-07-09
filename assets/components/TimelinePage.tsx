@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import type { FavoriteTicket, WorkDay } from '@/types/api';
 import { useWorkDay } from '@/hooks/useWorkDay';
+import { useJiraSync } from '@/hooks/useJiraSync';
 import { MAX_DAYS_AHEAD, shiftDate, today } from '@/utils/timeline';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import AppHeader from '@/components/layout/AppHeader';
@@ -47,6 +48,9 @@ function TimelinePageContent({ date }: { date: string }) {
         setWorkDay(updated);
     }
 
+    // Monté une seule fois ici et partagé (props) par l'icône AppHeader et le panel SummaryDrawer
+    const jiraSync = useJiraSync(workDay, handleWorkDayUpdate);
+
     return (
         <TooltipProvider delayDuration={400}>
             {/* Drawer en full-height → même flex-row que le header */}
@@ -57,6 +61,7 @@ function TimelinePageContent({ date }: { date: string }) {
                         date={date}
                         workDay={workDay}
                         onWorkDayUpdate={handleWorkDayUpdate}
+                        jiraSync={jiraSync}
                         onPrevious={() => navigate(`/${shiftDate(date, -1)}`)}
                         onNext={() => navigate(`/${shiftDate(date, 1)}`)}
                         onToday={() => navigate(`/${today()}`)}
@@ -90,7 +95,7 @@ function TimelinePageContent({ date }: { date: string }) {
                         open={summaryOpen}
                         onClose={() => setSummaryOpen(false)}
                         workDay={workDay}
-                        onWorkDayUpdate={handleWorkDayUpdate}
+                        jiraSync={jiraSync}
                     />
                 )}
             </div>
