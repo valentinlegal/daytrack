@@ -12,7 +12,7 @@ import JiraSyncModal from './JiraSyncModal';
 
 // Icône proche du bord droit du header : léger décalage de l'origine vers la gauche pour éviter
 // qu'une partie de l'éclatement radial sorte immédiatement de l'écran
-const HEADER_CONFETTI_OPTIONS = { originOffsetX: -0.03 };
+const HEADER_CONFETTI_OPTIONS = { originOffsetX: -0.01 };
 // Gros bouton du panel récap : effet légèrement plus large, proportionné à sa taille
 const DRAWER_CONFETTI_OPTIONS = { scale: 1.3 };
 
