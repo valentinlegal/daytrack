@@ -15,6 +15,8 @@ import { t } from '@/i18n/fr';
 // Date minimale acceptée (évite les dates absurdes genre 0001-01-01)
 const MIN_DATE = '2000-01-01';
 
+const SUMMARY_OPEN_STORAGE_KEY = 'summary-panel-open';
+
 /** Vérifie qu'une chaîne est une date YYYY-MM-DD valide dans les bornes acceptées */
 function isValidDate(date: string): boolean {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
@@ -37,12 +39,16 @@ export default function TimelinePage() {
 function TimelinePageContent({ date }: { date: string }) {
     const navigate = useNavigate();
     const { workDay, isLoading, error, setWorkDay } = useWorkDay(date);
-    const [summaryOpen, setSummaryOpen] = useState(false);
+    const [summaryOpen, setSummaryOpen] = useState(() => sessionStorage.getItem(SUMMARY_OPEN_STORAGE_KEY) === 'true');
     const [favorites, setFavorites] = useState<FavoriteTicket[]>([]);
 
     useEffect(() => {
         void listFavorites().then(setFavorites).catch(() => null);
     }, []);
+
+    useEffect(() => {
+        sessionStorage.setItem(SUMMARY_OPEN_STORAGE_KEY, String(summaryOpen));
+    }, [summaryOpen]);
 
     function handleWorkDayUpdate(updated: WorkDay) {
         setWorkDay(updated);
