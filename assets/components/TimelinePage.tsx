@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import type { FavoriteTicket, WorkDay } from '@/types/api';
 import { useWorkDay } from '@/hooks/useWorkDay';
+import { useJiraSync } from '@/hooks/useJiraSync';
 import { MAX_DAYS_AHEAD, shiftDate, today } from '@/utils/timeline';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import AppHeader from '@/components/layout/AppHeader';
@@ -13,6 +14,8 @@ import { t } from '@/i18n/fr';
 
 // Date minimale acceptée (évite les dates absurdes genre 0001-01-01)
 const MIN_DATE = '2000-01-01';
+
+const SUMMARY_OPEN_STORAGE_KEY = 'summary-panel-open';
 
 /** Vérifie qu'une chaîne est une date YYYY-MM-DD valide dans les bornes acceptées */
 function isValidDate(date: string): boolean {
@@ -36,16 +39,23 @@ export default function TimelinePage() {
 function TimelinePageContent({ date }: { date: string }) {
     const navigate = useNavigate();
     const { workDay, isLoading, error, setWorkDay } = useWorkDay(date);
-    const [summaryOpen, setSummaryOpen] = useState(false);
+    const [summaryOpen, setSummaryOpen] = useState(() => sessionStorage.getItem(SUMMARY_OPEN_STORAGE_KEY) === 'true');
     const [favorites, setFavorites] = useState<FavoriteTicket[]>([]);
 
     useEffect(() => {
         void listFavorites().then(setFavorites).catch(() => null);
     }, []);
 
+    useEffect(() => {
+        sessionStorage.setItem(SUMMARY_OPEN_STORAGE_KEY, String(summaryOpen));
+    }, [summaryOpen]);
+
     function handleWorkDayUpdate(updated: WorkDay) {
         setWorkDay(updated);
     }
+
+    // Monté une seule fois ici et partagé (props) par l'icône AppHeader et le panel SummaryDrawer
+    const jiraSync = useJiraSync(workDay, handleWorkDayUpdate);
 
     return (
         <TooltipProvider delayDuration={400}>
@@ -57,6 +67,7 @@ function TimelinePageContent({ date }: { date: string }) {
                         date={date}
                         workDay={workDay}
                         onWorkDayUpdate={handleWorkDayUpdate}
+                        jiraSync={jiraSync}
                         onPrevious={() => navigate(`/${shiftDate(date, -1)}`)}
                         onNext={() => navigate(`/${shiftDate(date, 1)}`)}
                         onToday={() => navigate(`/${today()}`)}
@@ -90,7 +101,7 @@ function TimelinePageContent({ date }: { date: string }) {
                         open={summaryOpen}
                         onClose={() => setSummaryOpen(false)}
                         workDay={workDay}
-                        onWorkDayUpdate={handleWorkDayUpdate}
+                        jiraSync={jiraSync}
                     />
                 )}
             </div>

@@ -6,6 +6,7 @@ namespace App\Service;
 
 use DateTimeImmutable;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\ResponseInterface;
 use Throwable;
 
 /**
@@ -68,7 +69,7 @@ class JiraService
      *
      * @param string[] $summaryKeys   Tickets dont on veut le titre (pour filtre commentaire)
      * @param string[] $worklogKeys   Tickets dont on veut les worklogs existants (pour nettoyage)
-     * @return array{summaries: array<string, string>, worklogs: array<string, string[]>}
+     * @return array{summaries: array<string, string>, worklogs: array<string, string[]>, errors: array<string, string>}
      */
     public function batchFetchSummariesAndWorklogs(
         array $summaryKeys,
@@ -122,6 +123,7 @@ class JiraService
         $targetDate = $date->format('Y-m-d');
         $userEmail = $this->config->getUserEmail();
         $worklogs = [];
+        $errors = [];
 
         foreach ($worklogResponses as $key => $response) {
             try {
@@ -135,20 +137,29 @@ class JiraService
                     }
                 }
                 $worklogs[$key] = $ids;
-            } catch (\Throwable) {
+            } catch (Throwable $e) {
+                // Lecture échouée : on ne connaît pas l'état existant du ticket sur JIRA — remonter
+                // l'erreur permet à JiraSyncService d'exclure ce ticket de la phase de création,
+                // évitant de créer des doublons sans avoir pu vérifier/nettoyer les worklogs existants.
                 $worklogs[$key] = [];
+                $errors[$key] = $e->getMessage();
             }
         }
 
         return [
             'summaries' => $summaries,
             'worklogs' => $worklogs,
+            'errors' => $errors,
         ];
     }
 
     /**
      * Phase 2 — suppression : supprime tous les worklogs listés en parallèle.
      * notifyUsers=false pour limiter le spam de notifications aux autres membres.
+     * adjustEstimate=auto pour restaurer le temps restant du temps du worklog supprimé
+     * (symétrique de la création, qui le décompte via le même paramètre).
+     * getStatusCode() ne lève jamais d'exception sur un statut 4xx/5xx (Symfony HttpClient) : le
+     * statut est donc vérifié explicitement pour ne pas traiter un échec JIRA comme un succès.
      *
      * @param array<string, string[]> $worklogsByTicket Tableau indexé par ticket → liste d'IDs
      * @return array<string, string> Erreurs indexées par clé de ticket
@@ -166,7 +177,10 @@ class JiraService
                         $this->config->getBaseUrl().'/rest/api/3/issue/'.$ticketKey.'/worklog/'.$worklogId,
                         [
                             'headers' => ['Authorization' => $this->config->getAuthHeader()],
-                            'query' => ['notifyUsers' => 'false'],
+                            'query' => [
+                                'notifyUsers' => 'false',
+                                'adjustEstimate' => 'auto',
+                            ],
                         ],
                     ),
                 ];
@@ -176,8 +190,11 @@ class JiraService
         $errors = [];
         foreach ($pending as $item) {
             try {
-                $item['response']->getStatusCode();
-            } catch (\Throwable $e) {
+                $statusCode = $item['response']->getStatusCode();
+                if ($statusCode < 200 || $statusCode >= 300) {
+                    $errors[$item['ticketKey']] = $this->extractErrorMessage($item['response']);
+                }
+            } catch (Throwable $e) {
                 $errors[$item['ticketKey']] = $e->getMessage();
             }
         }
@@ -188,7 +205,12 @@ class JiraService
     /**
      * Phase 3 — création : crée tous les worklogs en parallèle.
      * La date utilisée est celle du jour synchronisé, l'heure est fixée à midi UTC.
-     * notifyUsers=false + adjustEstimate=leave pour limiter l'impact sur les autres.
+     * notifyUsers=false pour limiter le spam de notifications aux autres membres.
+     * adjustEstimate=auto pour décompter le temps restant du temps loggué (symétrique
+     * de la suppression, qui le restaure) — nécessaire pour que le temps restant reste
+     * correct même après plusieurs synchros dans la même journée.
+     * getStatusCode() ne lève jamais d'exception sur un statut 4xx/5xx (Symfony HttpClient) : le
+     * statut est donc vérifié explicitement pour ne pas traiter un échec JIRA comme un succès.
      *
      * @param array<string, array{ticketKey: string, comment: string|null, seconds: int}> $groups
      * @return array<string, string> Erreurs indexées par clé de ticket
@@ -238,7 +260,7 @@ class JiraService
                         ],
                         'query' => [
                             'notifyUsers' => 'false',
-                            'adjustEstimate' => 'leave',
+                            'adjustEstimate' => 'auto',
                         ],
                         'json' => $body,
                     ],
@@ -249,12 +271,41 @@ class JiraService
         $errors = [];
         foreach ($pending as $item) {
             try {
-                $item['response']->getStatusCode();
-            } catch (\Throwable $e) {
+                $statusCode = $item['response']->getStatusCode();
+                if ($statusCode < 200 || $statusCode >= 300) {
+                    $errors[$item['ticketKey']] = $this->extractErrorMessage($item['response']);
+                }
+            } catch (Throwable $e) {
                 $errors[$item['ticketKey']] = $e->getMessage();
             }
         }
 
         return $errors;
+    }
+
+    /**
+     * Construit un message d'erreur lisible à partir d'une réponse HTTP en échec (statut hors 2xx).
+     * JIRA retourne généralement un corps JSON avec "errorMessages"/"errors" ; à défaut, on retombe
+     * sur le corps brut de la réponse.
+     */
+    private function extractErrorMessage(ResponseInterface $response): string
+    {
+        $statusCode = $response->getStatusCode();
+        $body = $response->getContent(false);
+
+        $decoded = json_decode($body, true);
+        if (is_array($decoded)) {
+            $messages = array_merge(
+                $decoded['errorMessages'] ?? [],
+                array_values($decoded['errors'] ?? []),
+            );
+            if ([] !== $messages) {
+                return sprintf('HTTP %d : %s', $statusCode, implode(' ', $messages));
+            }
+        }
+
+        $trimmedBody = trim($body);
+
+        return sprintf('HTTP %d%s', $statusCode, '' !== $trimmedBody ? ' : '.$trimmedBody : '');
     }
 }

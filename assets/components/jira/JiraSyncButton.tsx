@@ -1,100 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check, RefreshCw } from 'lucide-react';
 import { t } from '@/i18n/fr';
 import type { WorkDay } from '@/types/api';
-import { EntryType } from '@/types/api';
-import { syncDay, isJiraConfigured } from '@/services/jiraService';
+import { isJiraConfigured } from '@/services/jiraService';
+import type { JiraSyncState } from '@/hooks/useJiraSync';
 import { formatIsoTime } from '@/utils/timeline';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import JiraSyncModal from './JiraSyncModal';
 
-type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
+// Icône proche du bord droit du header : léger décalage de l'origine vers la gauche pour éviter
+// qu'une partie de l'éclatement radial sorte immédiatement de l'écran
+const HEADER_CONFETTI_OPTIONS = { originOffsetX: -0.01 };
+// Gros bouton du panel récap : effet légèrement plus large, proportionné à sa taille
+const DRAWER_CONFETTI_OPTIONS = { scale: 1.3 };
 
 interface JiraSyncButtonProps {
     workDay: WorkDay;
-    onWorkDayUpdate: (workDay: WorkDay) => void;
+    /** État et actions de sync — partagés entre les deux points d'affichage du bouton (useJiraSync, monté une seule fois dans TimelinePage) */
+    jiraSync: JiraSyncState;
     /** Mode compact pour l'AppHeader — affiche uniquement une icône colorée */
     compact?: boolean;
 }
 
-/** Vérifie si la journée contient des entrées synchronisables (WORK + ticket + durée) */
-function hasSyncableEntries(workDay: WorkDay): boolean {
-    return workDay.entries.some(
-        (e) => e.type === EntryType.WORK && null !== e.ticketKey && null !== e.endedAt,
-    );
-}
-
-/** Calcule une empreinte légère des entrées synchronisables pour détecter les modifications post-sync */
-function entriesFingerprint(workDay: WorkDay): string {
-    return workDay.entries
-        .filter(e => e.type === EntryType.WORK && null !== e.ticketKey && null !== e.endedAt)
-        .map(e => `${e.id}:${e.endedAt}`)
-        .sort()
-        .join('|');
-}
-
-/** Clé sessionStorage pour le fingerprint de sync d'une journée donnée */
-function syncFpKey(date: string) { return `daytrack_jira_fp_${date}`; }
-
-export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = false }: JiraSyncButtonProps) {
+export default function JiraSyncButton({ workDay, jiraSync, compact = false }: JiraSyncButtonProps) {
     const [showModal, setShowModal] = useState(false);
-    const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
-    const [feedback, setFeedback] = useState<string | null>(null);
-    const [errorDetails, setErrorDetails] = useState<Record<string, string>>({});
-
-    // Empreinte de la dernière sync réussie — initialisée depuis sessionStorage pour survivre aux remounts
-    const syncFingerprintRef = useRef<string | null>(
-        sessionStorage.getItem(syncFpKey(workDay.date)),
-    );
-
-    // Au changement de journée : charge le fingerprint de la nouvelle date depuis sessionStorage
-    useEffect(() => {
-        syncFingerprintRef.current = sessionStorage.getItem(syncFpKey(workDay.date));
-        setSyncStatus('idle');
-        setFeedback(null);
-        setErrorDetails({});
-    }, [workDay.date]);
+    // Ref sur le bouton — sert d'origine pour l'effet de confettis au succès de la synchro
+    const buttonRef = useRef<HTMLButtonElement>(null);
 
     if (!isJiraConfigured()) return null;
 
-    const isSynced = null !== workDay.jiraSyncedAt;
-    const syncable = hasSyncableEntries(workDay);
-    const isDirty = null !== syncFingerprintRef.current
-        && entriesFingerprint(workDay) !== syncFingerprintRef.current;
+    const { syncStatus, feedback, errorDetails, isSynced, syncable, isDirty, confirmSync } = jiraSync;
 
-    async function handleConfirm() {
+    function handleConfirm() {
         setShowModal(false);
-        setSyncStatus('syncing');
-        setFeedback(null);
-        setErrorDetails({});
-
-        try {
-            const result = await syncDay(workDay.date);
-
-            if (Object.keys(result.errors).length > 0) {
-                setSyncStatus('error');
-                setErrorDetails(result.errors);
-                setFeedback(t('jira.feedback.partial_error'));
-                onWorkDayUpdate(result.workDay);
-            } else {
-                const fp = entriesFingerprint(result.workDay);
-                sessionStorage.setItem(syncFpKey(result.workDay.date), fp);
-                syncFingerprintRef.current = fp;
-                setSyncStatus('success');
-                setFeedback(
-                    result.syncedCount > 0
-                        ? t('jira.feedback.success').replace('{n}', String(result.syncedCount))
-                        : t('jira.feedback.success_empty'),
-                );
-                onWorkDayUpdate(result.workDay);
-                setTimeout(() => { setSyncStatus('idle'); setFeedback(null); }, 2000);
-            }
-        } catch (err) {
-            setSyncStatus('error');
-            setFeedback(err instanceof Error ? err.message : t('jira.error.sync_failed'));
-        }
+        void confirmSync(buttonRef.current, compact ? HEADER_CONFETTI_OPTIONS : DRAWER_CONFETTI_OPTIONS);
     }
 
     if (compact) {
@@ -139,7 +80,7 @@ export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = fal
                 <JiraSyncModal
                     open={showModal}
                     workDay={workDay}
-                    onConfirm={() => void handleConfirm()}
+                    onConfirm={handleConfirm}
                     onCancel={() => setShowModal(false)}
                 />
                 <Tooltip>
@@ -147,6 +88,7 @@ export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = fal
                         {/* Le span est le trigger pour que le tooltip fonctionne même quand le bouton est disabled */}
                         <span className={cn('inline-flex', isDisabled && 'cursor-not-allowed')}>
                             <Button
+                                ref={buttonRef}
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => setShowModal(true)}
@@ -169,7 +111,7 @@ export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = fal
             <JiraSyncModal
                 open={showModal}
                 workDay={workDay}
-                onConfirm={() => void handleConfirm()}
+                onConfirm={handleConfirm}
                 onCancel={() => setShowModal(false)}
             />
 
@@ -200,6 +142,7 @@ export default function JiraSyncButton({ workDay, onWorkDayUpdate, compact = fal
                 )}
 
                 <Button
+                    ref={buttonRef}
                     variant="default"
                     onClick={() => setShowModal(true)}
                     disabled={syncStatus === 'syncing'}

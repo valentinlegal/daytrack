@@ -4,6 +4,7 @@ import type { WorkDay } from '@/types/api';
 import { t } from '@/i18n/fr';
 import { MAX_DAYS_AHEAD, computeEstimatedEnd, formatMinutes, parseTarget, shiftDate, today } from '@/utils/timeline';
 import { updateDayTarget } from '@/services/dayService';
+import type { JiraSyncState } from '@/hooks/useJiraSync';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -14,6 +15,7 @@ interface AppHeaderProps {
     date: string;
     workDay: WorkDay | null;
     onWorkDayUpdate: (workDay: WorkDay) => void;
+    jiraSync: JiraSyncState;
     onPrevious: () => void;
     onNext: () => void;
     onToday: () => void;
@@ -35,6 +37,7 @@ export default function AppHeader({
     date,
     workDay,
     onWorkDayUpdate,
+    jiraSync,
     onPrevious,
     onNext,
     onToday,
@@ -217,7 +220,7 @@ export default function AppHeader({
             {/* ── Actions ── */}
             <div className="flex items-center gap-0.5">
                 {workDay && (
-                    <JiraSyncButton workDay={workDay} onWorkDayUpdate={onWorkDayUpdate} compact />
+                    <JiraSyncButton workDay={workDay} jiraSync={jiraSync} compact />
                 )}
 
                 <Tooltip>
