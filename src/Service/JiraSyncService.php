@@ -17,6 +17,9 @@ use App\Enum\EntryType;
  * du dernier sync (jiraSyncedTickets) afin de pouvoir nettoyer JIRA même si la journée
  * locale est désormais vide.
  *
+ * Un ticket dont la lecture ou la suppression échoue est exclu de la phase de création : sans
+ * confirmation que son état JIRA est propre, créer un nouveau worklog risquerait un doublon.
+ *
  * Optimisation des requêtes : les appels JIRA sont regroupés en 3 phases parallèles
  * (lecture / suppression / création) pour minimiser le temps d'attente total.
  */
@@ -55,6 +58,7 @@ class JiraSyncService
         //    dans TimeEntry::ticketSummary et n'ont pas à être comparés au commentaire.
         $fetched = $this->jira->batchFetchSummariesAndWorklogs([], $ticketsToClean, $workDay->date);
         $worklogsByTicket = $fetched['worklogs'];
+        $fetchErrors = $fetched['errors'];
 
         // 4. Grouper les entrées par (ticketKey, commentaire) — le commentaire est envoyé tel quel
         /** @var array<string, array{ticketKey: string, comment: string|null, seconds: int}> $groups */
@@ -77,21 +81,25 @@ class JiraSyncService
         $deleteErrors = $this->jira->batchDeleteWorklogs($worklogsByTicket);
         $deletedCount = array_sum(array_map('count', $worklogsByTicket));
 
+        // Tickets à exclure de la création : lecture ratée (état existant inconnu, risque de
+        // doublon) ou suppression ratée (worklog existant potentiellement toujours présent)
+        $excludedTickets = array_merge($fetchErrors, $deleteErrors);
+
         // Si aucune entrée à créer, on s'arrête après le nettoyage
         if ([] === $groups) {
-            return new JiraSyncResult(syncedCount: 0, deletedCount: $deletedCount, errors: $deleteErrors);
+            return new JiraSyncResult(syncedCount: 0, deletedCount: $deletedCount, errors: array_merge($fetchErrors, $deleteErrors));
         }
 
         // 6. Phase 3 (parallèle) : créer les worklogs groupés, en ignorant les tickets en erreur
         $groupsToCreate = array_values(array_filter(
             $groups,
-            fn ($g) => !isset($deleteErrors[$g['ticketKey']]),
+            fn ($g) => !isset($excludedTickets[$g['ticketKey']]),
         ));
 
         $createErrors = $this->jira->batchCreateWorklogs($groupsToCreate, $workDay->date);
         $syncedCount = count($groupsToCreate) - count($createErrors);
 
-        $errors = array_merge($deleteErrors, $createErrors);
+        $errors = array_merge($fetchErrors, $deleteErrors, $createErrors);
 
         return new JiraSyncResult(syncedCount: $syncedCount, deletedCount: $deletedCount, errors: $errors);
     }
