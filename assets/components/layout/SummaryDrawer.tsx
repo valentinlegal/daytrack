@@ -66,7 +66,7 @@ export default function SummaryDrawer({ open, onClose, workDay, jiraSync }: Summ
         <div className="relative shrink-0">
         <div
             className={cn(
-                'shrink-0 overflow-hidden',
+                'shrink-0 h-full overflow-hidden',
                 !isResizing && 'transition-[width] duration-[220ms] ease-out',
             )}
             style={{ width: open ? width : 0 }}
