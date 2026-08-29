@@ -6,8 +6,8 @@ namespace App\Controller\Api;
 
 use App\Dto\Input\UpdateDayInput;
 use App\Dto\Output\WorkDayOutput;
-use App\Entity\WorkDay;
 use App\Repository\WorkDayRepository;
+use App\Service\DayMaterializer;
 use DateTimeImmutable;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -27,6 +27,7 @@ class DayController extends AbstractController
         private readonly WorkDayRepository $workDayRepository,
         private readonly EntityManagerInterface $em,
         private readonly TranslatorInterface $translator,
+        private readonly DayMaterializer $materializer,
     ) {}
 
     /**
@@ -53,7 +54,7 @@ class DayController extends AbstractController
             );
         }
 
-        $day = $this->workDayRepository->findByDate($parsedDate) ?? new WorkDay($parsedDate);
+        $day = $this->materializer->preview($parsedDate);
 
         return $this->json(WorkDayOutput::fromEntity($day));
     }
@@ -81,15 +82,39 @@ class DayController extends AbstractController
             );
         }
 
-        $day = $this->workDayRepository->findByDate($parsedDate);
-
-        if (null === $day) {
-            $day = new WorkDay($parsedDate);
-            $this->em->persist($day);
-        }
+        $day = $this->workDayRepository->findByDate($parsedDate) ?? $this->materializer->materialize($parsedDate);
 
         $day->targetMinutes = $input->targetMinutes;
         $this->em->flush();
+
+        return $this->json(WorkDayOutput::fromEntity($day));
+    }
+
+    /**
+     * Matérialise la journée depuis les règles actives si elle n'existe pas encore en
+     * base — idempotent. Utilisé par le front juste avant la première édition/suppression
+     * d'un bloc pré-rempli par template, pour obtenir un id réel avant l'appel PUT/DELETE.
+     */
+    #[Route('/{date}/materialize', name: 'api_days_materialize', methods: ['POST'])]
+    public function materialize(string $date): JsonResponse
+    {
+        $parsedDate = DateTimeImmutable::createFromFormat('Y-m-d', $date);
+
+        if (false === $parsedDate) {
+            return $this->json(
+                ['error' => $this->translator->trans('error.invalid_date_format')],
+                Response::HTTP_BAD_REQUEST,
+            );
+        }
+
+        if ($parsedDate->format('Y-m-d') > (new DateTimeImmutable('+30 days'))->format('Y-m-d')) {
+            return $this->json(
+                ['error' => $this->translator->trans('error.future_day_forbidden')],
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+            );
+        }
+
+        $day = $this->materializer->materialize($parsedDate);
 
         return $this->json(WorkDayOutput::fromEntity($day));
     }
