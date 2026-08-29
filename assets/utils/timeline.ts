@@ -6,6 +6,9 @@ export const TIMELINE_END_HOUR = 20;
 export const SLOT_MINUTES = 15;
 export const MAX_DAYS_AHEAD = 30;
 
+/** Hauteur en pixels d'un créneau de 15 min dans les grilles (timeline jour + grille Modèles) */
+export const SLOT_PX = 36;
+
 // Génère tous les créneaux de la journée (ex: ["08:00", "08:15", ...,"18:45"])
 export function generateTimeSlots(): string[] {
     const slots: string[] = [];
