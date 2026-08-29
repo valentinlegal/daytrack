@@ -6,6 +6,7 @@ import {
     GRID_SLOTS,
     buildColumnBlocks,
     findColumnOverlap,
+    nextOccurrenceOnOrAfter,
     targetRuleForWeekday,
     timeToMinutes,
     weekdayLabel,
@@ -23,6 +24,7 @@ import { t } from '@/i18n/fr';
 import { cn } from '@/lib/utils';
 import TemplateCell from './TemplateCell';
 import TemplateBlockMenu from './TemplateBlockMenu';
+import StackPrompt from './StackPrompt';
 
 interface TemplateColumnProps {
     iso: number;
@@ -121,6 +123,18 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
         setPopoverMouse(null);
     }
 
+    // ── Empilement / alternance ──────────────────────────────────────────
+    const [stack, setStack] = useState<{
+        existing: TemplateRule;
+        next: {
+            ticketKey: string | null;
+            ticketSummary: string | null;
+            ticketType: string | null;
+            comment: string | null;
+            isBreak: boolean;
+        };
+    } | null>(null);
+
     async function handleCreateFromPopover(
         ticketKey: string | null,
         type: EntryType,
@@ -135,8 +149,18 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
 
         const overlap = findColumnOverlap(rules, iso, startMin, durMin);
         if (overlap !== null) {
-            // TODO(task 8) : ouvrir le prompt d'empilement (Remplacer / Alterner / Annuler).
-            closePopover();
+            setStack({
+                existing: overlap,
+                next: {
+                    ticketKey,
+                    ticketSummary,
+                    ticketType,
+                    comment,
+                    isBreak: type === EntryType.BREAK,
+                },
+            });
+            setPendingRange(null);
+            setPopoverMouse(null);
             return;
         }
 
@@ -250,6 +274,77 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
         try { await deleteTemplateRule(rule.id); onChanged(); } catch { /* */ }
     }
 
+    function closeStack() { setStack(null); }
+
+    async function resolveReplace() {
+        if (stack === null) return;
+        const { existing, next } = stack;
+        closeStack();
+        try {
+            const sameType = next.isBreak === (existing.ruleType === EntryType.BREAK);
+            if (sameType) {
+                await updateTemplateRule(existing.id, {
+                    startTime: existing.startTime ?? undefined,
+                    durationMinutes: existing.durationMinutes ?? undefined,
+                    ticketKey: next.isBreak ? null : next.ticketKey,
+                    ticketSummary: next.isBreak ? null : next.ticketSummary,
+                    ticketType: next.isBreak ? null : next.ticketType,
+                    comment: next.isBreak ? null : next.comment,
+                });
+            } else {
+                await deleteTemplateRule(existing.id);
+                await createTemplateRule({
+                    ruleType: next.isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                    weekday: existing.weekday,
+                    startTime: existing.startTime,
+                    durationMinutes: existing.durationMinutes,
+                    intervalWeeks: existing.intervalWeeks,
+                    anchorDate: existing.anchorDate,
+                    activeUntil: existing.activeUntil,
+                    enabled: existing.enabled,
+                    ...(next.isBreak ? {} : { ticketKey: next.ticketKey, ticketSummary: next.ticketSummary, ticketType: next.ticketType, comment: next.comment }),
+                });
+            }
+            onChanged();
+        } catch { /* service gère */ }
+    }
+
+    async function resolveAlternate(startDate: string) {
+        if (stack === null) return;
+        const { existing, next } = stack;
+        closeStack();
+        const groupId = crypto.randomUUID();
+        const anchor0 = nextOccurrenceOnOrAfter(startDate, iso);
+        const anchor1 = shiftDate(anchor0, 7);
+        const wasBreak = existing.ruleType === EntryType.BREAK;
+        try {
+            await deleteTemplateRule(existing.id);
+            // Membre 0 : l'ancienne règle
+            await createTemplateRule({
+                ruleType: wasBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                weekday: iso,
+                startTime: existing.startTime,
+                durationMinutes: existing.durationMinutes,
+                intervalWeeks: 2,
+                anchorDate: anchor0,
+                rotationGroupId: groupId,
+                ...(wasBreak ? {} : { ticketKey: existing.ticketKey, ticketSummary: existing.ticketSummary, ticketType: existing.ticketType, comment: existing.comment }),
+            });
+            // Membre 1 : le nouveau bloc, sur le même créneau
+            await createTemplateRule({
+                ruleType: next.isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                weekday: iso,
+                startTime: existing.startTime,
+                durationMinutes: existing.durationMinutes,
+                intervalWeeks: 2,
+                anchorDate: anchor1,
+                rotationGroupId: groupId,
+                ...(next.isBreak ? {} : { ticketKey: next.ticketKey, ticketSummary: next.ticketSummary, ticketType: next.ticketType, comment: next.comment }),
+            });
+            onChanged();
+        } catch { /* service gère */ }
+    }
+
     return (
         <div className="flex flex-col min-w-[150px] flex-1 border-r border-amber-200/70 last:border-r-0">
             {/* En-tête : libellé jour + objectif */}
@@ -313,17 +408,20 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
                     return (
                         <ContextMenu key={rule.id}>
                             <ContextMenuTrigger asChild>
+                                {/* Enveloppe positionnée sur les seules lignes du bloc (zIndex:6) :
+                                    le clic droit / double-clic vise le bloc, les créneaux libres
+                                    au-dessus/en dessous restent capturés par le layer de cellules. */}
                                 <div
                                     className={cn('absolute', !rule.enabled && 'opacity-40 grayscale')}
-                                    style={{ top: 0, left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', zIndex: 6 }}
+                                    style={{ top, left: `${leftPct}%`, width: `${widthPct}%`, height, zIndex: 6 }}
                                     title={rotationTitle}
                                     onDoubleClick={(e) => { if (!isBreak) openEdit(rule, e); }}
                                 >
                                     {isBreak ? (
-                                        <PauseBlock top={top} height={height} slotCount={slotCount} runDurationMinutes={runDurationMinutes} />
+                                        <PauseBlock top={0} height={height} slotCount={slotCount} runDurationMinutes={runDurationMinutes} />
                                     ) : (
                                         <WorkBlock
-                                            top={top}
+                                            top={0}
                                             height={height}
                                             slotCount={slotCount}
                                             ticket={rule.ticketKey ?? ''}
@@ -337,7 +435,7 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
                                     {rotationSize > 1 && (
                                         <span
                                             className="absolute z-10 rounded bg-amber-900/80 px-1 text-[10px] font-semibold text-white"
-                                            style={{ top: top + 3, right: 5 }}
+                                            style={{ top: 3, right: 5 }}
                                         >
                                             {rotationIndex + 1}/{rotationSize}
                                         </span>
@@ -345,7 +443,7 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
                                     {!rule.enabled && (
                                         <span
                                             className="absolute z-10 left-2 rounded bg-gray-700/80 px-1 text-[10px] font-medium text-white"
-                                            style={{ top: top + 3 }}
+                                            style={{ top: 3 }}
                                         >
                                             {t('templates.block.disabled_badge')}
                                         </span>
@@ -448,6 +546,16 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
                             </button>
                         </div>
                     </div>
+                )}
+
+                {stack !== null && (
+                    <StackPrompt
+                        existing={stack.existing}
+                        open
+                        onCancel={closeStack}
+                        onReplace={() => void resolveReplace()}
+                        onAlternate={(d) => void resolveAlternate(d)}
+                    />
                 )}
             </div>
         </div>
