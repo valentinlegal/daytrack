@@ -1,8 +1,15 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JiraTicketInfo, TemplateRule } from '@/types/api';
-import { TemplateRuleType } from '@/types/api';
-import { SLOT_PX, formatMinutes, parseTarget } from '@/utils/timeline';
-import { GRID_SLOTS, buildColumnBlocks, targetRuleForWeekday, weekdayLabel } from '@/utils/templateGrid';
+import { EntryType, TemplateRuleType } from '@/types/api';
+import { SLOT_MINUTES, SLOT_PX, formatMinutes, parseTarget } from '@/utils/timeline';
+import {
+    GRID_SLOTS,
+    buildColumnBlocks,
+    findColumnOverlap,
+    targetRuleForWeekday,
+    timeToMinutes,
+    weekdayLabel,
+} from '@/utils/templateGrid';
 import { getBlockColors } from '@/config/ticketTypeColors';
 import {
     createTemplateRule,
@@ -10,8 +17,10 @@ import {
     updateTemplateRule,
 } from '@/services/templateRuleService';
 import { WorkBlock, PauseBlock } from '@/components/timeline/blocks';
+import EditPopover from '@/components/timeline/EditPopover';
 import { t } from '@/i18n/fr';
 import { cn } from '@/lib/utils';
+import TemplateCell from './TemplateCell';
 
 interface TemplateColumnProps {
     iso: number;
@@ -20,7 +29,7 @@ interface TemplateColumnProps {
     onChanged: () => void;
 }
 
-export default function TemplateColumn({ iso, rules, onChanged }: TemplateColumnProps) {
+export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: TemplateColumnProps) {
     const blocks = useMemo(() => buildColumnBlocks(rules, iso), [rules, iso]);
     const targetRule = useMemo(() => targetRuleForWeekday(rules, iso), [rules, iso]);
     const gridHeight = GRID_SLOTS.length * SLOT_PX;
@@ -75,6 +84,74 @@ export default function TemplateColumn({ iso, rules, onChanged }: TemplateColumn
     function handleTargetKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
         if (e.key === 'Enter') void saveTarget();
         else if (e.key === 'Escape') setEditingTarget(false);
+    }
+
+    // ── Création par clic-glisser ─────────────────────────────────────────
+    const [dragAnchor, setDragAnchor] = useState<number | null>(null);
+    const [dragCursor, setDragCursor] = useState<number | null>(null);
+    const [pendingRange, setPendingRange] = useState<{ startIndex: number; count: number } | null>(null);
+    const [popoverMouse, setPopoverMouse] = useState<{ x: number; y: number } | null>(null);
+
+    const dragRange =
+        dragAnchor !== null && dragCursor !== null
+            ? { lo: Math.min(dragAnchor, dragCursor), hi: Math.max(dragAnchor, dragCursor) }
+            : null;
+
+    // Fin du glisser (mouseup n'importe où) → ouvre le popover sur la plage sélectionnée.
+    useEffect(() => {
+        if (dragAnchor === null) return;
+        function onUp(e: MouseEvent) {
+            const a = dragAnchor as number;
+            const c = dragCursor ?? a;
+            const lo = Math.min(a, c);
+            const hi = Math.max(a, c);
+            setPendingRange({ startIndex: lo, count: hi - lo + 1 });
+            setPopoverMouse({ x: e.clientX, y: e.clientY });
+            setDragAnchor(null);
+            setDragCursor(null);
+        }
+        document.addEventListener('mouseup', onUp);
+        return () => document.removeEventListener('mouseup', onUp);
+    }, [dragAnchor, dragCursor]);
+
+    function closePopover() {
+        setPendingRange(null);
+        setPopoverMouse(null);
+    }
+
+    async function handleCreateFromPopover(
+        ticketKey: string | null,
+        type: EntryType,
+        comment: string | null,
+        ticketSummary: string | null,
+        ticketType: string | null,
+    ) {
+        if (pendingRange === null) return;
+        const startTime = GRID_SLOTS[pendingRange.startIndex]!;
+        const startMin = timeToMinutes(startTime);
+        const durMin = pendingRange.count * SLOT_MINUTES;
+
+        const overlap = findColumnOverlap(rules, iso, startMin, durMin);
+        if (overlap !== null) {
+            // TODO(task 8) : ouvrir le prompt d'empilement (Remplacer / Alterner / Annuler).
+            closePopover();
+            return;
+        }
+
+        const isBreak = type === EntryType.BREAK;
+        try {
+            await createTemplateRule({
+                ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                weekday: iso,
+                startTime,
+                durationMinutes: durMin,
+                intervalWeeks: 1,
+                ...(isBreak ? {} : { ticketKey, ticketSummary, ticketType, comment }),
+            });
+            onChanged();
+        } catch { /* service gère le message */ } finally {
+            closePopover();
+        }
     }
 
     return (
@@ -179,6 +256,35 @@ export default function TemplateColumn({ iso, rules, onChanged }: TemplateColumn
                         </div>
                     );
                 })}
+
+                {/* Layer de cellules d'interaction (au-dessus des blocs) */}
+                <div className="absolute inset-0" style={{ zIndex: 5 }}>
+                    {GRID_SLOTS.map((_, idx) => (
+                        <TemplateCell
+                            key={idx}
+                            slotIndex={idx}
+                            isInDragRange={dragRange !== null && idx >= dragRange.lo && idx <= dragRange.hi}
+                            onDragStart={(i) => { setDragAnchor(i); setDragCursor(i); }}
+                            onDragEnter={(i) => setDragCursor((prev) => (dragAnchor === null ? prev : i))}
+                        />
+                    ))}
+                </div>
+
+                {pendingRange !== null && (
+                    <EditPopover
+                        slot={GRID_SLOTS[pendingRange.startIndex]!}
+                        entry={null}
+                        anchorTop={pendingRange.startIndex * SLOT_PX}
+                        scrollContainer={null}
+                        mousePos={popoverMouse}
+                        knownTickets={knownTickets}
+                        onSave={(ticketKey, type, comment, ticketSummary, ticketType) =>
+                            void handleCreateFromPopover(ticketKey, type, comment, ticketSummary, ticketType)
+                        }
+                        onCancel={closePopover}
+                        onClear={closePopover}
+                    />
+                )}
             </div>
         </div>
     );
