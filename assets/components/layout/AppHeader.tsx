@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { CalendarClock, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { CalendarClock, ChevronLeft, ChevronRight, FileText, LayoutGrid } from 'lucide-react';
 import type { WorkDay } from '@/types/api';
 import { t } from '@/i18n/fr';
 import { MAX_DAYS_AHEAD, computeEstimatedEnd, formatMinutes, parseTarget, shiftDate, today } from '@/utils/timeline';
@@ -222,6 +223,17 @@ export default function AppHeader({
                 {workDay && (
                     <JiraSyncButton workDay={workDay} jiraSync={jiraSync} compact />
                 )}
+
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                            <Link to="/modeles" aria-label={t('templates.nav')}>
+                                <LayoutGrid className="h-4 w-4" />
+                            </Link>
+                        </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t('templates.nav')}</TooltipContent>
+                </Tooltip>
 
                 <Tooltip>
                     <TooltipTrigger asChild>
