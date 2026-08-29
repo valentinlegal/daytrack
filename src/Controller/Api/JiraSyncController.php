@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Controller\Api;
 
 use App\Dto\Output\WorkDayOutput;
-use App\Repository\WorkDayRepository;
+use App\Service\DayMaterializer;
 use App\Service\JiraConfigProvider;
 use App\Service\JiraSyncService;
 use DateTimeImmutable;
@@ -22,7 +22,7 @@ use Symfony\Contracts\Translation\TranslatorInterface;
 class JiraSyncController extends AbstractController
 {
     public function __construct(
-        private readonly WorkDayRepository $dayRepository,
+        private readonly DayMaterializer $materializer,
         private readonly JiraSyncService $syncService,
         private readonly JiraConfigProvider $jiraConfig,
         private readonly EntityManagerInterface $em,
@@ -52,14 +52,7 @@ class JiraSyncController extends AbstractController
             );
         }
 
-        $day = $this->dayRepository->findByDate($parsedDate);
-
-        if (null === $day) {
-            return $this->json(
-                ['error' => $this->translator->trans('error.day_not_found')],
-                Response::HTTP_NOT_FOUND,
-            );
-        }
+        $day = $this->materializer->materialize($parsedDate);
 
         $result = $this->syncService->sync($day);
 
