@@ -232,6 +232,8 @@ export default function TemplateColumn({
     // ── Édition d'un créneau (création simple + édition d'un bloc existant) ──
     const [editingSlot, setEditingSlot] = useState<string | null>(null);
     const [editMousePos, setEditMousePos] = useState<{ x: number; y: number } | null>(null);
+    // Rect de la dernière cellule clic-droitée — pour ancrer les popovers ouverts depuis le menu.
+    const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
     const editingRule = editingSlot !== null ? (ruleBySlot.get(editingSlot) ?? null) : null;
 
     // ── Création d'une plage par clic-glisser sur des créneaux libres ──────
@@ -468,6 +470,7 @@ export default function TemplateColumn({
                                         setEditingSlot(rule?.startTime ?? slot);
                                     }}
                                     onContextMenuOpen={() => grid.onContextMenuOpen(slot)}
+                                    onContextMenuOpenAt={(r) => setMenuRect(r)}
                                     onCellMouseDown={(e) => grid.onCellMouseDown(slot, e)}
                                     onDragExtend={() => grid.onDragExtend(slot)}
                                     onDropFavorite={() => grid.onDropFavorite(slot)}
@@ -482,7 +485,11 @@ export default function TemplateColumn({
                                             onClear={() => void grid.onClearRange(effectiveSelection)}
                                             onConvertToBreak={() => void grid.onConvertToBreak(effectiveSelection)}
                                             onEdit={() => {
-                                                setEditMousePos({ x: window.innerWidth / 2, y: 200 });
+                                                setEditMousePos(
+                                                    menuRect
+                                                        ? { x: menuRect.left, y: menuRect.bottom + 4 }
+                                                        : { x: window.innerWidth / 2, y: 200 },
+                                                );
                                                 setEditingSlot(rule?.startTime ?? slot);
                                             }}
                                             onToggleType={() => {
@@ -578,7 +585,11 @@ export default function TemplateColumn({
                 {endDateRuleId !== null && (
                     <div
                         className="fixed z-50 flex flex-col gap-2 rounded-lg border bg-popover p-3 shadow-lg"
-                        style={{ top: 120, left: '50%', transform: 'translateX(-50%)' }}
+                        style={{
+                            top: menuRect ? menuRect.bottom + 4 : 120,
+                            left: menuRect ? menuRect.left : '50%',
+                            transform: menuRect ? undefined : 'translateX(-50%)',
+                        }}
                         onMouseDown={(e) => e.stopPropagation()}
                     >
                         <span className="text-[12px] font-medium">{t('templates.recurrence.end_date_title')}</span>

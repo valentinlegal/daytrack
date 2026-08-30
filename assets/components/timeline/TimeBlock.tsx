@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
     ContextMenu,
     ContextMenuTrigger,
@@ -12,6 +12,8 @@ interface TimeBlockProps {
     onSelect: (e: React.MouseEvent) => void;
     onStartEdit: (x: number, y: number) => void;
     onContextMenuOpen: () => void;
+    /** Rect de la cellule au clic droit — pour ancrer un popover ouvert depuis le menu. */
+    onContextMenuOpenAt?: (rect: DOMRect) => void;
     onCellMouseDown: (e: React.MouseEvent) => void;
     onDragExtend: () => void;
     onDropFavorite: () => void;
@@ -29,16 +31,19 @@ export default function TimeBlock({
     onSelect,
     onStartEdit,
     onContextMenuOpen,
+    onContextMenuOpenAt,
     onCellMouseDown,
     onDragExtend,
     onDropFavorite,
 }: TimeBlockProps) {
     const [isDragOver, setIsDragOver] = useState(false);
+    const cellRef = useRef<HTMLDivElement>(null);
 
     return (
         <ContextMenu onOpenChange={(open) => { if (open) onContextMenuOpen(); }}>
             <ContextMenuTrigger asChild>
                 <div
+                    ref={cellRef}
                     data-slot={slot}
                     className="w-full h-full cursor-pointer select-none relative rounded-sm"
                     style={{
@@ -49,6 +54,10 @@ export default function TimeBlock({
                     onDoubleClick={(e) => { e.preventDefault(); onStartEdit(e.clientX, e.clientY); }}
                     onMouseDown={(e) => onCellMouseDown(e)}
                     onMouseEnter={() => onDragExtend()}
+                    onContextMenu={() => {
+                        const r = cellRef.current?.getBoundingClientRect();
+                        if (r) onContextMenuOpenAt?.(r);
+                    }}
                     onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true); }}
                     onDragLeave={() => setIsDragOver(false)}
                     onDrop={(e) => {
