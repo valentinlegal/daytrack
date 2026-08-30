@@ -17,6 +17,7 @@ import type { SlotCell, SlotCellInput } from '@/hooks/useSlotGrid';
 import { t } from '@/i18n/fr';
 import { getBlockColors } from '@/config/ticketTypeColors';
 import TimeBlock from './TimeBlock';
+import TimelineBlockMenu from './TimelineBlockMenu';
 import EditPopover from './EditPopover';
 import { WorkBlock, PauseBlock } from './blocks';
 import { Button } from '@/components/ui/button';
@@ -311,7 +312,6 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                         {TIME_SLOTS.map((slot) => {
                             const slotIdx = TIME_SLOTS.indexOf(slot);
                             const entry = entryMap.get(slot) ?? null;
-                            const runInfo = runMap.get(slot)!;
                             const effectiveSelection =
                                 grid.selectedSlots.has(slot) && grid.selectedSlots.size > 1
                                     ? grid.selectedSlots
@@ -330,22 +330,24 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                                     />
                                     <TimeBlock
                                         slot={slot}
-                                        entry={entry}
-                                        runInfo={runInfo}
                                         isSelected={grid.selectedSlots.has(slot)}
-                                        hasClipboard={grid.hasClipboard}
-                                        knownTickets={knownTickets}
                                         onSelect={(e) => grid.onSelect(slot, e)}
                                         onStartEdit={(x, y) => { setEditMousePos({ x, y }); setEditingSlot(slot); }}
-                                        onCopy={() => grid.onCopy()}
-                                        onCut={() => void grid.onCut()}
-                                        onPaste={() => void grid.onPaste(slot)}
-                                        onClear={() => void grid.onClearRange(effectiveSelection)}
-                                        onConvertToBreak={() => void grid.onConvertToBreak(effectiveSelection)}
                                         onContextMenuOpen={() => grid.onContextMenuOpen(slot)}
-                                        onDropFavorite={() => grid.onDropFavorite(slot)}
                                         onCellMouseDown={(e) => grid.onCellMouseDown(slot, e)}
                                         onDragExtend={() => grid.onDragExtend(slot)}
+                                        onDropFavorite={() => grid.onDropFavorite(slot)}
+                                        menu={
+                                            <TimelineBlockMenu
+                                                entry={entry}
+                                                hasClipboard={grid.hasClipboard}
+                                                onCopy={() => grid.onCopy()}
+                                                onCut={() => void grid.onCut()}
+                                                onPaste={() => void grid.onPaste(slot)}
+                                                onClear={() => void grid.onClearRange(effectiveSelection)}
+                                                onConvertToBreak={() => void grid.onConvertToBreak(effectiveSelection)}
+                                            />
+                                        }
                                     />
                                 </div>
                             );
