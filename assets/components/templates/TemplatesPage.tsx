@@ -71,19 +71,24 @@ export default function TemplatesPage() {
                         <div className="p-10 text-center text-sm text-red-600">{error}</div>
                     ) : (
                         <div className="flex min-w-[1100px]">
-                            {/* Gouttière d'heures */}
+                            {/* Gouttière d'heures — heures pleines + quarts d'heure, comme la timeline jour */}
                             <div className="w-14 shrink-0 relative" style={{ height: gridHeight, marginTop: 36 }}>
-                                {GRID_SLOTS.map((slot, idx) =>
-                                    slot.endsWith(':00') ? (
+                                {GRID_SLOTS.map((slot, idx) => {
+                                    const isHour = slot.endsWith(':00');
+                                    return (
                                         <span
                                             key={slot}
-                                            className="absolute right-2 font-mono text-[11px] text-amber-900/60 select-none"
-                                            style={{ top: idx * SLOT_PX - 6 }}
+                                            className={
+                                                isHour
+                                                    ? 'absolute right-3 font-mono tabular-nums text-[12.5px] font-semibold text-amber-900/70 select-none'
+                                                    : 'absolute right-3 font-mono tabular-nums text-[11px] text-amber-900/35 select-none'
+                                            }
+                                            style={{ top: idx * SLOT_PX - (isHour ? 7 : 6) }}
                                         >
-                                            {slot.split(':')[0]}
+                                            {isHour ? slot.split(':')[0] : `:${slot.split(':')[1]}`}
                                         </span>
-                                    ) : null,
-                                )}
+                                    );
+                                })}
                             </div>
 
                             {WEEKDAYS.map((iso) => (

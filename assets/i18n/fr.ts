@@ -82,7 +82,6 @@ const fr = {
             "7": "Dimanche",
         },
         target: {
-            placeholder: "Défaut",
             hint: "Objectif du jour — vide = 7h30 par défaut",
             invalid: "Format invalide (ex : 6h30)",
         },

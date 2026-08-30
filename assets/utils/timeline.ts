@@ -9,6 +9,9 @@ export const MAX_DAYS_AHEAD = 30;
 /** Hauteur en pixels d'un créneau de 15 min dans les grilles (timeline jour + grille Modèles) */
 export const SLOT_PX = 36;
 
+/** Objectif journalier par défaut en minutes (7h30) — aligné sur WorkDay::$targetMinutes côté back */
+export const DEFAULT_TARGET_MINUTES = 450;
+
 // Génère tous les créneaux de la journée (ex: ["08:00", "08:15", ...,"18:45"])
 export function generateTimeSlots(): string[] {
     const slots: string[] = [];

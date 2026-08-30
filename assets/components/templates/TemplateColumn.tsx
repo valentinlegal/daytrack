@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JiraTicketInfo, TemplateRule } from '@/types/api';
 import { EntryType, TemplateRuleType } from '@/types/api';
-import { SLOT_MINUTES, SLOT_PX, formatMinutes, parseTarget, shiftDate, today } from '@/utils/timeline';
+import { DEFAULT_TARGET_MINUTES, SLOT_MINUTES, SLOT_PX, formatMinutes, parseTarget, shiftDate, today } from '@/utils/timeline';
 import {
     GRID_SLOTS,
     buildColumnBlocks,
@@ -357,7 +357,7 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
                         onChange={(e) => { setTargetInput(e.target.value); setTargetError(false); }}
                         onKeyDown={handleTargetKeyDown}
                         onBlur={() => void saveTarget()}
-                        placeholder={t('templates.target.placeholder')}
+                        placeholder={formatMinutes(DEFAULT_TARGET_MINUTES)}
                         className={cn(
                             'w-16 text-right text-[12px] font-medium outline-none border-b bg-transparent',
                             targetError ? 'border-destructive text-destructive' : 'border-amber-500 text-amber-950',
@@ -367,11 +367,15 @@ export default function TemplateColumn({ iso, rules, knownTickets, onChanged }: 
                     <button
                         onClick={startEditingTarget}
                         title={t('templates.target.hint')}
-                        className="text-[12px] font-medium text-amber-900/70 hover:text-amber-950 border-b border-dashed border-amber-400/50"
+                        className={cn(
+                            'text-[12px] border-b border-dashed border-amber-400/50 hover:text-amber-950',
+                            // Objectif propre à ce jour : plein contraste. Valeur par défaut : atténuée.
+                            targetRule?.targetMinutes != null
+                                ? 'font-medium text-amber-900/80'
+                                : 'text-amber-900/45',
+                        )}
                     >
-                        {targetRule?.targetMinutes != null
-                            ? formatMinutes(targetRule.targetMinutes)
-                            : t('templates.target.placeholder')}
+                        {formatMinutes(targetRule?.targetMinutes ?? DEFAULT_TARGET_MINUTES)}
                     </button>
                 )}
             </div>
