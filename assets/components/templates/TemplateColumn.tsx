@@ -33,6 +33,7 @@ import EditPopover from '@/components/timeline/EditPopover';
 import { t } from '@/i18n/fr';
 import { cn } from '@/lib/utils';
 import TemplateBlockMenu from './TemplateBlockMenu';
+import AlternateButton from './AlternateButton';
 
 interface TemplateColumnProps {
     iso: number;
@@ -384,20 +385,12 @@ export default function TemplateColumn({
                         const isBreak = rule.ruleType === TemplateRuleType.BREAK;
                         const widthPct = 100 / rotationSize;
                         const leftPct = rotationIndex * widthPct;
-                        const rotationTitle =
-                            rotationSize > 1
-                                ? t('templates.recurrence.cadence_tooltip')
-                                      .replace('{n}', String(rule.intervalWeeks))
-                                      .replace('{pos}', String(rotationIndex + 1))
-                                      .replace('{size}', String(rotationSize))
-                                : undefined;
 
                         return (
                             <div
                                 key={rule.id}
                                 className={cn('absolute', !rule.enabled && 'opacity-40 grayscale')}
                                 style={{ top, left: `${leftPct}%`, width: `${widthPct}%`, height }}
-                                title={rotationTitle}
                             >
                                 {isBreak ? (
                                     <PauseBlock top={0} height={height} slotCount={slotCount} runDurationMinutes={runDurationMinutes} />
@@ -413,14 +406,6 @@ export default function TemplateColumn({
                                         runDurationMinutes={runDurationMinutes}
                                         isSelected={false}
                                     />
-                                )}
-                                {rotationSize > 1 && (
-                                    <span
-                                        className="absolute z-10 rounded bg-amber-900/80 px-1 text-[10px] font-semibold text-white"
-                                        style={{ top: 3, right: 5 }}
-                                    >
-                                        {rotationIndex + 1}/{rotationSize}
-                                    </span>
                                 )}
                                 {!rule.enabled && (
                                     <span
@@ -509,6 +494,42 @@ export default function TemplateColumn({
                                         />
                                     }
                                 />
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {/* z10 — overlay alternance : badge de rotation OU bouton « + » (mutuellement exclusifs) */}
+                <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
+                    {blocks.map(({ rule, startSlotIndex, rotationSize, rotationIndex }) => {
+                        const widthPct = 100 / rotationSize;
+                        const leftPct = rotationIndex * widthPct;
+                        return (
+                            <div
+                                key={rule.id}
+                                className="absolute"
+                                style={{ top: startSlotIndex * SLOT_PX + 3, left: `${leftPct}%`, width: `${widthPct}%` }}
+                            >
+                                <div className="absolute right-1 top-0">
+                                    {rule.rotationGroupId === null ? (
+                                        <AlternateButton
+                                            rule={rule}
+                                            iso={iso}
+                                            knownTickets={knownTickets}
+                                            onChanged={onChanged}
+                                        />
+                                    ) : (
+                                        <span
+                                            className="rounded bg-amber-900/80 px-1 text-[10px] font-semibold text-white"
+                                            title={t('templates.recurrence.cadence_tooltip')
+                                                .replace('{n}', String(rule.intervalWeeks))
+                                                .replace('{pos}', String(rotationIndex + 1))
+                                                .replace('{size}', String(rotationSize))}
+                                        >
+                                            {rotationIndex + 1}/{rotationSize}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         );
                     })}

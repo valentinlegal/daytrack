@@ -114,6 +114,15 @@ const fr = {
             start_date_hint: "Jamais dans le passé — aujourd'hui par défaut.",
             confirm_alternate: "Créer l'alternance",
         },
+        alternate: {
+            add: "Ajouter une alternance",
+            title: "Alterner ce créneau une semaine sur deux",
+            ticket_label: "Ticket de l'autre semaine",
+            start_label: "À partir de quelle semaine ?",
+            start_hint: "Jamais dans le passé — aujourd'hui par défaut.",
+            confirm: "Créer l'alternance",
+            cancel: "Annuler",
+        },
         error: {
             load: "Impossible de charger les modèles",
             save: "Impossible d'enregistrer la règle",
