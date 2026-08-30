@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import type { JiraTicketInfo, TemplateRule } from '@/types/api';
+import type { FavoriteTicket, JiraTicketInfo, TemplateRule } from '@/types/api';
 import { listTemplateRules } from '@/services/templateRuleService';
+import { listFavorites } from '@/services/favoriteService';
 import { GRID_SLOTS, WEEKDAYS } from '@/utils/templateGrid';
 import { SLOT_PX, today } from '@/utils/timeline';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { t } from '@/i18n/fr';
+import FavoritesPanel from '@/components/layout/FavoritesPanel';
 import TemplateColumn from './TemplateColumn';
 
 export default function TemplatesPage() {
     const [rules, setRules] = useState<TemplateRule[]>([]);
+    const [favorites, setFavorites] = useState<FavoriteTicket[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showPasteWarning, setShowPasteWarning] = useState(false);
@@ -32,6 +35,7 @@ export default function TemplatesPage() {
 
     useEffect(() => {
         void reload();
+        void listFavorites().then(setFavorites).catch(() => null);
     }, []);
 
     // Tickets déjà connus (titre + type) pour l'autocomplete du EditPopover, comme Timeline.
@@ -68,8 +72,10 @@ export default function TemplatesPage() {
                     {t('templates.banner')}
                 </div>
 
-                {/* Corps : gouttière d'heures + 7 colonnes, scroll vertical commun */}
-                <div ref={scrollRef} className="flex-1 overflow-auto">
+                {/* Corps : sidebar favoris (ambrée) + gouttière d'heures + 7 colonnes, scroll vertical commun */}
+                <div className="flex flex-1 overflow-hidden">
+                    <FavoritesPanel favorites={favorites} onChange={setFavorites} tone="amber" />
+                    <div ref={scrollRef} className="flex-1 overflow-auto">
                     {isLoading ? (
                         <div className="p-10 text-center text-sm text-amber-800/70">{t('templates.loading')}</div>
                     ) : error !== null ? (
@@ -109,6 +115,7 @@ export default function TemplatesPage() {
                             ))}
                         </div>
                     )}
+                    </div>
                 </div>
 
                 {/* Avertissement collage sur multi-sélection (même texte que la vue jour) */}

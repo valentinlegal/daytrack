@@ -22,10 +22,16 @@ const STORAGE_KEY = 'favorites-panel-width';
 interface FavoritesPanelProps {
     favorites: FavoriteTicket[];
     onChange: (favorites: FavoriteTicket[]) => void;
+    /** Teinte du chrome de la sidebar : neutre (vue jour) ou ambrée (vue Modèles). */
+    tone?: 'neutral' | 'amber';
 }
 
-export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelProps) {
+export default function FavoritesPanel({ favorites, onChange, tone = 'neutral' }: FavoritesPanelProps) {
     const containerRef = useRef<HTMLDivElement>(null);
+
+    const chrome = tone === 'amber'
+        ? { aside: 'bg-amber-50', handleIdle: 'bg-amber-200', handleHover: 'group-hover:bg-amber-900', title: 'text-amber-800' }
+        : { aside: 'bg-neutral-50', handleIdle: 'bg-neutral-200', handleHover: 'group-hover:bg-neutral-900', title: 'text-neutral-500' };
 
     const [width, setWidth] = useState(() => {
         const saved = sessionStorage.getItem(STORAGE_KEY);
@@ -82,11 +88,11 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
         <div className="relative shrink-0" style={{ width }}>
         <aside
             ref={containerRef}
-            className="w-full h-full py-4 ps-2 pe-4 bg-neutral-50 flex flex-col overflow-hidden"
+            className={cn('w-full h-full py-4 ps-2 pe-4 flex flex-col overflow-hidden', chrome.aside)}
         >
             {/* En-tête : titre à gauche aligné sur les pills, bouton "+" à droite */}
             <div className="pl-3 pb-2 shrink-0 flex items-center justify-between">
-                <span className="text-xs font-semibold text-neutral-500">
+                <span className={cn('text-xs font-semibold', chrome.title)}>
                     {t('favorites.title')}
                 </span>
                 <Popover open={add.isAdding} onOpenChange={(open) => open ? add.openAdd() : add.cancelAdd()}>
@@ -188,7 +194,7 @@ export default function FavoritesPanel({ favorites, onChange }: FavoritesPanelPr
             onMouseDown={handleResizeMouseDown}
             onDoubleClick={handleResizeDoubleClick}
         >
-            <div className="absolute inset-y-0 right-0 w-px group-hover:w-[2px] bg-neutral-200 group-hover:bg-neutral-900 transition-all" />
+            <div className={cn('absolute inset-y-0 right-0 w-px group-hover:w-[2px] transition-all', chrome.handleIdle, chrome.handleHover)} />
         </div>
         </div>
     );
