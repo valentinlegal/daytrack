@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import type { JiraTicketInfo, TemplateRule } from '@/types/api';
@@ -6,6 +6,8 @@ import { listTemplateRules } from '@/services/templateRuleService';
 import { GRID_SLOTS, WEEKDAYS } from '@/utils/templateGrid';
 import { SLOT_PX, today } from '@/utils/timeline';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { t } from '@/i18n/fr';
 import TemplateColumn from './TemplateColumn';
 
@@ -13,6 +15,9 @@ export default function TemplatesPage() {
     const [rules, setRules] = useState<TemplateRule[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [showPasteWarning, setShowPasteWarning] = useState(false);
+    // Conteneur de scroll commun aux 7 colonnes (auto-scroll pendant un drag, position persistée).
+    const scrollRef = useRef<HTMLDivElement>(null);
 
     async function reload() {
         try {
@@ -64,7 +69,7 @@ export default function TemplatesPage() {
                 </div>
 
                 {/* Corps : gouttière d'heures + 7 colonnes, scroll vertical commun */}
-                <div className="flex-1 overflow-auto">
+                <div ref={scrollRef} className="flex-1 overflow-auto">
                     {isLoading ? (
                         <div className="p-10 text-center text-sm text-amber-800/70">{t('templates.loading')}</div>
                     ) : error !== null ? (
@@ -98,11 +103,25 @@ export default function TemplatesPage() {
                                     rules={rules}
                                     knownTickets={knownTickets}
                                     onChanged={() => void reload()}
+                                    scrollRef={scrollRef}
+                                    onNeedsPasteWarning={() => setShowPasteWarning(true)}
                                 />
                             ))}
                         </div>
                     )}
                 </div>
+
+                {/* Avertissement collage sur multi-sélection (même texte que la vue jour) */}
+                <Dialog open={showPasteWarning} onOpenChange={(o) => !o && setShowPasteWarning(false)}>
+                    <DialogContent className="max-w-sm">
+                        <p className="text-sm text-gray-700">{t('timeline.paste_multiselection_warning')}</p>
+                        <DialogFooter>
+                            <Button size="sm" onClick={() => setShowPasteWarning(false)}>
+                                {t('timeline.close')}
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
             </div>
         </TooltipProvider>
     );

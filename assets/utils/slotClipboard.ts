@@ -11,6 +11,8 @@ export interface ClipboardCell {
     comment: string | null;
     type: EntryType;
     isEmpty: boolean;
+    /** Durée du bloc source en minutes. Absent = 1 créneau (15 min) — cas de la vue jour. */
+    durationMinutes?: number;
 }
 
 export interface ClipboardData {

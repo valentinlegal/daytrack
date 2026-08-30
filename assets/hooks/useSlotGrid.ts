@@ -8,6 +8,23 @@ import {
 } from '@/utils/slotClipboard';
 import type { ClipboardData } from '@/utils/slotClipboard';
 
+/** "HH:mm" → minutes depuis minuit. */
+function slotToMinutes(hhmm: string): number {
+    const [h, m] = hhmm.split(':').map(Number);
+    return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/** minutes depuis minuit → "HH:mm" aligné sur le quart d'heure (borné 00:00–23:45). */
+function minutesToSlot(min: number): string {
+    const c = Math.max(0, Math.min(23 * 60 + 45, Math.round(min / 15) * 15));
+    return `${String(Math.floor(c / 60)).padStart(2, '0')}:${String(c % 60).padStart(2, '0')}`;
+}
+
+/** Durée en minutes entre deux "HH:mm". */
+function spanMinutes(start: string, end: string): number {
+    return slotToMinutes(end) - slotToMinutes(start);
+}
+
 /** Sous-ensemble commun d'une entrée de temps et d'une règle rendue comme bloc. */
 export interface SlotCell {
     id: string;
@@ -245,6 +262,8 @@ export function useSlotGrid({
                     comment: entry?.comment ?? null,
                     type: entry?.type ?? EntryType.WORK,
                     isEmpty: null === entry,
+                    // Longueur du bloc source (utile en vue Modèles ; 15 min en vue jour).
+                    durationMinutes: entry?.endedAt ? spanMinutes(entry.startedAt, entry.endedAt) : undefined,
                 };
             }),
         };
@@ -447,7 +466,12 @@ export function useSlotGrid({
                 ticketType: cell.ticketType,
                 comment: cell.comment,
                 type: cell.type,
-                endedAt: existing?.endedAt ?? getNextSlot(destSlot),
+                // > 15 min : bloc Modèles multi-créneaux → on restitue sa longueur.
+                // Sinon (vue jour) : créneau suivant, comportement inchangé.
+                endedAt: existing?.endedAt
+                    ?? (cell.durationMinutes && cell.durationMinutes > 15
+                        ? minutesToSlot(slotToMinutes(destSlot) + cell.durationMinutes)
+                        : getNextSlot(destSlot)),
             };
             return existing ? await ops.updateCell(existing, data) : await ops.createCell(destSlot, data);
         },
