@@ -54,7 +54,8 @@ readonly class CreateTemplateRuleInput
 
         #[Assert\When(
             expression: 'this.ruleType === "target_override"',
-            constraints: [new Assert\NotBlank(), new Assert\Positive()],
+            // 0 autorisé (week-end, jour férié, congé).
+            constraints: [new Assert\NotNull(), new Assert\PositiveOrZero()],
         )]
         public ?int $targetMinutes = null,
 

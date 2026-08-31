@@ -12,8 +12,8 @@ interface TimeBlockProps {
     onSelect: (e: React.MouseEvent) => void;
     onStartEdit: (x: number, y: number) => void;
     onContextMenuOpen: () => void;
-    /** Rect de la cellule au clic droit — pour ancrer un popover ouvert depuis le menu. */
-    onContextMenuOpenAt?: (rect: DOMRect) => void;
+    /** Rect de la cellule + X du clic droit — pour ancrer / cibler un popover ouvert depuis le menu. */
+    onContextMenuOpenAt?: (rect: DOMRect, clientX: number) => void;
     onCellMouseDown: (e: React.MouseEvent) => void;
     onDragExtend: () => void;
     onDropFavorite: () => void;
@@ -54,9 +54,9 @@ export default function TimeBlock({
                     onDoubleClick={(e) => { e.preventDefault(); onStartEdit(e.clientX, e.clientY); }}
                     onMouseDown={(e) => onCellMouseDown(e)}
                     onMouseEnter={() => onDragExtend()}
-                    onContextMenu={() => {
+                    onContextMenu={(e) => {
                         const r = cellRef.current?.getBoundingClientRect();
-                        if (r) onContextMenuOpenAt?.(r);
+                        if (r) onContextMenuOpenAt?.(r, e.clientX);
                     }}
                     onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true); }}
                     onDragLeave={() => setIsDragOver(false)}

@@ -107,6 +107,8 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
     const scrollRef = useRef<HTMLDivElement>(null);
     const [editingSlot, setEditingSlot] = useState<string | null>(null);
     const [editMousePos, setEditMousePos] = useState<{ x: number; y: number } | null>(null);
+    // Plage de créneaux vides sélectionnée par clic-glisser → popover de création à la souris.
+    const [rangeDraft, setRangeDraft] = useState<{ slots: string[]; pos: { x: number; y: number } } | null>(null);
 
     const [showPasteWarning, setShowPasteWarning] = useState(false);
     const [tick, setTick] = useState(0);
@@ -198,6 +200,12 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         ops,
         onChanged: () => { /* onWorkDayUpdate déjà appelé par ops */ },
         onNeedsPasteWarning: () => setShowPasteWarning(true),
+        onDragRange: (slots, pos) => {
+            if (slots.every((s) => !entryMap.has(s))) {
+                setEditingSlot(null);
+                setRangeDraft({ slots, pos });
+            }
+        },
     });
 
     // ── Calcul position du popover ────────────────────────────────────────
@@ -249,10 +257,34 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                 />
             )}
 
+            {/* Popover de création sur une plage de créneaux vides (fin d'un clic-glisser) */}
+            {rangeDraft !== null && (
+                <EditPopover
+                    slot={rangeDraft.slots[0]!}
+                    entry={null}
+                    anchorTop={0}
+                    scrollContainer={scrollRef.current}
+                    mousePos={rangeDraft.pos}
+                    knownTickets={knownTickets}
+                    onSave={(ticketKey, type, comment, ticketSummary, ticketType) => {
+                        const rd = rangeDraft;
+                        setRangeDraft(null);
+                        grid.clearSelection();
+                        if (rd === null || (ticketKey === null && type !== EntryType.BREAK)) return;
+                        void grid.fillRange(rd.slots, {
+                            ticketKey, ticketSummary, ticketType, comment, type,
+                            endedAt: getNextSlot(rd.slots[0]!),
+                        });
+                    }}
+                    onCancel={() => { setRangeDraft(null); grid.clearSelection(); }}
+                    onClear={() => { setRangeDraft(null); grid.clearSelection(); }}
+                />
+            )}
+
             <div
                 ref={scrollRef}
                 className="flex-1 overflow-y-auto"
-                style={editingSlot !== null ? { overflow: 'hidden' } : undefined}
+                style={editingSlot !== null || rangeDraft !== null ? { overflow: 'hidden' } : undefined}
                 onClick={() => {
                     if (!grid.consumeDragMoved()) grid.clearSelection();
                 }}

@@ -35,6 +35,8 @@ export interface SlotCell {
     type: EntryType;
     startedAt: string;      // "HH:mm"
     endedAt: string | null; // "HH:mm"
+    /** Récurrence (vue Modèles) — absent en vue jour. */
+    intervalWeeks?: number;
 }
 
 export interface SlotCellInput {
@@ -44,12 +46,19 @@ export interface SlotCellInput {
     comment: string | null;
     type: EntryType;
     endedAt: string;        // "HH:mm"
+    /** Récurrence (vue Modèles) — ignoré par la vue jour. */
+    intervalWeeks?: number;
 }
 
 export interface SlotGridOps {
     createCell(slot: string, data: SlotCellInput): Promise<SlotCell[]>;
     updateCell(cell: SlotCell, data: SlotCellInput): Promise<SlotCell[]>;
     deleteCell(cell: SlotCell): Promise<SlotCell[]>;
+    /**
+     * Optionnel : retire seulement `slots` d'une cellule (un bloc qui couvre plusieurs
+     * créneaux se scinde/rétrécit). Absent → le hook supprime la cellule entière.
+     */
+    clearSlots?(cell: SlotCell, slots: string[]): Promise<SlotCell[]>;
 }
 
 export interface UseSlotGridArgs {
@@ -61,6 +70,12 @@ export interface UseSlotGridArgs {
     onChanged: (cells: SlotCell[]) => void;
     /** Appelé quand ⌘V est pressé sur une multi-sélection avec un presse-papier multi-cellules. */
     onNeedsPasteWarning?: () => void;
+    /**
+     * Appelé à la fin d'un clic-glisser d'au moins 2 créneaux qui a réellement bougé,
+     * avec la position souris du relâchement. Le consommateur décide s'il ouvre un
+     * popover de création (typiquement : uniquement si la plage ne contient aucun bloc).
+     */
+    onDragRange?: (slots: string[], pos: { x: number; y: number }) => void;
 }
 
 export interface UseSlotGridResult {
@@ -80,6 +95,10 @@ export interface UseSlotGridResult {
     onDropFavorite(slot: string): void;
     /** Crée / met à jour / supprime la cellule d'un créneau. `null` sur une cellule existante = suppression. */
     save(slot: string, data: SlotCellInput | null): Promise<void>;
+    /** Applique `data` à chaque créneau de la plage en une seule étape d'historique (une cellule de 15 min par créneau). */
+    fillRange(slots: string[], data: SlotCellInput): Promise<void>;
+    /** Vide les piles undo/redo (après une action que le moteur ne sait pas représenter). */
+    clearHistory(): void;
     clearSelection(): void;
     /** true si le clic vient de terminer un drag (le consommateur ne doit pas déclencher un clic simple). */
     consumeDragMoved(): boolean;
@@ -93,11 +112,22 @@ export function useSlotGrid({
     ops,
     onChanged,
     onNeedsPasteWarning,
+    onDragRange,
 }: UseSlotGridArgs): UseSlotGridResult {
-    const entryMap = useMemo(
-        () => new Map(cells.map((c) => [c.startedAt, c])),
-        [cells],
-    );
+    // Chaque créneau *couvert* par une cellule pointe vers elle (pas seulement son créneau
+    // de départ) : en vue jour une cellule = 1 créneau (identique à avant), en vue Modèles
+    // un bloc multi-créneaux devient adressable depuis n'importe lequel de ses créneaux.
+    const entryMap = useMemo(() => {
+        const m = new Map<string, SlotCell>();
+        for (const c of cells) {
+            const startIdx = slots.indexOf(c.startedAt);
+            if (-1 === startIdx) { m.set(c.startedAt, c); continue; }
+            const endIdx = c.endedAt ? slots.indexOf(c.endedAt) : startIdx + 1;
+            const lastIdx = -1 === endIdx ? startIdx : Math.max(startIdx, endIdx - 1);
+            for (let i = startIdx; i <= lastIdx; i++) m.set(slots[i]!, c);
+        }
+        return m;
+    }, [cells, slots]);
 
     // ── Sélection ─────────────────────────────────────────────────────────
     const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
@@ -169,6 +199,11 @@ export function useSlotGrid({
     // ── Drag ──────────────────────────────────────────────────────────────
     const [isDragging, setIsDragging] = useState(false);
     const dragMovedRef = useRef(false);
+    const lastMouseRef = useRef({ x: 0, y: 0 });
+    const selectedSlotsRef = useRef(selectedSlots);
+    selectedSlotsRef.current = selectedSlots;
+    const onDragRangeRef = useRef(onDragRange);
+    onDragRangeRef.current = onDragRange;
 
     const onCellMouseDown = useCallback(
         (slot: string, e: React.MouseEvent) => {
@@ -201,30 +236,37 @@ export function useSlotGrid({
 
     useEffect(() => {
         if (!isDragging) return;
-        function onUp() { setIsDragging(false); }
-        document.addEventListener('mouseup', onUp);
-        return () => document.removeEventListener('mouseup', onUp);
-    }, [isDragging]);
-
-    useEffect(() => {
-        if (!isDragging) return;
-        let lastY = 0;
         let frame = 0;
-        function onMove(e: MouseEvent) { lastY = e.clientY; }
+        function onMove(e: MouseEvent) {
+            lastMouseRef.current = { x: e.clientX, y: e.clientY };
+        }
+        function onUp() {
+            setIsDragging(false);
+            // Fin d'un glisser qui a bougé sur ≥ 2 créneaux → signal de création de plage.
+            if (dragMovedRef.current) {
+                const dragged = [...selectedSlotsRef.current];
+                if (dragged.length >= 2) {
+                    onDragRangeRef.current?.(dragged, { ...lastMouseRef.current });
+                }
+            }
+        }
         function tick() {
             const el = scrollRef.current;
+            const y = lastMouseRef.current.y;
             if (el) {
                 const r = el.getBoundingClientRect();
                 const t = 60;
-                if (lastY > r.top && lastY < r.top + t) el.scrollTop -= 6;
-                else if (lastY < r.bottom && lastY > r.bottom - t) el.scrollTop += 6;
+                if (y > r.top && y < r.top + t) el.scrollTop -= 6;
+                else if (y < r.bottom && y > r.bottom - t) el.scrollTop += 6;
             }
             frame = requestAnimationFrame(tick);
         }
         document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
         frame = requestAnimationFrame(tick);
         return () => {
             document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
             cancelAnimationFrame(frame);
         };
     }, [isDragging, scrollRef]);
@@ -250,23 +292,29 @@ export function useSlotGrid({
         const sorted = [...selectedSlots].sort();
         if (0 === sorted.length) return;
         const anchorIdx = slots.indexOf(sorted[0] as string);
-        const value: ClipboardData = {
-            cells: sorted.map((slot) => {
-                const idx = slots.indexOf(slot);
-                const entry = entryMap.get(slot) ?? null;
-                return {
-                    offset: idx - anchorIdx,
-                    ticketKey: entry?.ticketKey ?? null,
-                    ticketSummary: entry?.ticketSummary ?? null,
-                    ticketType: entry?.ticketType ?? null,
-                    comment: entry?.comment ?? null,
-                    type: entry?.type ?? EntryType.WORK,
-                    isEmpty: null === entry,
-                    // Longueur du bloc source (utile en vue Modèles ; 15 min en vue jour).
-                    durationMinutes: entry?.endedAt ? spanMinutes(entry.startedAt, entry.endedAt) : undefined,
-                };
-            }),
-        };
+        // Un bloc multi-créneaux (même cellule sur plusieurs créneaux) n'est copié qu'une fois,
+        // à l'offset de son créneau de départ.
+        const seen = new Set<string>();
+        const cellsOut: ClipboardData['cells'] = [];
+        for (const slot of sorted) {
+            const idx = slots.indexOf(slot);
+            const entry = entryMap.get(slot) ?? null;
+            if (entry && seen.has(entry.id)) continue;
+            if (entry) seen.add(entry.id);
+            const baseIdx = entry ? slots.indexOf(entry.startedAt) : idx;
+            cellsOut.push({
+                offset: baseIdx - anchorIdx,
+                ticketKey: entry?.ticketKey ?? null,
+                ticketSummary: entry?.ticketSummary ?? null,
+                ticketType: entry?.ticketType ?? null,
+                comment: entry?.comment ?? null,
+                type: entry?.type ?? EntryType.WORK,
+                isEmpty: null === entry,
+                // Longueur du bloc source (utile en vue Modèles ; 15 min en vue jour).
+                durationMinutes: entry?.endedAt ? spanMinutes(entry.startedAt, entry.endedAt) : undefined,
+            });
+        }
+        const value: ClipboardData = { cells: cellsOut };
         setClipboard(value);
         writeClipboard(value);
     }, [selectedSlots, slots, entryMap]);
@@ -302,6 +350,12 @@ export function useSlotGrid({
         persistStacks(u, []);
     }, [undoStack, cells, persistStacks]);
 
+    const clearHistory = useCallback(() => {
+        setUndoStack([]);
+        setRedoStack([]);
+        persistStacks([], []);
+    }, [persistStacks]);
+
     const reconcile = useCallback(
         async (target: SlotCell[]) => {
             const curMap = new Map(cells.map((c) => [c.startedAt, c]));
@@ -324,13 +378,27 @@ export function useSlotGrid({
             }
             for (const [, tgt] of tgtMap) {
                 const cur = curMap.get(tgt.startedAt);
-                if (cur && (
+                if (!cur) continue;
+                const tgtEnd = tgt.endedAt ?? getNextSlot(tgt.startedAt);
+                const durChanged = (cur.endedAt ?? getNextSlot(cur.startedAt)) !== tgtEnd;
+                const contentChanged =
                     cur.ticketKey !== tgt.ticketKey
                     || cur.type !== tgt.type
                     || cur.comment !== tgt.comment
                     || cur.ticketSummary !== tgt.ticketSummary
-                    || cur.ticketType !== tgt.ticketType
-                )) {
+                    || cur.ticketType !== tgt.ticketType;
+                if (durChanged) {
+                    // Durée modifiée (ex : bloc scindé/rétréci) → recréer à la bonne longueur.
+                    await ops.deleteCell(cur);
+                    latest = await ops.createCell(tgt.startedAt, {
+                        ticketKey: tgt.ticketKey,
+                        ticketSummary: tgt.ticketSummary,
+                        ticketType: tgt.ticketType,
+                        comment: tgt.comment,
+                        type: tgt.type,
+                        endedAt: tgtEnd,
+                    });
+                } else if (contentChanged) {
                     latest = await ops.updateCell(cur, {
                         ticketKey: tgt.ticketKey,
                         ticketSummary: tgt.ticketSummary,
@@ -380,12 +448,16 @@ export function useSlotGrid({
                     return;
                 }
                 if (existing) {
+                    const intervalUnchanged =
+                        data.intervalWeeks === undefined
+                        || data.intervalWeeks === existing.intervalWeeks;
                     if (
                         existing.type === data.type
                         && existing.ticketKey === data.ticketKey
                         && existing.comment === data.comment
                         && existing.ticketSummary === data.ticketSummary
                         && existing.ticketType === data.ticketType
+                        && intervalUnchanged
                     ) return;
                     pushHistory();
                     onChanged(await ops.updateCell(existing, data));
@@ -402,16 +474,52 @@ export function useSlotGrid({
         [entryMap, ops, onChanged, pushHistory],
     );
 
-    const onClearRange = useCallback(
-        async (targetSlots: Set<string>) => {
-            const toDelete = [...targetSlots]
-                .map((s) => entryMap.get(s))
-                .filter((c): c is SlotCell => !!c);
-            if (0 === toDelete.length) return;
+    const fillRange = useCallback(
+        async (targetSlots: string[], data: SlotCellInput) => {
+            if (0 === targetSlots.length) return;
             pushHistory();
             let latest: SlotCell[] = cells;
-            for (const cell of toDelete) {
-                try { latest = await ops.deleteCell(cell); } catch { /* */ }
+            for (const slot of targetSlots) {
+                if (pendingSlotsRef.current.has(slot)) continue;
+                pendingSlotsRef.current.add(slot);
+                const existing = entryMap.get(slot);
+                // Une cellule de 15 min par créneau ; les créneaux adjacents identiques
+                // se fusionnent visuellement (vue jour) ou forment un bloc (vue Modèles via ops).
+                const perSlot: SlotCellInput = { ...data, endedAt: getNextSlot(slot) };
+                try {
+                    if (existing) latest = await ops.updateCell(existing, perSlot);
+                    else latest = await ops.createCell(slot, perSlot);
+                } catch { /* ops gèrent le message */ } finally {
+                    pendingSlotsRef.current.delete(slot);
+                }
+            }
+            onChanged(latest);
+        },
+        [entryMap, cells, ops, onChanged, pushHistory],
+    );
+
+    const onClearRange = useCallback(
+        async (targetSlots: Set<string>) => {
+            // Regroupe les créneaux sélectionnés par cellule touchée.
+            const byId = new Map<string, { cell: SlotCell; slots: string[] }>();
+            for (const s of targetSlots) {
+                const c = entryMap.get(s);
+                if (!c) continue;
+                const e = byId.get(c.id) ?? { cell: c, slots: [] };
+                e.slots.push(s);
+                byId.set(c.id, e);
+            }
+            if (0 === byId.size) return;
+            pushHistory();
+            let latest: SlotCell[] = cells;
+            for (const { cell, slots: cellSlots } of byId.values()) {
+                try {
+                    // `clearSlots` (vue Modèles) retire seulement les créneaux sélectionnés ;
+                    // sinon on supprime la cellule entière (vue jour : 1 cellule = 1 créneau).
+                    latest = ops.clearSlots
+                        ? await ops.clearSlots(cell, cellSlots)
+                        : await ops.deleteCell(cell);
+                } catch { /* */ }
             }
             onChanged(latest);
         },
@@ -421,9 +529,12 @@ export function useSlotGrid({
     const onConvertToBreak = useCallback(
         async (targetSlots: Set<string>) => {
             const arr = [...targetSlots];
-            const toConvert = arr
-                .map((s) => entryMap.get(s))
-                .filter((c): c is SlotCell => !!c && c.type !== EntryType.BREAK);
+            const byId = new Map<string, SlotCell>();
+            for (const s of arr) {
+                const c = entryMap.get(s);
+                if (c && c.type !== EntryType.BREAK) byId.set(c.id, c);
+            }
+            const toConvert = [...byId.values()];
             const empties = arr.filter((s) => !entryMap.has(s));
             if (0 === toConvert.length && 0 === empties.length) return;
             pushHistory();
@@ -600,6 +711,8 @@ export function useSlotGrid({
         onConvertToBreak,
         onDropFavorite,
         save,
+        fillRange,
+        clearHistory,
         clearSelection,
         consumeDragMoved,
     };

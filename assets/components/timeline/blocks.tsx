@@ -1,6 +1,7 @@
 import { Coffee } from 'lucide-react';
 import { formatMinutes, SLOT_PX } from '@/utils/timeline';
 import { t } from '@/i18n/fr';
+import { cn } from '@/lib/utils';
 
 // Composants purement visuels d'un bloc de la grille (timeline jour + grille Modèles).
 // Aucune logique d'interaction : positionnés en absolu par le parent via top/height.
@@ -15,11 +16,18 @@ export interface WorkBlockProps {
     colors: { bg: string; bar: string; text: string; border: string; ring: string };
     runDurationMinutes: number;
     isSelected: boolean;
+    /** Afficher la durée même sur un créneau de 15 min (défaut : oui — vue jour ; la vue Modèles passe `false`). */
+    showShortDuration?: boolean;
+    /** Colonnes étroites (vue Modèles) : resserre l'espacement ID ↔ titre. */
+    compact?: boolean;
 }
 
-export function WorkBlock({ top, height, slotCount, ticket, summary, comment, colors, runDurationMinutes }: WorkBlockProps) {
+export function WorkBlock({ top, height, slotCount, ticket, summary, comment, colors, runDurationMinutes, showShortDuration = true, compact = false }: WorkBlockProps) {
     const single = slotCount === 1;
     const dur = formatMinutes(runDurationMinutes);
+    const showDur = showShortDuration || runDurationMinutes > 15;
+    const idWidth = compact ? 58 : 80;
+    const idGap = compact ? '6px' : '10px';
 
     return (
         <div
@@ -36,12 +44,12 @@ export function WorkBlock({ top, height, slotCount, ticket, summary, comment, co
             <div className="w-1 shrink-0 self-stretch" style={{ background: colors.bar }} />
 
             {/* Corps */}
-            <div className="relative flex flex-col flex-1 min-w-0 overflow-hidden px-3">
+            <div className={cn('relative flex flex-col flex-1 min-w-0 overflow-hidden', compact ? 'px-2' : 'px-3')}>
                 {single ? (
                     /* Créneau unique — 3 colonnes : ID | [titre commentaire] | durée */
                     <div
                         className="grid items-center h-full min-w-0"
-                        style={{ gridTemplateColumns: '80px minmax(0,1fr) auto', gap: '10px' }}
+                        style={{ gridTemplateColumns: `${idWidth}px minmax(0,1fr) auto`, gap: idGap }}
                     >
                         <span
                             className="font-mono text-[12.5px] font-semibold tabular-nums tracking-wide truncate"
@@ -50,7 +58,7 @@ export function WorkBlock({ top, height, slotCount, ticket, summary, comment, co
                             {ticket}
                         </span>
                         {/* Titre collé au commentaire — gap identique au gap externe ; titre coupé à 50% si commentaire */}
-                        <div className="flex items-center min-w-0 overflow-hidden" style={{ gap: '16px' }}>
+                        <div className="flex items-center min-w-0 overflow-hidden" style={{ gap: compact ? '8px' : '16px' }}>
                             {(summary || !comment) && (
                                 <span
                                     className="text-[12.5px] font-medium text-gray-800 truncate shrink-0"
@@ -65,20 +73,22 @@ export function WorkBlock({ top, height, slotCount, ticket, summary, comment, co
                                 </span>
                             )}
                         </div>
-                        <span className="font-mono text-[11.5px] font-medium tabular-nums shrink-0" style={{ color: 'oklch(0.556 0 0)' }}>
-                            {dur}
-                        </span>
+                        {showDur && (
+                            <span className="font-mono text-[11.5px] font-medium tabular-nums shrink-0" style={{ color: 'oklch(0.556 0 0)' }}>
+                                {dur}
+                            </span>
+                        )}
                     </div>
                 ) : (
                     /* Bloc multi-créneaux */
                     <>
                         <div
                             className="flex min-w-0"
-                            style={{ gap: '10px', minHeight: SLOT_PX - 2 }}
+                            style={{ gap: idGap, minHeight: SLOT_PX - 2 }}
                         >
                             <span
                                 className="font-mono text-[12.5px] font-semibold tabular-nums tracking-wide truncate shrink-0"
-                                style={{ color: colors.text, width: 80, paddingTop: 4 }}
+                                style={{ color: colors.text, width: idWidth, paddingTop: 4 }}
                             >
                                 {ticket}
                             </span>
@@ -102,14 +112,16 @@ export function WorkBlock({ top, height, slotCount, ticket, summary, comment, co
                             </div>
                         </div>
                         {/* Durée absolue en bas à droite */}
-                        <div className="absolute bottom-1 right-2 pointer-events-none">
-                            <span
-                                className="font-mono text-[11.5px] font-medium tabular-nums pl-1"
-                                style={{ color: 'oklch(0.556 0 0)', background: colors.bg }}
-                            >
-                                {dur}
-                            </span>
-                        </div>
+                        {showDur && (
+                            <div className="absolute bottom-1 right-2 pointer-events-none">
+                                <span
+                                    className="font-mono text-[11.5px] font-medium tabular-nums pl-1"
+                                    style={{ color: 'oklch(0.556 0 0)', background: colors.bg }}
+                                >
+                                    {dur}
+                                </span>
+                            </div>
+                        )}
                     </>
                 )}
             </div>

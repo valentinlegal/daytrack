@@ -69,8 +69,8 @@ const fr = {
     },
     templates: {
         nav: "Modèles",
-        banner: "Semaine type — s'applique aux futurs jours vides",
-        back_to_day: "Retour au jour",
+        banner: "Semaine type appliquée aux futures journées encore vides",
+        back_to_day: "Retour",
         loading: "Chargement des modèles…",
         weekday: {
             "1": "Lundi",
@@ -82,7 +82,7 @@ const fr = {
             "7": "Dimanche",
         },
         target: {
-            hint: "Objectif du jour — vide = 7h30 par défaut",
+            hint: "Objectif du jour (7h30 par défaut si vide)",
             invalid: "Format invalide (ex : 6h30)",
         },
         block: {
@@ -102,7 +102,8 @@ const fr = {
             clear_end_date: "Retirer la date de fin",
             end_date_title: "Dernière semaine d'application",
             end_date_confirm: "Appliquer",
-            cadence_tooltip: "Une semaine sur {n} — bloc {pos}/{size}",
+            cadence_tooltip: "Une semaine sur {n}, bloc {pos}/{size}",
+            locked_by_rotation: "Récurrence non modifiable sur une alternance.",
         },
         stack: {
             title: "Ce créneau est déjà occupé",
@@ -119,9 +120,12 @@ const fr = {
             title: "Alterner ce créneau une semaine sur deux",
             ticket_label: "Ticket de l'autre semaine",
             start_label: "À partir de quelle semaine ?",
-            start_hint: "Jamais dans le passé — aujourd'hui par défaut.",
+            start_hint: "Aujourd'hui par défaut. Une date passée n'est pas acceptée.",
             confirm: "Créer l'alternance",
             cancel: "Annuler",
+            add_more: "Ajouter un ticket à l'alternance",
+            ticket_label_more: "Ticket à ajouter",
+            add_more_confirm: "Ajouter",
         },
         error: {
             load: "Impossible de charger les modèles",

@@ -27,7 +27,7 @@ readonly class UpdateTemplateRuleInput
         #[Assert\Length(max: 500)]
         public ?string $comment = null,
 
-        #[Assert\Positive]
+        #[Assert\PositiveOrZero]
         public ?int $targetMinutes = null,
 
         #[Assert\Range(min: 1, max: 7)]

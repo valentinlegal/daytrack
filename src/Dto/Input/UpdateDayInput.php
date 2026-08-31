@@ -10,7 +10,7 @@ readonly class UpdateDayInput
 {
     public function __construct(
         #[Assert\NotNull]
-        #[Assert\Range(min: 1, max: 1440)]
+        #[Assert\Range(min: 0, max: 1440)]
         public ?int $targetMinutes = null,
     ) {}
 }

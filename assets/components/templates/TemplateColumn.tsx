@@ -30,6 +30,7 @@ import type { SlotCell, SlotCellInput } from '@/hooks/useSlotGrid';
 import { WorkBlock, PauseBlock } from '@/components/timeline/blocks';
 import TimeBlock from '@/components/timeline/TimeBlock';
 import EditPopover from '@/components/timeline/EditPopover';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { t } from '@/i18n/fr';
 import { cn } from '@/lib/utils';
 import TemplateBlockMenu from './TemplateBlockMenu';
@@ -42,6 +43,9 @@ interface TemplateColumnProps {
     onChanged: () => void;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     onNeedsPasteWarning: () => void;
+    /** iso de la colonne dont la sélection est active — les autres colonnes vident la leur. */
+    activeIso: number | null;
+    onActivate: (iso: number) => void;
 }
 
 /** "HH:mm" + N minutes → "HH:mm". */
@@ -71,11 +75,33 @@ export default function TemplateColumn({
     onChanged,
     scrollRef,
     onNeedsPasteWarning,
+    activeIso,
+    onActivate,
 }: TemplateColumnProps) {
     const columnRules = useMemo(() => entryRulesForWeekday(rules, iso), [rules, iso]);
     const blocks = useMemo(() => buildColumnBlocks(rules, iso), [rules, iso]);
     const targetRule = useMemo(() => targetRuleForWeekday(rules, iso), [rules, iso]);
     const gridHeight = GRID_SLOTS.length * SLOT_PX;
+    const bodyRef = useRef<HTMLDivElement>(null);
+
+    /** Règle visée sur un créneau ; sur une alternance, choisit le membre selon la position X du clic. */
+    function resolveRuleAt(slot: string, clientX: number): TemplateRule | null {
+        const slotMin = timeToMinutes(slot);
+        const here = columnRules.filter(
+            (r) => r.startTime !== null && r.durationMinutes !== null
+                && timeToMinutes(r.startTime) <= slotMin
+                && slotMin < timeToMinutes(r.startTime) + r.durationMinutes,
+        );
+        if (here.length <= 1) return here[0] ?? null;
+        const members = [...here].sort((a, b) => a.anchorDate.localeCompare(b.anchorDate));
+        const body = bodyRef.current?.getBoundingClientRect();
+        if (!body || body.width === 0) return members[0]!;
+        const idx = Math.min(
+            members.length - 1,
+            Math.max(0, Math.floor((clientX - body.left) / (body.width / members.length))),
+        );
+        return members[idx]!;
+    }
 
     // Chaque créneau couvert par une règle → la règle (pas seulement le créneau de départ),
     // pour que le clic droit / l'édition visent tout le bloc.
@@ -104,6 +130,7 @@ export default function TemplateColumn({
                 type: r.ruleType === TemplateRuleType.BREAK ? EntryType.BREAK : EntryType.WORK,
                 startedAt: r.startTime as string,
                 endedAt: addMinutes(r.startTime as string, r.durationMinutes as number),
+                intervalWeeks: r.intervalWeeks,
             })),
         [columnRules],
     );
@@ -116,7 +143,7 @@ export default function TemplateColumn({
                 weekday: iso,
                 startTime: slot,
                 durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(slot)),
-                intervalWeeks: 1,
+                intervalWeeks: data.intervalWeeks ?? 1,
                 ...(isBreak ? {} : {
                     ticketKey: data.ticketKey,
                     ticketSummary: data.ticketSummary,
@@ -138,7 +165,7 @@ export default function TemplateColumn({
                     weekday: iso,
                     startTime: cell.startedAt,
                     durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(cell.startedAt)),
-                    intervalWeeks: rule.intervalWeeks,
+                    intervalWeeks: data.intervalWeeks ?? rule.intervalWeeks,
                     anchorDate: rule.anchorDate,
                     activeUntil: rule.activeUntil,
                     enabled: rule.enabled,
@@ -151,12 +178,16 @@ export default function TemplateColumn({
                     }),
                 });
             } else {
-                await updateTemplateRule(cell.id, {
+                const patch: Record<string, unknown> = {
                     ticketKey: targetIsBreak ? null : data.ticketKey,
                     ticketSummary: targetIsBreak ? null : data.ticketSummary,
                     ticketType: targetIsBreak ? null : data.ticketType,
                     comment: targetIsBreak ? null : data.comment,
-                });
+                };
+                if (data.intervalWeeks !== undefined && data.intervalWeeks !== rule?.intervalWeeks) {
+                    patch.intervalWeeks = data.intervalWeeks;
+                }
+                await updateTemplateRule(cell.id, patch);
             }
             onChanged();
             return [];
@@ -166,7 +197,125 @@ export default function TemplateColumn({
             onChanged();
             return [];
         },
+        // Retire seulement `slots` d'un bloc : rétrécit (bord) ou scinde en deux règles (milieu).
+        async clearSlots(cell: SlotCell, slots: string[]): Promise<SlotCell[]> {
+            const rule = ruleBySlot.get(cell.startedAt);
+            if (!rule || rule.startTime === null || rule.durationMinutes === null) {
+                await deleteTemplateRule(cell.id);
+                onChanged();
+                return [];
+            }
+            const startMin = timeToMinutes(rule.startTime);
+            const removeMins = new Set(slots.map((s) => timeToMinutes(s)));
+            const remaining: number[] = [];
+            for (let m = startMin; m < startMin + rule.durationMinutes; m += SLOT_MINUTES) {
+                if (!removeMins.has(m)) remaining.push(m);
+            }
+            if (remaining.length === 0) {
+                await deleteTemplateRule(rule.id);
+                onChanged();
+                return [];
+            }
+            // Séries contiguës de créneaux restants.
+            const runs: Array<[number, number]> = [];
+            let runStart = remaining[0]!;
+            let prev = remaining[0]!;
+            for (let i = 1; i < remaining.length; i++) {
+                const m = remaining[i]!;
+                if (m === prev + SLOT_MINUTES) { prev = m; continue; }
+                runs.push([runStart, prev + SLOT_MINUTES]);
+                runStart = m;
+                prev = m;
+            }
+            runs.push([runStart, prev + SLOT_MINUTES]);
+
+            const isBreak = rule.ruleType === TemplateRuleType.BREAK;
+            const content = isBreak ? {} : {
+                ticketKey: rule.ticketKey,
+                ticketSummary: rule.ticketSummary,
+                ticketType: rule.ticketType,
+                comment: rule.comment,
+            };
+            // 1re série → règle d'origine (mise à jour) ; suivantes → nouvelles règles.
+            const [f0, f1] = runs[0]!;
+            await updateTemplateRule(rule.id, {
+                startTime: minutesToTime(f0),
+                durationMinutes: f1 - f0,
+            });
+            for (let i = 1; i < runs.length; i++) {
+                const [s, e] = runs[i]!;
+                await createTemplateRule({
+                    ruleType: rule.ruleType,
+                    weekday: iso,
+                    startTime: minutesToTime(s),
+                    durationMinutes: e - s,
+                    intervalWeeks: rule.intervalWeeks,
+                    anchorDate: rule.anchorDate,
+                    activeUntil: rule.activeUntil,
+                    enabled: rule.enabled,
+                    rotationGroupId: rule.rotationGroupId,
+                    ...content,
+                });
+            }
+            onChanged();
+            return [];
+        },
     }), [iso, ruleBySlot, onChanged]);
+
+    // ── Édition d'un créneau (création simple + édition d'un bloc existant) ──
+    const [editingSlot, setEditingSlot] = useState<string | null>(null);
+    // Règle précise en cours d'édition (null = création). Nécessaire pour une alternance :
+    // deux règles partagent le même créneau, on ne peut pas la retrouver via le créneau seul.
+    const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+    const [editMousePos, setEditMousePos] = useState<{ x: number; y: number } | null>(null);
+    // Rect + X du dernier clic droit — pour ancrer / cibler les popovers ouverts depuis le menu.
+    const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
+    const menuClickXRef = useRef(0);
+    // Récurrence choisie dans le formulaire (champ ajouté au EditPopover).
+    const [draftInterval, setDraftInterval] = useState(1);
+    const [recurrenceError, setRecurrenceError] = useState<string | null>(null);
+    const editingRule = editingRuleId !== null ? (columnRules.find((r) => r.id === editingRuleId) ?? null) : null;
+
+    // Plage de créneaux libres sélectionnée par clic-glisser → popover de création à la souris.
+    const [rangeCreate, setRangeCreate] = useState<{ slots: string[]; pos: { x: number; y: number } } | null>(null);
+
+    function openEditor(rule: TemplateRule | null, slot: string, pos: { x: number; y: number }) {
+        setRangeCreate(null);
+        setRecurrenceError(null);
+        setDraftInterval(rule?.intervalWeeks ?? 1);
+        setEditingRuleId(rule?.id ?? null);
+        setEditMousePos(pos);
+        setEditingSlot(rule?.startTime ?? slot);
+    }
+    function closeEditor() {
+        setEditingSlot(null);
+        setEditingRuleId(null);
+        setEditMousePos(null);
+        setRecurrenceError(null);
+    }
+    // Identité stable : évite que le useEffect([entry]) du EditPopover ne réécrase la saisie.
+    const editingEntry = useMemo(() => (editingRule ? ruleToEntry(editingRule) : null), [editingRule]);
+
+    /** Sélecteur d'intervalle injecté dans le EditPopover. */
+    const recurrenceField = (
+        <label className="flex flex-col gap-1">
+            <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                {t('templates.recurrence.menu')}
+            </span>
+            <select
+                value={draftInterval}
+                onChange={(e) => { setDraftInterval(Number(e.target.value)); setRecurrenceError(null); }}
+                className="h-8 rounded-md border border-input bg-background px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+                <option value={1}>{t('templates.recurrence.every_week')}</option>
+                {[2, 3, 4].map((n) => (
+                    <option key={n} value={n}>
+                        {t('templates.recurrence.every_n_weeks').replace('{n}', String(n))}
+                    </option>
+                ))}
+            </select>
+        </label>
+    );
 
     const grid = useSlotGrid({
         slots: GRID_SLOTS,
@@ -176,7 +325,23 @@ export default function TemplateColumn({
         ops,
         onChanged: () => { /* ops appellent déjà props.onChanged (reload de la page) */ },
         onNeedsPasteWarning,
+        onDragRange: (slots, pos) => {
+            // N'ouvrir la création que si la plage ne contient aucun bloc.
+            if (slots.every((s) => !ruleBySlot.has(s))) {
+                closeEditor();
+                setDraftInterval(1);
+                setRangeCreate({ slots, pos });
+            }
+        },
     });
+
+    // Une seule colonne garde sa sélection à la fois.
+    useEffect(() => {
+        if (grid.selectedSlots.size > 0 && activeIso !== iso) onActivate(iso);
+    }, [grid.selectedSlots.size, activeIso, iso, onActivate]);
+    useEffect(() => {
+        if (activeIso !== null && activeIso !== iso) grid.clearSelection();
+    }, [activeIso, iso, grid.clearSelection]);
 
     // ── Objectif du jour ──────────────────────────────────────────────────
     const [editingTarget, setEditingTarget] = useState(false);
@@ -229,29 +394,6 @@ export default function TemplateColumn({
         if (e.key === 'Enter') void saveTarget();
         else if (e.key === 'Escape') setEditingTarget(false);
     }
-
-    // ── Édition d'un créneau (création simple + édition d'un bloc existant) ──
-    const [editingSlot, setEditingSlot] = useState<string | null>(null);
-    const [editMousePos, setEditMousePos] = useState<{ x: number; y: number } | null>(null);
-    // Rect de la dernière cellule clic-droitée — pour ancrer les popovers ouverts depuis le menu.
-    const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
-    const editingRule = editingSlot !== null ? (ruleBySlot.get(editingSlot) ?? null) : null;
-
-    // ── Création d'une plage par clic-glisser sur des créneaux libres ──────
-    const [rangeCreate, setRangeCreate] = useState<{ start: string; count: number } | null>(null);
-    const wasDraggingRef = useRef(false);
-
-    useEffect(() => {
-        if (grid.isDragging) { wasDraggingRef.current = true; return; }
-        if (!wasDraggingRef.current) return;
-        wasDraggingRef.current = false;
-        const sel = [...grid.selectedSlots].sort();
-        // Un glisser sur ≥ 2 créneaux tous libres ouvre le popover de création sur la plage.
-        // (Pour multi-sélectionner des créneaux libres — coller-multiple — utiliser shift-clic.)
-        if (sel.length >= 2 && sel.every((s) => !ruleBySlot.has(s))) {
-            setRangeCreate({ start: sel[0]!, count: sel.length });
-        }
-    }, [grid.isDragging, grid.selectedSlots, ruleBySlot]);
 
     // ── Récurrence / activation / suppression (inchangés) ─────────────────
     const [endDateRuleId, setEndDateRuleId] = useState<string | null>(null);
@@ -319,14 +461,10 @@ export default function TemplateColumn({
         try { await updateTemplateRule(id, { activeUntil: value }); onChanged(); } catch { /* */ }
     }
 
-    async function removeRule(rule: TemplateRule) {
-        try { await deleteTemplateRule(rule.id); onChanged(); } catch { /* */ }
-    }
-
     return (
         <div className="flex flex-col min-w-[150px] flex-1 border-r border-amber-200/70 last:border-r-0">
-            {/* En-tête : libellé jour + objectif */}
-            <div className="h-9 flex items-center justify-between px-2 shrink-0 border-b border-amber-200/70">
+            {/* En-tête : libellé jour + objectif — collé en haut au scroll vertical */}
+            <div className="sticky top-0 z-20 h-9 flex items-center justify-between px-2 shrink-0 border-b border-amber-200/70 bg-amber-50">
                 <span className="text-[13px] font-semibold text-amber-900/80">{weekdayLabel(iso)}</span>
                 {editingTarget ? (
                     <input
@@ -342,25 +480,31 @@ export default function TemplateColumn({
                         )}
                     />
                 ) : (
-                    <button
-                        onClick={startEditingTarget}
-                        title={t('templates.target.hint')}
-                        className={cn(
-                            'text-[12px] border-b border-dashed border-amber-400/50 hover:text-amber-950',
-                            // Objectif propre à ce jour : plein contraste. Valeur par défaut : atténuée.
-                            targetRule?.targetMinutes != null
-                                ? 'font-medium text-amber-900/80'
-                                : 'text-amber-900/45',
-                        )}
-                    >
-                        {formatMinutes(targetRule?.targetMinutes ?? DEFAULT_TARGET_MINUTES)}
-                    </button>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <button
+                                onClick={startEditingTarget}
+                                className={cn(
+                                    'text-[12px] border-b border-dashed border-amber-400/50 hover:text-amber-950',
+                                    // Objectif propre à ce jour : plein contraste. Valeur par défaut : atténuée.
+                                    targetRule?.targetMinutes != null
+                                        ? 'font-medium text-amber-900/80'
+                                        : 'text-amber-900/45',
+                                )}
+                            >
+                                {formatMinutes(targetRule?.targetMinutes ?? DEFAULT_TARGET_MINUTES)}
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{t('templates.target.hint')}</TooltipContent>
+                    </Tooltip>
                 )}
             </div>
 
-            {/* Corps : lignes de grille + blocs + cellules d'interaction */}
+            {/* Corps : lignes de grille + blocs + cellules d'interaction.
+                mt-2 : même respiration que la gouttière sous l'en-tête collé. */}
             <div
-                className="relative"
+                ref={bodyRef}
+                className="relative mt-2"
                 style={{ height: gridHeight }}
                 onClick={() => { if (!grid.consumeDragMoved()) grid.clearSelection(); }}
             >
@@ -405,6 +549,8 @@ export default function TemplateColumn({
                                         colors={getBlockColors(rule.ticketType)}
                                         runDurationMinutes={runDurationMinutes}
                                         isSelected={false}
+                                        showShortDuration={false}
+                                        compact
                                     />
                                 )}
                                 {!rule.enabled && (
@@ -449,13 +595,9 @@ export default function TemplateColumn({
                                     slot={slot}
                                     isSelected={grid.selectedSlots.has(slot)}
                                     onSelect={(e) => grid.onSelect(slot, e)}
-                                    onStartEdit={(x, y) => {
-                                        setEditMousePos({ x, y });
-                                        // Édition d'un bloc : viser son créneau de départ (clé de grid.save).
-                                        setEditingSlot(rule?.startTime ?? slot);
-                                    }}
+                                    onStartEdit={(x, y) => openEditor(resolveRuleAt(slot, x), slot, { x, y })}
                                     onContextMenuOpen={() => grid.onContextMenuOpen(slot)}
-                                    onContextMenuOpenAt={(r) => setMenuRect(r)}
+                                    onContextMenuOpenAt={(r, cx) => { setMenuRect(r); menuClickXRef.current = cx; }}
                                     onCellMouseDown={(e) => grid.onCellMouseDown(slot, e)}
                                     onDragExtend={() => grid.onDragExtend(slot)}
                                     onDropFavorite={() => grid.onDropFavorite(slot)}
@@ -469,20 +611,25 @@ export default function TemplateColumn({
                                             onPaste={() => void grid.onPaste(slot)}
                                             onClear={() => void grid.onClearRange(effectiveSelection)}
                                             onConvertToBreak={() => void grid.onConvertToBreak(effectiveSelection)}
-                                            onEdit={() => {
-                                                setEditMousePos(
-                                                    menuRect
-                                                        ? { x: menuRect.left, y: menuRect.bottom + 4 }
-                                                        : { x: window.innerWidth / 2, y: 200 },
-                                                );
-                                                setEditingSlot(rule?.startTime ?? slot);
-                                            }}
+                                            onEdit={() => openEditor(
+                                                resolveRuleAt(slot, menuClickXRef.current),
+                                                slot,
+                                                menuRect
+                                                    ? { x: menuRect.left, y: menuRect.bottom + 4 }
+                                                    : { x: window.innerWidth / 2, y: 200 },
+                                            )}
                                             onToggleType={() => {
                                                 if (!rule) return;
-                                                void recreateWithType(
-                                                    rule,
-                                                    rule.ruleType === TemplateRuleType.BREAK ? EntryType.WORK : EntryType.BREAK,
-                                                ).then(onChanged);
+                                                // pause → travail : pas d'équivalent dans le moteur → recréation directe,
+                                                // et on invalide l'historique (l'undo ne saurait pas le représenter).
+                                                if (rule.ruleType === TemplateRuleType.BREAK) {
+                                                    void recreateWithType(rule, EntryType.WORK).then(() => {
+                                                        grid.clearHistory();
+                                                        onChanged();
+                                                    });
+                                                } else {
+                                                    void grid.onConvertToBreak(new Set([slot]));
+                                                }
                                             }}
                                             onSetInterval={(n) => { if (rule) void setRuleInterval(rule, n); }}
                                             onSetEndDate={() => {
@@ -490,7 +637,19 @@ export default function TemplateColumn({
                                             }}
                                             onClearEndDate={() => { if (rule) void clearEndDate(rule); }}
                                             onToggleEnabled={() => { if (rule) void toggleEnabled(rule); }}
-                                            onDelete={() => { if (rule) void removeRule(rule); }}
+                                            // « Supprimer la règle » = tout le bloc : on passe tous ses créneaux.
+                                            onDelete={() => {
+                                                if (!rule || rule.startTime === null || rule.durationMinutes === null) {
+                                                    void grid.onClearRange(new Set([slot]));
+                                                    return;
+                                                }
+                                                const all = new Set<string>();
+                                                const sm = timeToMinutes(rule.startTime);
+                                                for (let m = sm; m < sm + rule.durationMinutes; m += SLOT_MINUTES) {
+                                                    all.add(minutesToTime(m));
+                                                }
+                                                void grid.onClearRange(all);
+                                            }}
                                         />
                                     }
                                 />
@@ -499,26 +658,22 @@ export default function TemplateColumn({
                     })}
                 </div>
 
-                {/* z10 — overlay alternance : badge de rotation OU bouton « + » (mutuellement exclusifs) */}
+                {/* z10 — overlay alternance : badge de rotation + bouton « + » (ajout d'un membre, jusqu'à 4) */}
                 <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
                     {blocks.map(({ rule, startSlotIndex, rotationSize, rotationIndex }) => {
                         const widthPct = 100 / rotationSize;
                         const leftPct = rotationIndex * widthPct;
+                        // « + » sur un bloc simple, ou sur le dernier membre d'une alternance de moins de 4.
+                        const showPlus = rule.rotationGroupId === null
+                            || (rotationIndex === rotationSize - 1 && rotationSize < 4);
                         return (
                             <div
                                 key={rule.id}
                                 className="absolute"
                                 style={{ top: startSlotIndex * SLOT_PX + 3, left: `${leftPct}%`, width: `${widthPct}%` }}
                             >
-                                <div className="absolute right-1 top-0">
-                                    {rule.rotationGroupId === null ? (
-                                        <AlternateButton
-                                            rule={rule}
-                                            iso={iso}
-                                            knownTickets={knownTickets}
-                                            onChanged={onChanged}
-                                        />
-                                    ) : (
+                                <div className="absolute right-1 top-0 flex items-center gap-1">
+                                    {rotationSize > 1 && (
                                         <span
                                             className="rounded bg-amber-900/80 px-1 text-[10px] font-semibold text-white"
                                             title={t('templates.recurrence.cadence_tooltip')
@@ -528,6 +683,16 @@ export default function TemplateColumn({
                                         >
                                             {rotationIndex + 1}/{rotationSize}
                                         </span>
+                                    )}
+                                    {showPlus && (
+                                        <AlternateButton
+                                            rule={rule}
+                                            rules={rules}
+                                            iso={iso}
+                                            knownTickets={knownTickets}
+                                            onChanged={onChanged}
+                                            onHistoryInvalidate={grid.clearHistory}
+                                        />
                                     )}
                                 </div>
                             </div>
@@ -539,31 +704,62 @@ export default function TemplateColumn({
                 {editingSlot !== null && (
                     <EditPopover
                         slot={editingSlot}
-                        entry={editingRule ? ruleToEntry(editingRule) : null}
+                        entry={editingEntry}
                         anchorTop={GRID_SLOTS.indexOf(editingSlot) * SLOT_PX}
                         scrollContainer={scrollRef.current}
                         mousePos={editMousePos}
                         knownTickets={knownTickets}
+                        extraField={recurrenceField}
+                        extraFieldError={recurrenceError}
                         onSave={(ticketKey, type, comment, ticketSummary, ticketType) => {
                             const s = editingSlot;
-                            setEditingSlot(null);
-                            setEditMousePos(null);
-                            if (s === null) return;
-                            const endedAt = editingRule
-                                ? addMinutes(s, editingRule.durationMinutes ?? SLOT_MINUTES)
-                                : getNextSlot(s);
+                            const er = editingRule;
+                            if (s === null) { closeEditor(); return; }
+                            const wantClear = ticketKey === null && type !== EntryType.BREAK;
+                            const toBreak = type === EntryType.BREAK;
+
+                            // Membre d'alternance : deux règles au même créneau → patch direct de la règle visée,
+                            // et cadence verrouillée (se gère en recréant l'alternance).
+                            if (er && er.rotationGroupId != null) {
+                                if (!wantClear && draftInterval !== er.intervalWeeks) {
+                                    setRecurrenceError(t('templates.recurrence.locked_by_rotation'));
+                                    return; // garde le popover ouvert
+                                }
+                                closeEditor();
+                                const done = () => { grid.clearHistory(); onChanged(); };
+                                if (wantClear) { void deleteTemplateRule(er.id).then(done); return; }
+                                if (toBreak !== (er.ruleType === TemplateRuleType.BREAK)) {
+                                    void recreateWithType(er, toBreak ? EntryType.BREAK : EntryType.WORK).then(done);
+                                } else {
+                                    void updateTemplateRule(er.id, {
+                                        ticketKey: toBreak ? null : ticketKey,
+                                        ticketSummary: toBreak ? null : ticketSummary,
+                                        ticketType: toBreak ? null : ticketType,
+                                        comment: toBreak ? null : comment,
+                                    }).then(done);
+                                }
+                                return;
+                            }
+
+                            // Bloc simple : chemin moteur (tracé).
+                            closeEditor();
+                            const endedAt = er ? addMinutes(s, er.durationMinutes ?? SLOT_MINUTES) : getNextSlot(s);
                             void grid.save(
                                 s,
-                                ticketKey === null && type !== EntryType.BREAK
+                                wantClear
                                     ? null
-                                    : { ticketKey, ticketSummary, ticketType, comment, type, endedAt },
+                                    : { ticketKey, ticketSummary, ticketType, comment, type, endedAt, intervalWeeks: draftInterval },
                             );
                         }}
-                        onCancel={() => { setEditingSlot(null); setEditMousePos(null); }}
+                        onCancel={() => closeEditor()}
                         onClear={() => {
                             const s = editingSlot;
-                            setEditingSlot(null);
-                            setEditMousePos(null);
+                            const er = editingRule;
+                            closeEditor();
+                            if (er && er.rotationGroupId != null) {
+                                void deleteTemplateRule(er.id).then(() => { grid.clearHistory(); onChanged(); });
+                                return;
+                            }
                             if (s !== null && ruleBySlot.has(s)) void grid.save(s, null);
                         }}
                     />
@@ -572,31 +768,26 @@ export default function TemplateColumn({
                 {/* Popover : création d'un bloc multi-créneaux (fin d'un glisser sur des créneaux libres) */}
                 {rangeCreate !== null && (
                     <EditPopover
-                        slot={rangeCreate.start}
+                        slot={rangeCreate.slots[0]!}
                         entry={null}
-                        anchorTop={GRID_SLOTS.indexOf(rangeCreate.start) * SLOT_PX}
+                        anchorTop={0}
                         scrollContainer={scrollRef.current}
-                        mousePos={null}
+                        mousePos={rangeCreate.pos}
                         knownTickets={knownTickets}
+                        extraField={recurrenceField}
                         onSave={(ticketKey, type, comment, ticketSummary, ticketType) => {
                             const rc = rangeCreate;
                             setRangeCreate(null);
                             grid.clearSelection();
-                            if (rc === null) return;
-                            const isBreak = type === EntryType.BREAK;
-                            void (async () => {
-                                try {
-                                    await createTemplateRule({
-                                        ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
-                                        weekday: iso,
-                                        startTime: rc.start,
-                                        durationMinutes: rc.count * SLOT_MINUTES,
-                                        intervalWeeks: 1,
-                                        ...(isBreak ? {} : { ticketKey, ticketSummary, ticketType, comment }),
-                                    });
-                                    onChanged();
-                                } catch { /* service gère le message */ }
-                            })();
+                            if (rc === null || (ticketKey === null && type !== EntryType.BREAK)) return;
+                            const sorted = [...rc.slots].sort();
+                            const start = sorted[0]!;
+                            const endedAt = addMinutes(start, rc.slots.length * SLOT_MINUTES);
+                            // Passe par le moteur → création d'une règle de durée pleine, tracée dans l'historique.
+                            void grid.save(start, {
+                                ticketKey, ticketSummary, ticketType, comment, type,
+                                endedAt, intervalWeeks: draftInterval,
+                            });
                         }}
                         onCancel={() => { setRangeCreate(null); grid.clearSelection(); }}
                         onClear={() => { setRangeCreate(null); grid.clearSelection(); }}

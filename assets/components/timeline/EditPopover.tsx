@@ -17,6 +17,10 @@ interface EditPopoverProps {
     onSave: (ticketKey: string | null, type: EntryType, comment: string | null, ticketSummary: string | null, ticketType: string | null) => void;
     onCancel: () => void;
     onClear: () => void;
+    /** Champ additionnel injecté par le consommateur (ex : récurrence côté Modèles), rendu sous le commentaire. */
+    extraField?: React.ReactNode;
+    /** Message d'erreur affiché sous `extraField` (empêche la fermeture côté consommateur). */
+    extraFieldError?: string | null;
 }
 
 const SLOT_HEIGHT = 32;
@@ -33,6 +37,8 @@ export default function EditPopover({
     onSave,
     onCancel,
     onClear,
+    extraField,
+    extraFieldError,
 }: EditPopoverProps) {
     const ref = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -282,6 +288,11 @@ export default function EditPopover({
                     style={{ color: 'var(--foreground)' }}
                 />
             </div>
+
+            {extraField}
+            {extraFieldError && (
+                <p className="text-[12px] text-red-500 -mt-1">{extraFieldError}</p>
+            )}
 
             {/* Pied : actions */}
             <div

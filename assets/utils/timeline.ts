@@ -93,7 +93,8 @@ export function parseTarget(value: string): number | null {
 
     if (raw === null) return null;
     const rounded = roundToQuarter(raw);
-    return rounded > 0 && rounded <= 1440 ? rounded : null;
+    // 0 est autorisé (week-end, jour férié, congé).
+    return rounded >= 0 && rounded <= 1440 ? rounded : null;
 }
 
 /** Retourne l'heure actuelle en minutes depuis minuit */
