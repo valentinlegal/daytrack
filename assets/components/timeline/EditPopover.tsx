@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Coffee, Trash2 } from 'lucide-react';
 import { EntryType } from '@/types/api';
 import type { JiraTicketInfo, TimeEntry } from '@/types/api';
@@ -26,6 +26,19 @@ interface EditPopoverProps {
 const SLOT_HEIGHT = 32;
 const POPOVER_WIDTH = 360;
 const POPOVER_HEIGHT_EST = 248;
+const VIEWPORT_MARGIN = 8;
+
+/** Garde le rectangle (top, left, height, width) entièrement dans la fenêtre. */
+function clampToViewport(top: number, left: number, height: number, width: number) {
+    return {
+        top: height > 0
+            ? Math.max(VIEWPORT_MARGIN, Math.min(top, window.innerHeight - height - VIEWPORT_MARGIN))
+            : top,
+        left: width > 0
+            ? Math.max(VIEWPORT_MARGIN, Math.min(left, window.innerWidth - width - VIEWPORT_MARGIN))
+            : left,
+    };
+}
 
 export default function EditPopover({
     slot,
@@ -56,37 +69,67 @@ export default function EditPopover({
     const isFetchingRef = useRef(false);
     const [popoverPos, setPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
-    useEffect(() => {
+    // Placement initial — mesuré sur la taille *réelle* du popover (l'estimation ne
+    // suffit pas : il est plus haut avec le champ récurrence). useLayoutEffect →
+    // repositionné avant peinture, sans clignotement.
+    useLayoutEffect(() => {
+        const measured = ref.current?.getBoundingClientRect();
+        const h = measured && measured.height > 0 ? measured.height : POPOVER_HEIGHT_EST;
+        const w = measured && measured.width > 0 ? measured.width : POPOVER_WIDTH;
+
+        let desiredTop: number;
+        let desiredLeft: number;
+
         if (mousePos) {
-            // Positionné près du curseur (comme le menu contextuel)
-            const left = Math.min(mousePos.x + 4, window.innerWidth - POPOVER_WIDTH - 8);
-            const top = mousePos.y + POPOVER_HEIGHT_EST < window.innerHeight - 8
+            // Près du curseur ; bascule au-dessus si ça déborderait en bas.
+            desiredLeft = mousePos.x + 4;
+            desiredTop = mousePos.y + h < window.innerHeight - VIEWPORT_MARGIN
                 ? mousePos.y + 4
-                : Math.max(8, mousePos.y - POPOVER_HEIGHT_EST);
-            setPopoverPos({ top, left });
+                : mousePos.y - h;
+        } else if (scrollContainer !== null) {
+            const containerRect = scrollContainer.getBoundingClientRect();
+            // Pixel absolu dans la fenêtre du bas du slot
+            const slotBottomInViewport =
+                anchorTop - scrollContainer.scrollTop + containerRect.top + SLOT_HEIGHT;
+            const belowTop = slotBottomInViewport + 6;
+            desiredTop = belowTop + h < window.innerHeight - VIEWPORT_MARGIN
+                ? belowTop
+                : slotBottomInViewport - SLOT_HEIGHT - h - 6;
+            // Centré dans la zone timeline (après la gouttière de 56px)
+            const gutterW = 56;
+            const tlLeft = containerRect.left + gutterW;
+            const tlWidth = containerRect.width - gutterW - 8;
+            desiredLeft = tlLeft + (tlWidth - w) / 2;
+        } else {
             return;
         }
-        if (!scrollContainer) return;
-        const containerRect = scrollContainer.getBoundingClientRect();
-        const scrollTop = scrollContainer.scrollTop;
 
-        // Pixel absolu dans la fenêtre du bas du slot
-        const slotBottomInViewport = anchorTop - scrollTop + containerRect.top + SLOT_HEIGHT;
-        const belowTop = slotBottomInViewport + 6;
-        const aboveTop = slotBottomInViewport - SLOT_HEIGHT - POPOVER_HEIGHT_EST - 6;
-
-        const top = belowTop + POPOVER_HEIGHT_EST < window.innerHeight - 8
-            ? belowTop
-            : Math.max(8, aboveTop);
-
-        // Centré dans la zone timeline (après la gouttière de 56px)
-        const gutterW = 56;
-        const tlLeft = containerRect.left + gutterW;
-        const tlWidth = containerRect.width - gutterW - 8;
-        const left = Math.max(8, tlLeft + (tlWidth - POPOVER_WIDTH) / 2);
-
-        setPopoverPos({ top, left });
+        setPopoverPos(clampToViewport(desiredTop, desiredLeft, h, w));
     }, [anchorTop, scrollContainer, mousePos]);
+
+    // Le contenu grandit après coup (sélection d'une récurrence → apparition du
+    // champ date) : on recadre la position courante dans la fenêtre à chaque
+    // changement de taille du popover, et au redimensionnement de la fenêtre.
+    useEffect(() => {
+        const el = ref.current;
+        if (el === null) return;
+        function reclamp() {
+            const el2 = ref.current;
+            if (el2 === null) return;
+            const { height, width } = el2.getBoundingClientRect();
+            setPopoverPos((pos) => {
+                const next = clampToViewport(pos.top, pos.left, height, width);
+                return next.top === pos.top && next.left === pos.left ? pos : next;
+            });
+        }
+        const observer = new ResizeObserver(reclamp);
+        observer.observe(el);
+        window.addEventListener('resize', reclamp);
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', reclamp);
+        };
+    }, []);
 
     useEffect(() => {
         setTimeout(() => inputRef.current?.focus(), 0);
