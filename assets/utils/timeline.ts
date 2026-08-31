@@ -78,7 +78,7 @@ export function roundToQuarter(minutes: number): number {
     return Math.round(minutes / 15) * 15;
 }
 
-/** Interprète une saisie utilisateur en minutes (ex: "7h30" → 450, "7:30" → 450, "7.5" → 450, "8" → 480) */
+/** Interprète une saisie utilisateur en minutes (ex: "7h30" → 450, "7:30" → 450, "7.5" → 450, "8" → 480, "30min" → 30) */
 export function parseTarget(value: string): number | null {
     let raw: number | null = null;
 
@@ -87,6 +87,10 @@ export function parseTarget(value: string): number | null {
 
     const colon = value.trim().match(/^(\d+):(\d{2})$/);
     if (colon) raw = parseInt(colon[1]) * 60 + parseInt(colon[2]);
+
+    // Format "Nmin" — c'est ce que produit formatMinutes() pour < 1h (dont "0min").
+    const minutesOnly = value.trim().match(/^(\d+)\s*min$/i);
+    if (minutesOnly) raw = parseInt(minutesOnly[1]);
 
     const decimal = value.trim().match(/^(\d+(?:[.,]\d+)?)$/);
     if (decimal) raw = Math.round(parseFloat(decimal[1].replace(',', '.')) * 60);
