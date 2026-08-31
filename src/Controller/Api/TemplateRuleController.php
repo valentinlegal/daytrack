@@ -192,6 +192,16 @@ class TemplateRuleController extends AbstractController
                     $rule->comment = $input->comment;
                 }
             }
+
+            // Déplacer / redimensionner / réactiver une règle ne doit pas la faire
+            // recouvrir une autre règle activée (create() impose le même invariant) —
+            // sinon DayMaterializer::deduplicateOverlaps en écarterait une silencieusement.
+            if ($rule->enabled && $this->hasOverlap($rule)) {
+                return $this->json(
+                    ['error' => $this->translator->trans('error.template_rule_overlap')],
+                    Response::HTTP_CONFLICT,
+                );
+            }
         }
 
         $this->em->flush();

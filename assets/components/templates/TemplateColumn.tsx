@@ -189,6 +189,15 @@ export default function TemplateColumn({
                     ticketType: targetIsBreak ? null : data.ticketType,
                     comment: targetIsBreak ? null : data.comment,
                 };
+                // Redimensionnement en place (ex : undo d'un rétrécissement) — le PUT
+                // conserve l'id. Pas de patch si la durée ne change pas (édition de contenu).
+                const targetDuration = Math.max(
+                    SLOT_MINUTES,
+                    timeToMinutes(data.endedAt) - timeToMinutes(cell.startedAt),
+                );
+                if (rule && rule.durationMinutes !== targetDuration) {
+                    patch.durationMinutes = targetDuration;
+                }
                 if (data.intervalWeeks !== undefined && data.intervalWeeks !== rule?.intervalWeeks) {
                     patch.intervalWeeks = data.intervalWeeks;
                 }
@@ -380,6 +389,9 @@ export default function TemplateColumn({
         historyEnabled: !columnHasRotation,
         // 7 colonnes montées : ⌘Z ne doit agir que sur celle qui a la sélection.
         scopeUndoToSelection: true,
+        // Conteneur de scroll partagé par les 7 colonnes → persistance gérée une
+        // seule fois par TemplatesPage, pas par colonne.
+        persistScroll: false,
         onChanged: () => { /* ops appellent déjà props.onChanged (reload de la page) */ },
         onNeedsPasteWarning,
         onDragRange: (slots, pos) => {

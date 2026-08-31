@@ -52,6 +52,15 @@ class JiraSyncController extends AbstractController
             );
         }
 
+        // Même borne que DayController / EntryController : matérialiser (donc persister)
+        // une journée hors fenêtre polluerait la base.
+        if ($parsedDate->format('Y-m-d') > (new DateTimeImmutable('+30 days'))->format('Y-m-d')) {
+            return $this->json(
+                ['error' => $this->translator->trans('error.future_day_forbidden')],
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+            );
+        }
+
         $day = $this->materializer->materialize($parsedDate);
 
         $result = $this->syncService->sync($day);

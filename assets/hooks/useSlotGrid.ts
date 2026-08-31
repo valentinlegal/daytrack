@@ -118,6 +118,13 @@ export interface UseSlotGridArgs {
      * popover de création (typiquement : uniquement si la plage ne contient aucun bloc).
      */
     onDragRange?: (slots: string[], pos: { x: number; y: number }) => void;
+    /**
+     * Persister/restaurer la position de scroll de `scrollRef` (défaut : true).
+     * Passer `false` quand plusieurs grilles partagent un même conteneur de scroll
+     * (vue Modèles : 7 colonnes) — sinon 7 listeners écrivent en boucle et 7 lectures
+     * initiales se courent après. Le parent gère alors la persistance une seule fois.
+     */
+    persistScroll?: boolean;
 }
 
 export interface UseSlotGridResult {
@@ -157,6 +164,7 @@ export function useSlotGrid({
     onDragRange,
     historyEnabled = true,
     scopeUndoToSelection = false,
+    persistScroll = true,
 }: UseSlotGridArgs): UseSlotGridResult {
     // Chaque créneau *couvert* par une cellule pointe vers elle (pas seulement son créneau
     // de départ) : en vue jour une cellule = 1 créneau (identique à avant), en vue Modèles
@@ -317,6 +325,7 @@ export function useSlotGrid({
 
     // ── Scroll persistant ────────────────────────────────────────────────
     useEffect(() => {
+        if (!persistScroll) return;
         const el = scrollRef.current;
         if (null === el) return;
         const saved = sessionStorage.getItem(`${storagePrefix}_scroll`);
@@ -326,7 +335,7 @@ export function useSlotGrid({
         }
         el.addEventListener('scroll', onScroll);
         return () => el.removeEventListener('scroll', onScroll);
-    }, [storagePrefix, scrollRef]);
+    }, [persistScroll, storagePrefix, scrollRef]);
 
     // ── Presse-papier ────────────────────────────────────────────────────
     const [clipboard, setClipboard] = useState<ClipboardData | null>(() => readClipboard());
@@ -440,9 +449,8 @@ export function useSlotGrid({
                 const cur = curById.get(tgt.id);
                 if (!cur) continue;
                 const tgtEnd = tgt.endedAt ?? getNextSlot(tgt.startedAt);
-                const movedOrResized =
-                    cur.startedAt !== tgt.startedAt
-                    || (cur.endedAt ?? getNextSlot(cur.startedAt)) !== tgtEnd;
+                const moved = cur.startedAt !== tgt.startedAt;
+                const resized = (cur.endedAt ?? getNextSlot(cur.startedAt)) !== tgtEnd;
                 const contentChanged =
                     cur.ticketKey !== tgt.ticketKey
                     || cur.type !== tgt.type
@@ -451,15 +459,15 @@ export function useSlotGrid({
                     || cur.ticketType !== tgt.ticketType
                     || (cur.intervalWeeks ?? 1) !== (tgt.intervalWeeks ?? 1)
                     || (cur.anchorDate ?? null) !== (tgt.anchorDate ?? null);
-                if (movedOrResized) {
-                    // Déplacé ou redimensionné (ex : bloc scindé/rétréci) → recréer.
+                if (moved) {
+                    // Le créneau de départ change → pas de mise à jour en place possible, on recrée.
                     await ops.deleteCell(cur);
                     latest = await ops.createCell(tgt.startedAt, inputOf(tgt, tgtEnd));
-                } else if (contentChanged) {
-                    latest = await ops.updateCell(
-                        cur,
-                        inputOf(tgt, cur.endedAt ?? getNextSlot(cur.startedAt)),
-                    );
+                } else if (resized || contentChanged) {
+                    // Redimensionnement et/ou contenu, même créneau de départ → updateCell
+                    // conserve l'id (PUT atomique) : pas de fenêtre de perte de données ni
+                    // d'id neuf qui casserait les snapshots undo/redo suivants.
+                    latest = await ops.updateCell(cur, inputOf(tgt, tgtEnd));
                 }
             }
             onChanged(latest);

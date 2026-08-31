@@ -9,8 +9,8 @@ use DateTimeImmutable;
 
 /**
  * Détermine si une règle récurrente s'applique à une date donnée, et si deux règles
- * WORK/BREAK peuvent réellement tomber le même jour (même jour de semaine, même
- * cadence, même phase) avec des horaires qui se recoupent.
+ * WORK/BREAK peuvent réellement tomber le même jour (même jour de semaine, et une
+ * semaine commune à leurs deux récurrences) avec des horaires qui se recoupent.
  */
 final class TemplateRuleMatcher
 {
@@ -40,17 +40,25 @@ final class TemplateRuleMatcher
     }
 
     /**
-     * Indique si deux règles WORK/BREAK partagent le même jour de semaine, la même
-     * cadence et la même phase (elles peuvent donc réellement tomber le même jour),
-     * et si leurs plages horaires se recoupent dans ce cas.
+     * Indique si deux règles WORK/BREAK peuvent réellement tomber le même jour
+     * (même jour de semaine, et il existe une semaine où leurs deux récurrences
+     * se déclenchent), auquel cas leurs plages horaires se recoupent-elles.
+     *
+     * Deux règles de cadences respectives iA et iB coïncident une semaine w si
+     * w ≡ ancreA (mod iA) et w ≡ ancreB (mod iB). Ce système admet une solution
+     * ⇔ (weekIndex(ancreA) − weekIndex(ancreB)) est divisible par pgcd(iA, iB)
+     * (théorème des restes chinois). Pour iA = iB ça se réduit à l'égalité des
+     * phases — le cas d'une alternance (mêmes cadence et créneau, phases opposées)
+     * reste donc non-chevauchant.
      */
     public function overlaps(TemplateRule $a, TemplateRule $b): bool
     {
-        if ($a->weekday !== $b->weekday || $a->intervalWeeks !== $b->intervalWeeks) {
+        if ($a->weekday !== $b->weekday) {
             return false;
         }
 
-        if ($this->weekPhase($a) !== $this->weekPhase($b)) {
+        $gcd = $this->gcd($a->intervalWeeks, $b->intervalWeeks);
+        if (0 !== ($this->weekIndex($a->anchorDate) - $this->weekIndex($b->anchorDate)) % $gcd) {
             return false;
         }
 
@@ -60,6 +68,15 @@ final class TemplateRuleMatcher
         $endB = $startB + (int) $b->durationMinutes;
 
         return $startA < $endB && $startB < $endA;
+    }
+
+    private function gcd(int $x, int $y): int
+    {
+        while (0 !== $y) {
+            [$x, $y] = [$y, $x % $y];
+        }
+
+        return abs($x);
     }
 
     private function weekPhase(TemplateRule $rule): int

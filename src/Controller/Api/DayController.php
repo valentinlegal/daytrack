@@ -82,7 +82,8 @@ class DayController extends AbstractController
             );
         }
 
-        $day = $this->workDayRepository->findByDate($parsedDate) ?? $this->materializer->materialize($parsedDate);
+        // materialize() = findByDate() ?? buildFromRules(persist) — inutile de refaire findByDate() ici.
+        $day = $this->materializer->materialize($parsedDate);
 
         $day->targetMinutes = $input->targetMinutes;
         $this->em->flush();

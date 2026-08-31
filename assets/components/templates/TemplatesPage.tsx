@@ -40,6 +40,20 @@ export default function TemplatesPage() {
         void listFavorites().then(setFavorites).catch(() => null);
     }, []);
 
+    // Persistance de la position de scroll du conteneur commun aux 7 colonnes
+    // (les TemplateColumn passent persistScroll:false pour ne pas le faire 7 fois).
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (el === null || isLoading) return;
+        const saved = sessionStorage.getItem('daytrack_tmpl_scroll');
+        if (saved !== null) el.scrollTop = parseInt(saved, 10);
+        function onScroll() {
+            if (el !== null) sessionStorage.setItem('daytrack_tmpl_scroll', String(el.scrollTop));
+        }
+        el.addEventListener('scroll', onScroll);
+        return () => el.removeEventListener('scroll', onScroll);
+    }, [isLoading]);
+
     // Tickets déjà connus (titre + type) pour l'autocomplete du EditPopover, comme Timeline.
     const knownTickets = useMemo<Record<string, JiraTicketInfo>>(() => {
         const map: Record<string, JiraTicketInfo> = {};

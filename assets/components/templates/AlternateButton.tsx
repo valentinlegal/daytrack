@@ -95,30 +95,45 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
             const anchor0 = nextOccurrenceOnOrAfter(startDate, iso);
             const anchor1 = shiftDate(anchor0, 7);
             const wasBreak = rule.ruleType === TemplateRuleType.BREAK;
+            const content = wasBreak
+                ? {}
+                : { ticketKey: rule.ticketKey, ticketSummary: rule.ticketSummary, ticketType: rule.ticketType, comment: rule.comment };
+
+            // Pas de transaction côté API : on supprime le bloc d'origine puis on crée
+            // les 2 membres. Si une création échoue, on annule (suppression des membres
+            // déjà créés + recréation du bloc simple) pour ne pas laisser la colonne
+            // cassée / un groupe de rotation à 1 membre.
             await deleteTemplateRule(rule.id);
-            await createTemplateRule({
-                ruleType: wasBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
-                weekday: iso,
-                startTime: rule.startTime,
-                durationMinutes: rule.durationMinutes,
-                intervalWeeks: 2,
-                anchorDate: anchor0,
-                rotationGroupId: groupId,
-                ...(wasBreak ? {} : { ticketKey: rule.ticketKey, ticketSummary: rule.ticketSummary, ticketType: rule.ticketType, comment: rule.comment }),
-            });
-            await createTemplateRule({
-                ruleType: TemplateRuleType.WORK,
-                weekday: iso,
-                startTime: rule.startTime,
-                durationMinutes: rule.durationMinutes,
-                intervalWeeks: 2,
-                anchorDate: anchor1,
-                rotationGroupId: groupId,
-                ticketKey: key,
-                ticketSummary: info?.summary ?? null,
-                ticketType: info?.type ?? null,
-                comment: null,
-            });
+            const createdIds: string[] = [];
+            try {
+                const m0 = await createTemplateRule({
+                    ruleType: wasBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                    weekday: iso, startTime: rule.startTime, durationMinutes: rule.durationMinutes,
+                    intervalWeeks: 2, anchorDate: anchor0, rotationGroupId: groupId, ...content,
+                });
+                createdIds.push(m0.id);
+                const m1 = await createTemplateRule({
+                    ruleType: TemplateRuleType.WORK,
+                    weekday: iso, startTime: rule.startTime, durationMinutes: rule.durationMinutes,
+                    intervalWeeks: 2, anchorDate: anchor1, rotationGroupId: groupId,
+                    ticketKey: key, ticketSummary: info?.summary ?? null, ticketType: info?.type ?? null, comment: null,
+                });
+                createdIds.push(m1.id);
+            } catch (err) {
+                for (const id of createdIds) {
+                    try { await deleteTemplateRule(id); } catch { /* best effort */ }
+                }
+                try {
+                    await createTemplateRule({
+                        ruleType: rule.ruleType, weekday: iso, startTime: rule.startTime,
+                        durationMinutes: rule.durationMinutes, intervalWeeks: rule.intervalWeeks,
+                        // anchorDate omis s'il est passé (rejeté par l'API) → le back reprend la prochaine occurrence.
+                        ...(rule.anchorDate >= today() ? { anchorDate: rule.anchorDate } : {}),
+                        enabled: rule.enabled, ...content,
+                    });
+                } catch { /* best effort */ }
+                throw err;
+            }
             setOpen(false);
             setTicket('');
             onHistoryInvalidate();
