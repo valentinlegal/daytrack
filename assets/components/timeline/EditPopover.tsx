@@ -6,6 +6,7 @@ import { fetchTicketInfo, getCachedTicketInfo } from '@/services/jiraService';
 import { t } from '@/i18n/fr';
 import { cn } from '@/lib/utils';
 import { getTicketTypeStyle } from '@/config/ticketTypeColors';
+import { VIEWPORT_MARGIN, clampToViewport } from '@/utils/viewport';
 
 interface EditPopoverProps {
     slot: string;
@@ -26,19 +27,6 @@ interface EditPopoverProps {
 const SLOT_HEIGHT = 32;
 const POPOVER_WIDTH = 360;
 const POPOVER_HEIGHT_EST = 248;
-const VIEWPORT_MARGIN = 8;
-
-/** Garde le rectangle (top, left, height, width) entièrement dans la fenêtre. */
-function clampToViewport(top: number, left: number, height: number, width: number) {
-    return {
-        top: height > 0
-            ? Math.max(VIEWPORT_MARGIN, Math.min(top, window.innerHeight - height - VIEWPORT_MARGIN))
-            : top,
-        left: width > 0
-            ? Math.max(VIEWPORT_MARGIN, Math.min(left, window.innerWidth - width - VIEWPORT_MARGIN))
-            : left,
-    };
-}
 
 export default function EditPopover({
     slot,

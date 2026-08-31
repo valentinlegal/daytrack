@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import type { JiraTicketInfo, TemplateRule } from '@/types/api';
 import { TemplateRuleType } from '@/types/api';
 import { today, shiftDate } from '@/utils/timeline';
 import { nextOccurrenceOnOrAfter } from '@/utils/templateGrid';
+import { clampToViewport } from '@/utils/viewport';
 import { createTemplateRule, deleteTemplateRule } from '@/services/templateRuleService';
 import { fetchTicketInfo } from '@/services/jiraService';
 import { Button } from '@/components/ui/button';
@@ -18,9 +19,6 @@ interface AlternateButtonProps {
     /** L'alternance ne peut pas être représentée par l'undo → on invalide l'historique de la colonne. */
     onHistoryInvalidate: () => void;
 }
-
-const POPOVER_W = 256;
-const POPOVER_H = 260;
 
 /**
  * Bouton « + » sur un bloc simple : le transforme en alternance à 2 membres,
@@ -49,6 +47,33 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
         return () => {
             document.removeEventListener('mousedown', onDown);
             document.removeEventListener('keydown', onKey);
+        };
+    }, [open]);
+
+    // Garde le popover entièrement visible : recadré sur sa taille réelle (avant
+    // peinture, sans clignotement) et à chaque changement de taille — ex : ligne
+    // d'erreur qui apparaît — ou redimensionnement de la fenêtre.
+    useLayoutEffect(() => {
+        if (!open) return;
+        const el = popoverRef.current;
+        if (el === null) return;
+        function clamp() {
+            const el2 = popoverRef.current;
+            if (el2 === null) return;
+            const { height, width } = el2.getBoundingClientRect();
+            setAnchor((a) => {
+                if (a === null) return a;
+                const next = clampToViewport(a.top, a.left, height, width);
+                return next.top === a.top && next.left === a.left ? a : next;
+            });
+        }
+        clamp();
+        const observer = new ResizeObserver(clamp);
+        observer.observe(el);
+        window.addEventListener('resize', clamp);
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', clamp);
         };
     }, [open]);
 
@@ -115,11 +140,10 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
                 title={label}
                 onClick={(e) => {
                     e.stopPropagation();
+                    // Position brute sous le bouton ; le useLayoutEffect la recadre
+                    // dans la fenêtre selon la taille réelle du popover.
                     const r = e.currentTarget.getBoundingClientRect();
-                    setAnchor({
-                        top: Math.min(r.bottom + 4, window.innerHeight - POPOVER_H - 8),
-                        left: Math.min(r.left, window.innerWidth - POPOVER_W - 8),
-                    });
+                    setAnchor({ top: r.bottom + 4, left: r.left });
                     setStartDate(today());
                     setError(null);
                     setOpen(true);
