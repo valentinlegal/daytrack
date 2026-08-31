@@ -32,9 +32,26 @@ export function getNextSlot(slot: string): string {
     return formatTime(Math.floor(totalMinutes / 60), totalMinutes % 60);
 }
 
-// Construit un index des entrées par leur heure de début
+// Construit un index créneau → entrée. Une entrée qui couvre plusieurs créneaux
+// (ex : bloc issu d'un modèle, matérialisé en une seule TimeEntry de 45 min) est
+// indexée sur *chacun* de ses créneaux de 15 min, pas seulement celui de départ —
+// sinon computeRunMap ne voit qu'un créneau et le bloc s'affiche tronqué.
 export function buildEntryMap(entries: TimeEntry[]): Map<string, TimeEntry> {
-    return new Map(entries.map((e) => [e.startedAt, e]));
+    const map = new Map<string, TimeEntry>();
+    for (const e of entries) {
+        const [sh, sm] = e.startedAt.split(':').map(Number);
+        let cursor = sh * 60 + sm;
+        let end = cursor + SLOT_MINUTES;
+        if (e.endedAt) {
+            const [eh, em] = e.endedAt.split(':').map(Number);
+            end = Math.max(end, eh * 60 + em);
+        }
+        do {
+            map.set(formatTime(Math.floor(cursor / 60), cursor % 60), e);
+            cursor += SLOT_MINUTES;
+        } while (cursor < end);
+    }
+    return map;
 }
 
 // Formate des heures/minutes en chaîne HH:mm
