@@ -15,6 +15,7 @@ import {
     buildColumnBlocks,
     entryRulesForWeekday,
     minutesToTime,
+    nextOccurrenceOnOrAfter,
     targetRuleForWeekday,
     timeToMinutes,
     weekdayLabel,
@@ -131,6 +132,7 @@ export default function TemplateColumn({
                 startedAt: r.startTime as string,
                 endedAt: addMinutes(r.startTime as string, r.durationMinutes as number),
                 intervalWeeks: r.intervalWeeks,
+                anchorDate: r.anchorDate,
             })),
         [columnRules],
     );
@@ -144,6 +146,9 @@ export default function TemplateColumn({
                 startTime: slot,
                 durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(slot)),
                 intervalWeeks: data.intervalWeeks ?? 1,
+                // Semaine d'ancrage choisie (récurrence > 1 sem.). Ignorée si passée
+                // (undo tardif) — le back retombe alors sur la prochaine occurrence.
+                ...(data.anchorDate && data.anchorDate >= today() ? { anchorDate: data.anchorDate } : {}),
                 ...(isBreak ? {} : {
                     ticketKey: data.ticketKey,
                     ticketSummary: data.ticketSummary,
@@ -186,6 +191,10 @@ export default function TemplateColumn({
                 };
                 if (data.intervalWeeks !== undefined && data.intervalWeeks !== rule?.intervalWeeks) {
                     patch.intervalWeeks = data.intervalWeeks;
+                }
+                if (data.anchorDate !== undefined && data.anchorDate !== rule?.anchorDate
+                    && data.anchorDate >= today()) {
+                    patch.anchorDate = data.anchorDate;
                 }
                 await updateTemplateRule(cell.id, patch);
             }
@@ -271,8 +280,10 @@ export default function TemplateColumn({
     // Rect + X du dernier clic droit — pour ancrer / cibler les popovers ouverts depuis le menu.
     const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
     const menuClickXRef = useRef(0);
-    // Récurrence choisie dans le formulaire (champ ajouté au EditPopover).
+    // Récurrence choisie dans le formulaire (champs ajoutés au EditPopover).
     const [draftInterval, setDraftInterval] = useState(1);
+    // Semaine d'ancrage — n'a de sens (et n'est affichée) que si draftInterval > 1.
+    const [draftAnchor, setDraftAnchor] = useState(() => nextOccurrenceOnOrAfter(today(), iso));
     const [recurrenceError, setRecurrenceError] = useState<string | null>(null);
     const editingRule = editingRuleId !== null ? (columnRules.find((r) => r.id === editingRuleId) ?? null) : null;
 
@@ -283,6 +294,11 @@ export default function TemplateColumn({
         setRangeCreate(null);
         setRecurrenceError(null);
         setDraftInterval(rule?.intervalWeeks ?? 1);
+        setDraftAnchor(
+            rule?.anchorDate && rule.anchorDate >= today()
+                ? rule.anchorDate
+                : nextOccurrenceOnOrAfter(today(), iso),
+        );
         setEditingRuleId(rule?.id ?? null);
         setEditMousePos(pos);
         setEditingSlot(rule?.startTime ?? slot);
@@ -296,25 +312,63 @@ export default function TemplateColumn({
     // Identité stable : évite que le useEffect([entry]) du EditPopover ne réécrase la saisie.
     const editingEntry = useMemo(() => (editingRule ? ruleToEntry(editingRule) : null), [editingRule]);
 
-    /** Sélecteur d'intervalle injecté dans le EditPopover. */
+    // Un membre d'alternance a sa cadence verrouillée sur « une semaine sur deux ».
+    const recurrenceLocked = editingRule?.rotationGroupId != null;
+
+    /** Champs récurrence (intervalle + semaine d'ancrage) injectés dans le EditPopover. */
     const recurrenceField = (
-        <label className="flex flex-col gap-1">
-            <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
-                {t('templates.recurrence.menu')}
-            </span>
-            <select
-                value={draftInterval}
-                onChange={(e) => { setDraftInterval(Number(e.target.value)); setRecurrenceError(null); }}
-                className="h-8 rounded-md border border-input bg-background px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-                <option value={1}>{t('templates.recurrence.every_week')}</option>
-                {[2, 3, 4].map((n) => (
-                    <option key={n} value={n}>
-                        {t('templates.recurrence.every_n_weeks').replace('{n}', String(n))}
-                    </option>
-                ))}
-            </select>
-        </label>
+        <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                    {t('templates.recurrence.menu')}
+                </span>
+                <select
+                    value={draftInterval}
+                    disabled={recurrenceLocked}
+                    onChange={(e) => { setDraftInterval(Number(e.target.value)); setRecurrenceError(null); }}
+                    className="h-8 rounded-md border border-input bg-background px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                    <option value={1}>{t('templates.recurrence.every_week')}</option>
+                    {[2, 3, 4].map((n) => (
+                        <option key={n} value={n}>
+                            {t('templates.recurrence.every_n_weeks').replace('{n}', String(n))}
+                        </option>
+                    ))}
+                </select>
+                {recurrenceLocked && (
+                    <span className="text-[11px] text-muted-foreground">
+                        {t('templates.recurrence.locked_by_rotation')}
+                    </span>
+                )}
+            </label>
+
+            {/* Semaine d'ancrage : ne compte que pour une cadence > 1 semaine. */}
+            {!recurrenceLocked && draftInterval > 1 && (
+                <label className="flex flex-col gap-1">
+                    <span className="text-[12px] font-medium" style={{ color: 'var(--foreground)' }}>
+                        {t('templates.recurrence.start_label')}
+                    </span>
+                    <input
+                        type="date"
+                        min={today()}
+                        value={draftAnchor}
+                        onChange={(e) => { if (e.target.value) setDraftAnchor(nextOccurrenceOnOrAfter(e.target.value, iso)); }}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    />
+                    <span className="text-[11px] text-muted-foreground">
+                        {t('templates.recurrence.start_hint')}
+                    </span>
+                </label>
+            )}
+        </div>
+    );
+
+    // Une alternance = deux cellules sur le même créneau : le moteur d'historique ne sait
+    // pas la représenter → undo/redo désactivés sur une colonne qui en contient une
+    // (cohérent avec les grid.clearHistory() des chemins d'édition d'alternance).
+    const columnHasRotation = useMemo(
+        () => columnRules.some((r) => r.rotationGroupId !== null),
+        [columnRules],
     );
 
     const grid = useSlotGrid({
@@ -323,6 +377,9 @@ export default function TemplateColumn({
         storagePrefix: `daytrack_tmpl_${iso}`,
         scrollRef,
         ops,
+        historyEnabled: !columnHasRotation,
+        // 7 colonnes montées : ⌘Z ne doit agir que sur celle qui a la sélection.
+        scopeUndoToSelection: true,
         onChanged: () => { /* ops appellent déjà props.onChanged (reload de la page) */ },
         onNeedsPasteWarning,
         onDragRange: (slots, pos) => {
@@ -330,6 +387,7 @@ export default function TemplateColumn({
             if (slots.every((s) => !ruleBySlot.has(s))) {
                 closeEditor();
                 setDraftInterval(1);
+                setDraftAnchor(nextOccurrenceOnOrAfter(today(), iso));
                 setRangeCreate({ slots, pos });
             }
         },
@@ -663,9 +721,9 @@ export default function TemplateColumn({
                     {blocks.map(({ rule, startSlotIndex, rotationSize, rotationIndex }) => {
                         const widthPct = 100 / rotationSize;
                         const leftPct = rotationIndex * widthPct;
-                        // « + » sur un bloc simple, ou sur le dernier membre d'une alternance de moins de 4.
-                        const showPlus = rule.rotationGroupId === null
-                            || (rotationIndex === rotationSize - 1 && rotationSize < 4);
+                        // « + » uniquement sur un bloc simple : il crée une alternance à 2 membres,
+                        // une semaine sur deux. Une alternance ne s'étend pas au-delà de 2.
+                        const showPlus = rule.rotationGroupId === null;
                         return (
                             <div
                                 key={rule.id}
@@ -687,7 +745,6 @@ export default function TemplateColumn({
                                     {showPlus && (
                                         <AlternateButton
                                             rule={rule}
-                                            rules={rules}
                                             iso={iso}
                                             knownTickets={knownTickets}
                                             onChanged={onChanged}
@@ -748,7 +805,11 @@ export default function TemplateColumn({
                                 s,
                                 wantClear
                                     ? null
-                                    : { ticketKey, ticketSummary, ticketType, comment, type, endedAt, intervalWeeks: draftInterval },
+                                    : {
+                                        ticketKey, ticketSummary, ticketType, comment, type, endedAt,
+                                        intervalWeeks: draftInterval,
+                                        anchorDate: draftInterval > 1 ? draftAnchor : undefined,
+                                    },
                             );
                         }}
                         onCancel={() => closeEditor()}
@@ -787,6 +848,7 @@ export default function TemplateColumn({
                             void grid.save(start, {
                                 ticketKey, ticketSummary, ticketType, comment, type,
                                 endedAt, intervalWeeks: draftInterval,
+                                anchorDate: draftInterval > 1 ? draftAnchor : undefined,
                             });
                         }}
                         onCancel={() => { setRangeCreate(null); grid.clearSelection(); }}

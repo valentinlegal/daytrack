@@ -4,7 +4,7 @@ import type { JiraTicketInfo, TemplateRule } from '@/types/api';
 import { TemplateRuleType } from '@/types/api';
 import { today, shiftDate } from '@/utils/timeline';
 import { nextOccurrenceOnOrAfter } from '@/utils/templateGrid';
-import { createTemplateRule, deleteTemplateRule, updateTemplateRule } from '@/services/templateRuleService';
+import { createTemplateRule, deleteTemplateRule } from '@/services/templateRuleService';
 import { fetchTicketInfo } from '@/services/jiraService';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,8 +12,6 @@ import { t } from '@/i18n/fr';
 
 interface AlternateButtonProps {
     rule: TemplateRule;
-    /** Toutes les règles — pour retrouver les membres d'un groupe d'alternance existant. */
-    rules: TemplateRule[];
     iso: number;
     knownTickets: Record<string, JiraTicketInfo>;
     onChanged: () => void;
@@ -23,13 +21,12 @@ interface AlternateButtonProps {
 
 const POPOVER_W = 256;
 const POPOVER_H = 260;
-const MAX_MEMBERS = 4;
 
 /**
- * Bouton « + » sur un bloc : transforme un bloc simple en alternance à 2 membres,
- * ou ajoute un membre supplémentaire (jusqu'à 4) à une alternance existante.
+ * Bouton « + » sur un bloc simple : le transforme en alternance à 2 membres,
+ * une semaine sur deux (cadence non modifiable, jamais plus de 2 tickets).
  */
-export default function AlternateButton({ rule, rules, iso, knownTickets, onChanged, onHistoryInvalidate }: AlternateButtonProps) {
+export default function AlternateButton({ rule, iso, knownTickets, onChanged, onHistoryInvalidate }: AlternateButtonProps) {
     const [open, setOpen] = useState(false);
     const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
     const [ticket, setTicket] = useState('');
@@ -37,13 +34,6 @@ export default function AlternateButton({ rule, rules, iso, knownTickets, onChan
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const popoverRef = useRef<HTMLDivElement>(null);
-
-    const groupMembers = rule.rotationGroupId === null
-        ? []
-        : rules
-            .filter((r) => r.rotationGroupId === rule.rotationGroupId)
-            .sort((a, b) => a.anchorDate.localeCompare(b.anchorDate));
-    const addToExisting = groupMembers.length >= 2;
 
     // Fermer au clic extérieur ou à Escape
     useEffect(() => {
@@ -75,57 +65,35 @@ export default function AlternateButton({ rule, rules, iso, knownTickets, onChan
                 return;
             }
 
-            if (addToExisting) {
-                // Ajoute un membre : tous passent à `intervalWeeks = N+1`, nouvelle ancre à +7 j.
-                const newSize = groupMembers.length + 1;
-                const newAnchor = shiftDate(groupMembers[groupMembers.length - 1]!.anchorDate, 7);
-                for (const m of groupMembers) {
-                    await updateTemplateRule(m.id, { intervalWeeks: newSize });
-                }
-                await createTemplateRule({
-                    ruleType: TemplateRuleType.WORK,
-                    weekday: iso,
-                    startTime: rule.startTime,
-                    durationMinutes: rule.durationMinutes,
-                    intervalWeeks: newSize,
-                    anchorDate: newAnchor,
-                    rotationGroupId: rule.rotationGroupId,
-                    ticketKey: key,
-                    ticketSummary: info?.summary ?? null,
-                    ticketType: info?.type ?? null,
-                    comment: null,
-                });
-            } else {
-                // Crée une alternance à 2 membres depuis un bloc simple.
-                const groupId = crypto.randomUUID();
-                const anchor0 = nextOccurrenceOnOrAfter(startDate, iso);
-                const anchor1 = shiftDate(anchor0, 7);
-                const wasBreak = rule.ruleType === TemplateRuleType.BREAK;
-                await deleteTemplateRule(rule.id);
-                await createTemplateRule({
-                    ruleType: wasBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
-                    weekday: iso,
-                    startTime: rule.startTime,
-                    durationMinutes: rule.durationMinutes,
-                    intervalWeeks: 2,
-                    anchorDate: anchor0,
-                    rotationGroupId: groupId,
-                    ...(wasBreak ? {} : { ticketKey: rule.ticketKey, ticketSummary: rule.ticketSummary, ticketType: rule.ticketType, comment: rule.comment }),
-                });
-                await createTemplateRule({
-                    ruleType: TemplateRuleType.WORK,
-                    weekday: iso,
-                    startTime: rule.startTime,
-                    durationMinutes: rule.durationMinutes,
-                    intervalWeeks: 2,
-                    anchorDate: anchor1,
-                    rotationGroupId: groupId,
-                    ticketKey: key,
-                    ticketSummary: info?.summary ?? null,
-                    ticketType: info?.type ?? null,
-                    comment: null,
-                });
-            }
+            // Crée une alternance à 2 membres depuis un bloc simple.
+            const groupId = crypto.randomUUID();
+            const anchor0 = nextOccurrenceOnOrAfter(startDate, iso);
+            const anchor1 = shiftDate(anchor0, 7);
+            const wasBreak = rule.ruleType === TemplateRuleType.BREAK;
+            await deleteTemplateRule(rule.id);
+            await createTemplateRule({
+                ruleType: wasBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                weekday: iso,
+                startTime: rule.startTime,
+                durationMinutes: rule.durationMinutes,
+                intervalWeeks: 2,
+                anchorDate: anchor0,
+                rotationGroupId: groupId,
+                ...(wasBreak ? {} : { ticketKey: rule.ticketKey, ticketSummary: rule.ticketSummary, ticketType: rule.ticketType, comment: rule.comment }),
+            });
+            await createTemplateRule({
+                ruleType: TemplateRuleType.WORK,
+                weekday: iso,
+                startTime: rule.startTime,
+                durationMinutes: rule.durationMinutes,
+                intervalWeeks: 2,
+                anchorDate: anchor1,
+                rotationGroupId: groupId,
+                ticketKey: key,
+                ticketSummary: info?.summary ?? null,
+                ticketType: info?.type ?? null,
+                comment: null,
+            });
             setOpen(false);
             setTicket('');
             onHistoryInvalidate();
@@ -137,7 +105,7 @@ export default function AlternateButton({ rule, rules, iso, knownTickets, onChan
         }
     }
 
-    const label = addToExisting ? t('templates.alternate.add_more') : t('templates.alternate.add');
+    const label = t('templates.alternate.add');
 
     return (
         <>
@@ -169,12 +137,8 @@ export default function AlternateButton({ rule, rules, iso, knownTickets, onChan
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <span className="text-[12px] font-medium">
-                        {addToExisting ? t('templates.alternate.add_more') : t('templates.alternate.title')}
-                    </span>
-                    <label className="text-[12px] text-muted-foreground">
-                        {addToExisting ? t('templates.alternate.ticket_label_more') : t('templates.alternate.ticket_label')}
-                    </label>
+                    <span className="text-[12px] font-medium">{t('templates.alternate.title')}</span>
+                    <label className="text-[12px] text-muted-foreground">{t('templates.alternate.ticket_label')}</label>
                     <Input
                         autoFocus
                         value={ticket}
@@ -184,26 +148,22 @@ export default function AlternateButton({ rule, rules, iso, knownTickets, onChan
                         className="h-8 font-mono text-[13px] uppercase"
                         disabled={busy}
                     />
-                    {!addToExisting && (
-                        <>
-                            <label className="text-[12px] text-muted-foreground">{t('templates.alternate.start_label')}</label>
-                            <input
-                                type="date"
-                                min={today()}
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="h-8 rounded-md border border-input px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                            />
-                            <p className="text-[11px] text-muted-foreground">{t('templates.alternate.start_hint')}</p>
-                        </>
-                    )}
+                    <label className="text-[12px] text-muted-foreground">{t('templates.alternate.start_label')}</label>
+                    <input
+                        type="date"
+                        min={today()}
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="h-8 rounded-md border border-input px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    />
+                    <p className="text-[11px] text-muted-foreground">{t('templates.alternate.start_hint')}</p>
                     {error && <p className="text-[11px] text-red-500">{error}</p>}
                     <div className="flex justify-end gap-1.5">
                         <Button size="sm" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
                             {t('templates.alternate.cancel')}
                         </Button>
                         <Button size="sm" onClick={() => void submit()} disabled={busy}>
-                            {addToExisting ? t('templates.alternate.add_more_confirm') : t('templates.alternate.confirm')}
+                            {t('templates.alternate.confirm')}
                         </Button>
                     </div>
                 </div>

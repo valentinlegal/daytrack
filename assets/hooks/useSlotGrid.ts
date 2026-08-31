@@ -25,6 +25,30 @@ function spanMinutes(start: string, end: string): number {
     return slotToMinutes(end) - slotToMinutes(start);
 }
 
+/** Deux listes de cellules représentent-elles le même état (pour dédoublonner l'historique) ? */
+function sameCells(a: SlotCell[], b: SlotCell[]): boolean {
+    if (a.length !== b.length) return false;
+    const byId = new Map(b.map((c) => [c.id, c]));
+    for (const c of a) {
+        const o = byId.get(c.id);
+        if (
+            !o
+            || o.startedAt !== c.startedAt
+            || o.endedAt !== c.endedAt
+            || o.type !== c.type
+            || o.ticketKey !== c.ticketKey
+            || o.ticketSummary !== c.ticketSummary
+            || o.ticketType !== c.ticketType
+            || o.comment !== c.comment
+            || (o.intervalWeeks ?? 1) !== (c.intervalWeeks ?? 1)
+            || (o.anchorDate ?? null) !== (c.anchorDate ?? null)
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Sous-ensemble commun d'une entrée de temps et d'une règle rendue comme bloc. */
 export interface SlotCell {
     id: string;
@@ -37,6 +61,8 @@ export interface SlotCell {
     endedAt: string | null; // "HH:mm"
     /** Récurrence (vue Modèles) — absent en vue jour. */
     intervalWeeks?: number;
+    /** Semaine d'ancrage de la récurrence "YYYY-MM-DD" (vue Modèles) — absent en vue jour. */
+    anchorDate?: string;
 }
 
 export interface SlotCellInput {
@@ -48,6 +74,8 @@ export interface SlotCellInput {
     endedAt: string;        // "HH:mm"
     /** Récurrence (vue Modèles) — ignoré par la vue jour. */
     intervalWeeks?: number;
+    /** Semaine d'ancrage "YYYY-MM-DD" (vue Modèles) — ignoré par la vue jour. `undefined` = inchangé. */
+    anchorDate?: string;
 }
 
 export interface SlotGridOps {
@@ -70,6 +98,20 @@ export interface UseSlotGridArgs {
     onChanged: (cells: SlotCell[]) => void;
     /** Appelé quand ⌘V est pressé sur une multi-sélection avec un presse-papier multi-cellules. */
     onNeedsPasteWarning?: () => void;
+    /**
+     * Historique undo/redo actif (défaut : true). Passer `false` quand la grille contient
+     * un état que le moteur ne sait pas représenter fidèlement (ex : une alternance —
+     * deux cellules sur le même créneau) : `pushHistory` devient inerte et ⌘Z / ⌘Y
+     * ne font rien plutôt que de corrompre l'état.
+     */
+    historyEnabled?: boolean;
+    /**
+     * Ne router ⌘Z / ⌘Y vers cette grille que si elle a une sélection (défaut : false).
+     * Indispensable quand plusieurs grilles sont montées (vue Modèles : 7 colonnes) —
+     * sinon un ⌘Z est rejoué par toutes les colonnes qui ont un historique, et défait
+     * une action dans une autre colonne que celle visée.
+     */
+    scopeUndoToSelection?: boolean;
     /**
      * Appelé à la fin d'un clic-glisser d'au moins 2 créneaux qui a réellement bougé,
      * avec la position souris du relâchement. Le consommateur décide s'il ouvre un
@@ -113,6 +155,8 @@ export function useSlotGrid({
     onChanged,
     onNeedsPasteWarning,
     onDragRange,
+    historyEnabled = true,
+    scopeUndoToSelection = false,
 }: UseSlotGridArgs): UseSlotGridResult {
     // Chaque créneau *couvert* par une cellule pointe vers elle (pas seulement son créneau
     // de départ) : en vue jour une cellule = 1 créneau (identique à avant), en vue Modèles
@@ -344,11 +388,18 @@ export function useSlotGrid({
     );
 
     const pushHistory = useCallback(() => {
+        if (!historyEnabled) return;
+        // `cells` est un prop rechargé de façon asynchrone (aller-retour HTTP en vue
+        // Modèles). Deux opérations enchaînées avant l'arrivée du rechargement
+        // capturent le même `cells` → snapshots dupliqués → un seul ⌘Z sautait
+        // plusieurs saisies. On ignore un snapshot identique au sommet de pile.
+        const top = undoStack[undoStack.length - 1];
+        if (top && sameCells(top, cells)) return;
         const u = [...undoStack.slice(-49), cells];
         setUndoStack(u);
         setRedoStack([]);
         persistStacks(u, []);
-    }, [undoStack, cells, persistStacks]);
+    }, [historyEnabled, undoStack, cells, persistStacks]);
 
     const clearHistory = useCallback(() => {
         setUndoStack([]);
@@ -358,55 +409,57 @@ export function useSlotGrid({
 
     const reconcile = useCallback(
         async (target: SlotCell[]) => {
-            const curMap = new Map(cells.map((c) => [c.startedAt, c]));
-            const tgtMap = new Map(target.map((c) => [c.startedAt, c]));
+            // Indexé par `id` (pas par créneau) : deux cellules peuvent partager le même
+            // créneau de départ (alternance en vue Modèles) — les clés par `startedAt` en
+            // écrasaient une et faisaient supprimer/écraser le mauvais bloc.
+            const curById = new Map(cells.map((c) => [c.id, c]));
+            const tgtById = new Map(target.map((c) => [c.id, c]));
             let latest: SlotCell[] = cells;
-            for (const [, cur] of curMap) {
-                if (!tgtMap.has(cur.startedAt)) latest = await ops.deleteCell(cur);
+            const inputOf = (c: SlotCell, endedAt: string): SlotCellInput => ({
+                ticketKey: c.ticketKey,
+                ticketSummary: c.ticketSummary,
+                ticketType: c.ticketType,
+                comment: c.comment,
+                type: c.type,
+                endedAt,
+                intervalWeeks: c.intervalWeeks,
+                anchorDate: c.anchorDate,
+            });
+            for (const cur of curById.values()) {
+                if (!tgtById.has(cur.id)) latest = await ops.deleteCell(cur);
             }
-            for (const [, tgt] of tgtMap) {
-                if (!curMap.has(tgt.startedAt)) {
-                    latest = await ops.createCell(tgt.startedAt, {
-                        ticketKey: tgt.ticketKey,
-                        ticketSummary: tgt.ticketSummary,
-                        ticketType: tgt.ticketType,
-                        comment: tgt.comment,
-                        type: tgt.type,
-                        endedAt: tgt.endedAt ?? getNextSlot(tgt.startedAt),
-                    });
+            for (const tgt of tgtById.values()) {
+                if (!curById.has(tgt.id)) {
+                    latest = await ops.createCell(
+                        tgt.startedAt,
+                        inputOf(tgt, tgt.endedAt ?? getNextSlot(tgt.startedAt)),
+                    );
                 }
             }
-            for (const [, tgt] of tgtMap) {
-                const cur = curMap.get(tgt.startedAt);
+            for (const tgt of tgtById.values()) {
+                const cur = curById.get(tgt.id);
                 if (!cur) continue;
                 const tgtEnd = tgt.endedAt ?? getNextSlot(tgt.startedAt);
-                const durChanged = (cur.endedAt ?? getNextSlot(cur.startedAt)) !== tgtEnd;
+                const movedOrResized =
+                    cur.startedAt !== tgt.startedAt
+                    || (cur.endedAt ?? getNextSlot(cur.startedAt)) !== tgtEnd;
                 const contentChanged =
                     cur.ticketKey !== tgt.ticketKey
                     || cur.type !== tgt.type
                     || cur.comment !== tgt.comment
                     || cur.ticketSummary !== tgt.ticketSummary
-                    || cur.ticketType !== tgt.ticketType;
-                if (durChanged) {
-                    // Durée modifiée (ex : bloc scindé/rétréci) → recréer à la bonne longueur.
+                    || cur.ticketType !== tgt.ticketType
+                    || (cur.intervalWeeks ?? 1) !== (tgt.intervalWeeks ?? 1)
+                    || (cur.anchorDate ?? null) !== (tgt.anchorDate ?? null);
+                if (movedOrResized) {
+                    // Déplacé ou redimensionné (ex : bloc scindé/rétréci) → recréer.
                     await ops.deleteCell(cur);
-                    latest = await ops.createCell(tgt.startedAt, {
-                        ticketKey: tgt.ticketKey,
-                        ticketSummary: tgt.ticketSummary,
-                        ticketType: tgt.ticketType,
-                        comment: tgt.comment,
-                        type: tgt.type,
-                        endedAt: tgtEnd,
-                    });
+                    latest = await ops.createCell(tgt.startedAt, inputOf(tgt, tgtEnd));
                 } else if (contentChanged) {
-                    latest = await ops.updateCell(cur, {
-                        ticketKey: tgt.ticketKey,
-                        ticketSummary: tgt.ticketSummary,
-                        ticketType: tgt.ticketType,
-                        comment: tgt.comment,
-                        type: tgt.type,
-                        endedAt: cur.endedAt ?? getNextSlot(cur.startedAt),
-                    });
+                    latest = await ops.updateCell(
+                        cur,
+                        inputOf(tgt, cur.endedAt ?? getNextSlot(cur.startedAt)),
+                    );
                 }
             }
             onChanged(latest);
@@ -415,6 +468,7 @@ export function useSlotGrid({
     );
 
     const handleUndo = useCallback(async () => {
+        if (!historyEnabled) return;
         const target = undoStack[undoStack.length - 1];
         if (!target) return;
         const u = undoStack.slice(0, -1);
@@ -423,9 +477,10 @@ export function useSlotGrid({
         setRedoStack(r);
         persistStacks(u, r);
         try { await reconcile(target); } catch { /* ops gèrent */ }
-    }, [undoStack, redoStack, cells, persistStacks, reconcile]);
+    }, [historyEnabled, undoStack, redoStack, cells, persistStacks, reconcile]);
 
     const handleRedo = useCallback(async () => {
+        if (!historyEnabled) return;
         const target = redoStack[redoStack.length - 1];
         if (!target) return;
         const u = [...undoStack, cells];
@@ -434,7 +489,7 @@ export function useSlotGrid({
         setRedoStack(r);
         persistStacks(u, r);
         try { await reconcile(target); } catch { /* ops gèrent */ }
-    }, [undoStack, redoStack, cells, persistStacks, reconcile]);
+    }, [historyEnabled, undoStack, redoStack, cells, persistStacks, reconcile]);
 
     // ── Opérations ───────────────────────────────────────────────────────
     const save = useCallback(
@@ -451,6 +506,9 @@ export function useSlotGrid({
                     const intervalUnchanged =
                         data.intervalWeeks === undefined
                         || data.intervalWeeks === existing.intervalWeeks;
+                    const anchorUnchanged =
+                        data.anchorDate === undefined
+                        || data.anchorDate === existing.anchorDate;
                     if (
                         existing.type === data.type
                         && existing.ticketKey === data.ticketKey
@@ -458,6 +516,7 @@ export function useSlotGrid({
                         && existing.ticketSummary === data.ticketSummary
                         && existing.ticketType === data.ticketType
                         && intervalUnchanged
+                        && anchorUnchanged
                     ) return;
                     pushHistory();
                     onChanged(await ops.updateCell(existing, data));
@@ -682,6 +741,7 @@ export function useSlotGrid({
 
     const undoKeyRef = useRef<((e: KeyboardEvent) => void) | null>(null);
     undoKeyRef.current = (e: KeyboardEvent) => {
+        if (scopeUndoToSelection && 0 === selectedSlots.size) return;
         const active = document.activeElement;
         if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
         const ctrl = e.metaKey || e.ctrlKey;
