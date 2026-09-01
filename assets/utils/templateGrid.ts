@@ -109,6 +109,44 @@ export function buildColumnBlocks(rules: TemplateRule[], iso: number): TemplateB
     return blocks;
 }
 
+/** Deux règles représentent-elles le même contenu récurrent (fusion visuelle de blocs adjacents) ? */
+function sameBlockContent(a: TemplateRule, b: TemplateRule): boolean {
+    if (a.rotationGroupId !== null || b.rotationGroupId !== null) return false;
+    if (a.ruleType !== b.ruleType) return false;
+    if (a.intervalWeeks !== b.intervalWeeks) return false;
+    if (a.anchorDate !== b.anchorDate) return false;
+    if (a.enabled !== b.enabled) return false;
+    if (a.activeUntil !== b.activeUntil) return false;
+    if (a.ruleType === TemplateRuleType.BREAK) return true;
+    return a.ticketKey === b.ticketKey
+        && a.ticketSummary === b.ticketSummary
+        && a.ticketType === b.ticketType
+        && a.comment === b.comment;
+}
+
+/**
+ * Fusionne les blocs adjacents (contigus) au contenu identique en un seul rectangle
+ * visuel — parité avec la fusion par contenu de la vue Timeline (`computeRunMap`).
+ * Purement visuel : ne modifie ni ne fusionne les `TemplateRule` sous-jacentes,
+ * chaque créneau reste interactif indépendamment via `ruleBySlot`.
+ */
+export function mergeAdjacentBlocks(blocks: TemplateBlock[]): TemplateBlock[] {
+    const merged: TemplateBlock[] = [];
+    for (const block of blocks) {
+        const prev = merged[merged.length - 1];
+        if (
+            prev
+            && prev.startSlotIndex + prev.slotCount === block.startSlotIndex
+            && sameBlockContent(prev.rule, block.rule)
+        ) {
+            prev.slotCount += block.slotCount;
+            continue;
+        }
+        merged.push({ ...block });
+    }
+    return merged;
+}
+
 /**
  * Première règle WORK/BREAK activée du jour dont la plage horaire recoupe
  * [startMin, startMin + durMin), en ignorant `excludeId`. null si le créneau est libre.

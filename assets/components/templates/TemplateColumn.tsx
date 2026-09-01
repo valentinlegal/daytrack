@@ -14,6 +14,7 @@ import {
     GRID_SLOTS,
     buildColumnBlocks,
     entryRulesForWeekday,
+    mergeAdjacentBlocks,
     minutesToTime,
     nextOccurrenceOnOrAfter,
     targetRuleForWeekday,
@@ -81,6 +82,9 @@ export default function TemplateColumn({
 }: TemplateColumnProps) {
     const columnRules = useMemo(() => entryRulesForWeekday(rules, iso), [rules, iso]);
     const blocks = useMemo(() => buildColumnBlocks(rules, iso), [rules, iso]);
+    // Fusion purement visuelle des blocs adjacents identiques (parité avec la vue Timeline) —
+    // n'affecte pas `blocks` lui-même, utilisé tel quel pour l'overlay d'alternance et l'interaction.
+    const visualBlocks = useMemo(() => mergeAdjacentBlocks(blocks), [blocks]);
     const targetRule = useMemo(() => targetRuleForWeekday(rules, iso), [rules, iso]);
     const gridHeight = GRID_SLOTS.length * SLOT_PX;
     const bodyRef = useRef<HTMLDivElement>(null);
@@ -595,7 +599,7 @@ export default function TemplateColumn({
 
                 {/* z2 — blocs visuels (display-only, pas d'interaction) */}
                 <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }}>
-                    {blocks.map(({ rule, startSlotIndex, slotCount, rotationSize, rotationIndex }) => {
+                    {visualBlocks.map(({ rule, startSlotIndex, slotCount, rotationSize, rotationIndex }) => {
                         const top = startSlotIndex * SLOT_PX;
                         const height = slotCount * SLOT_PX;
                         const runDurationMinutes = slotCount * 15;

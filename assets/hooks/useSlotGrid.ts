@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EntryType } from '@/types/api';
-import { getNextSlot } from '@/utils/timeline';
+import { getNextSlot, SLOT_MINUTES } from '@/utils/timeline';
 import {
     readClipboard,
     writeClipboard,
@@ -687,6 +687,32 @@ export function useSlotGrid({
             const cell = clipboard.cells[0]!;
             pushHistory();
             let latest: SlotCell[] = cells;
+
+            // Sélection contiguë et vide → un seul bloc couvrant toute la plage (comme une
+            // création normale par glisser-déposer), plutôt qu'un créneau de 15 min par ligne.
+            const sorted = [...targetSlots].sort((a, b) => slotToMinutes(a) - slotToMinutes(b));
+            const isContiguous = sorted.length > 1 && sorted.every((s, i) => (
+                0 === i || slotToMinutes(s) === slotToMinutes(sorted[i - 1]!) + SLOT_MINUTES
+            ));
+            const allEmpty = sorted.every((s) => !entryMap.has(s));
+
+            if (isContiguous && allEmpty && !cell.isEmpty) {
+                const start = sorted[0]!;
+                const end = minutesToSlot(slotToMinutes(sorted[sorted.length - 1]!) + SLOT_MINUTES);
+                try {
+                    latest = await ops.createCell(start, {
+                        ticketKey: cell.ticketKey,
+                        ticketSummary: cell.ticketSummary,
+                        ticketType: cell.ticketType,
+                        comment: cell.comment,
+                        type: cell.type,
+                        endedAt: end,
+                    });
+                } catch { /* */ }
+                onChanged(latest);
+                return;
+            }
+
             for (const slot of targetSlots) {
                 if (pendingSlotsRef.current.has(slot)) continue;
                 pendingSlotsRef.current.add(slot);
@@ -699,7 +725,7 @@ export function useSlotGrid({
             }
             onChanged(latest);
         },
-        [clipboard, cells, onChanged, pushHistory, applyClipboardCell],
+        [clipboard, cells, entryMap, ops, onChanged, pushHistory, applyClipboardCell],
     );
 
     const onCut = useCallback(async () => {
