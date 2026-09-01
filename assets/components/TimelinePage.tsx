@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import type { FavoriteTicket, WorkDay } from '@/types/api';
 import { useWorkDay } from '@/hooks/useWorkDay';
@@ -50,7 +50,16 @@ function TimelinePageContent({ date }: { date: string }) {
         sessionStorage.setItem(SUMMARY_OPEN_STORAGE_KEY, String(summaryOpen));
     }, [summaryOpen]);
 
+    // Lu via ref (et non directement `date`) car handleWorkDayUpdate peut être invoquée par une
+    // promesse de synchro JIRA lancée lors d'un rendu antérieur : sans ref, sa closure resterait
+    // figée sur le `date` du jour synchronisé au lieu de voir le jour affiché au moment de la résolution
+    const dateRef = useRef(date);
+    dateRef.current = date;
+
     function handleWorkDayUpdate(updated: WorkDay) {
+        // Ignore les mises à jour tardives (ex : réponse de synchro JIRA) qui ne concernent
+        // plus le jour actuellement affiché — évite d'écraser l'écran après un changement de jour
+        if (updated.date !== dateRef.current) return;
         setWorkDay(updated);
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WorkDay } from '@/types/api';
 import { EntryType } from '@/types/api';
 import { syncDay } from '@/services/jiraService';
@@ -50,6 +50,12 @@ export function useJiraSync(
     const [feedback, setFeedback] = useState<string | null>(null);
     const [errorDetails, setErrorDetails] = useState<Record<string, string>>({});
 
+    // Date actuellement affichée, lue depuis une ref pour détecter dans confirmSync() si l'utilisateur
+    // a changé de journée pendant que la requête de synchro était en cours (la closure de confirmSync
+    // reste figée sur la journée de départ)
+    const currentDateRef = useRef(workDay?.date);
+    currentDateRef.current = workDay?.date;
+
     // Au changement de journée : réinitialise l'état transitoire de sync
     useEffect(() => {
         setSyncStatus('idle');
@@ -67,36 +73,46 @@ export function useJiraSync(
     async function confirmSync(triggerElement: HTMLElement | null, confettiOptions?: FireConfettiOptions): Promise<void> {
         if (null === workDay) return;
 
+        const syncedDate = workDay.date;
         setSyncStatus('syncing');
         setFeedback(null);
         setErrorDetails({});
 
         try {
-            const result = await syncDay(workDay.date);
+            const result = await syncDay(syncedDate);
+            // La journée affichée a changé pendant la requête : n'affiche plus de feedback
+            // (toast, confettis) pour une journée que l'utilisateur ne regarde plus
+            const isStale = currentDateRef.current !== syncedDate;
 
             if (Object.keys(result.errors).length > 0) {
-                setSyncStatus('error');
-                setErrorDetails(result.errors);
-                setFeedback(t('jira.feedback.partial_error'));
+                if (!isStale) {
+                    setSyncStatus('error');
+                    setErrorDetails(result.errors);
+                    setFeedback(t('jira.feedback.partial_error'));
+                }
                 onWorkDayUpdate(result.workDay);
             } else {
                 const fp = entriesFingerprint(result.workDay);
                 sessionStorage.setItem(syncFpKey(result.workDay.date), fp);
-                setSyncStatus('success');
-                if (result.syncedCount > 0) {
-                    fireConfettiFromElement(triggerElement, confettiOptions);
+                if (!isStale) {
+                    setSyncStatus('success');
+                    if (result.syncedCount > 0) {
+                        fireConfettiFromElement(triggerElement, confettiOptions);
+                    }
+                    setFeedback(
+                        result.syncedCount > 0
+                            ? t('jira.feedback.success').replace('{n}', String(result.syncedCount))
+                            : t('jira.feedback.success_empty'),
+                    );
+                    setTimeout(() => { setSyncStatus('idle'); setFeedback(null); }, 2000);
                 }
-                setFeedback(
-                    result.syncedCount > 0
-                        ? t('jira.feedback.success').replace('{n}', String(result.syncedCount))
-                        : t('jira.feedback.success_empty'),
-                );
                 onWorkDayUpdate(result.workDay);
-                setTimeout(() => { setSyncStatus('idle'); setFeedback(null); }, 2000);
             }
         } catch (err) {
-            setSyncStatus('error');
-            setFeedback(err instanceof Error ? err.message : t('jira.error.sync_failed'));
+            if (currentDateRef.current === syncedDate) {
+                setSyncStatus('error');
+                setFeedback(err instanceof Error ? err.message : t('jira.error.sync_failed'));
+            }
         }
     }
 
