@@ -12,6 +12,7 @@ use App\Entity\WorkDay;
 use App\Enum\EntryType;
 use App\Repository\TimeEntryRepository;
 use App\Repository\WorkDayRepository;
+use App\Service\DayMaterializer;
 use DateTimeImmutable;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -29,6 +30,7 @@ class EntryController extends AbstractController
         private readonly TimeEntryRepository $entryRepository,
         private readonly EntityManagerInterface $em,
         private readonly TranslatorInterface $translator,
+        private readonly DayMaterializer $materializer,
     ) {}
 
     /**
@@ -188,8 +190,7 @@ class EntryController extends AbstractController
 
         if (null === $day) {
             if ($createIfMissing) {
-                $day = new WorkDay($parsedDate);
-                $this->em->persist($day);
+                $day = $this->materializer->materialize($parsedDate);
             } else {
                 return $this->json(
                     ['error' => $this->translator->trans('error.day_not_found')],

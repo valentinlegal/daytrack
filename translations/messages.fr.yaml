@@ -8,3 +8,7 @@ error:
     jira_ticket_not_found: "Ticket introuvable ou inaccessible"
     favorite_not_found: "Favori introuvable"
     favorite_already_exists: "Ce ticket est déjà dans vos favoris"
+    template_rule_not_found: "Règle introuvable"
+    template_rule_overlap: "Cette règle chevauche une règle déjà active sur ce créneau"
+    template_rule_anchor_weekday_mismatch: "La date d'ancrage ne correspond pas au jour de semaine sélectionné"
+    template_rule_anchor_in_past: "La date d'ancrage ne peut pas être dans le passé"

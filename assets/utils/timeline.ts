@@ -6,6 +6,12 @@ export const TIMELINE_END_HOUR = 20;
 export const SLOT_MINUTES = 15;
 export const MAX_DAYS_AHEAD = 30;
 
+/** Hauteur en pixels d'un créneau de 15 min dans les grilles (timeline jour + grille Modèles) */
+export const SLOT_PX = 36;
+
+/** Objectif journalier par défaut en minutes (7h30) — aligné sur WorkDay::$targetMinutes côté back */
+export const DEFAULT_TARGET_MINUTES = 450;
+
 // Génère tous les créneaux de la journée (ex: ["08:00", "08:15", ...,"18:45"])
 export function generateTimeSlots(): string[] {
     const slots: string[] = [];
@@ -26,9 +32,26 @@ export function getNextSlot(slot: string): string {
     return formatTime(Math.floor(totalMinutes / 60), totalMinutes % 60);
 }
 
-// Construit un index des entrées par leur heure de début
+// Construit un index créneau → entrée. Une entrée qui couvre plusieurs créneaux
+// (ex : bloc issu d'un modèle, matérialisé en une seule TimeEntry de 45 min) est
+// indexée sur *chacun* de ses créneaux de 15 min, pas seulement celui de départ —
+// sinon computeRunMap ne voit qu'un créneau et le bloc s'affiche tronqué.
 export function buildEntryMap(entries: TimeEntry[]): Map<string, TimeEntry> {
-    return new Map(entries.map((e) => [e.startedAt, e]));
+    const map = new Map<string, TimeEntry>();
+    for (const e of entries) {
+        const [sh, sm] = e.startedAt.split(':').map(Number);
+        let cursor = sh * 60 + sm;
+        let end = cursor + SLOT_MINUTES;
+        if (e.endedAt) {
+            const [eh, em] = e.endedAt.split(':').map(Number);
+            end = Math.max(end, eh * 60 + em);
+        }
+        do {
+            map.set(formatTime(Math.floor(cursor / 60), cursor % 60), e);
+            cursor += SLOT_MINUTES;
+        } while (cursor < end);
+    }
+    return map;
 }
 
 // Formate des heures/minutes en chaîne HH:mm
@@ -72,7 +95,7 @@ export function roundToQuarter(minutes: number): number {
     return Math.round(minutes / 15) * 15;
 }
 
-/** Interprète une saisie utilisateur en minutes (ex: "7h30" → 450, "7:30" → 450, "7.5" → 450, "8" → 480) */
+/** Interprète une saisie utilisateur en minutes (ex: "7h30" → 450, "7:30" → 450, "7.5" → 450, "8" → 480, "30min" → 30) */
 export function parseTarget(value: string): number | null {
     let raw: number | null = null;
 
@@ -82,12 +105,17 @@ export function parseTarget(value: string): number | null {
     const colon = value.trim().match(/^(\d+):(\d{2})$/);
     if (colon) raw = parseInt(colon[1]) * 60 + parseInt(colon[2]);
 
+    // Format "Nmin" — c'est ce que produit formatMinutes() pour < 1h (dont "0min").
+    const minutesOnly = value.trim().match(/^(\d+)\s*min$/i);
+    if (minutesOnly) raw = parseInt(minutesOnly[1]);
+
     const decimal = value.trim().match(/^(\d+(?:[.,]\d+)?)$/);
     if (decimal) raw = Math.round(parseFloat(decimal[1].replace(',', '.')) * 60);
 
     if (raw === null) return null;
     const rounded = roundToQuarter(raw);
-    return rounded > 0 && rounded <= 1440 ? rounded : null;
+    // 0 est autorisé (week-end, jour férié, congé).
+    return rounded >= 0 && rounded <= 1440 ? rounded : null;
 }
 
 /** Retourne l'heure actuelle en minutes depuis minuit */

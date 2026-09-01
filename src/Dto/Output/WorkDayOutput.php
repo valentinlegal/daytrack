@@ -20,6 +20,7 @@ readonly class WorkDayOutput
         public int $balanceMinutes,
         public array $entries,
         public ?string $jiraSyncedAt,
+        public bool $persisted,
     ) {}
 
     public static function fromEntity(WorkDay $workDay): self
@@ -36,6 +37,7 @@ readonly class WorkDayOutput
                     ->toArray()
             ),
             jiraSyncedAt: $workDay->jiraSyncedAt?->format(\DateTimeInterface::ATOM),
+            persisted: null !== $workDay->id,
         );
     }
 }
