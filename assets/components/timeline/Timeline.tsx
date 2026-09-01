@@ -201,6 +201,9 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
         onChanged: () => { /* onWorkDayUpdate déjà appelé par ops */ },
         onNeedsPasteWarning: () => setShowPasteWarning(true),
         onDragRange: (slots, pos) => {
+            // Si un créneau est copié, on laisse la sélection en place pour un collage
+            // (Ctrl+V) au lieu d'ouvrir la popup de création par-dessus
+            if (grid.hasClipboard) return;
             if (slots.every((s) => !entryMap.has(s))) {
                 setEditingSlot(null);
                 setRangeDraft({ slots, pos });

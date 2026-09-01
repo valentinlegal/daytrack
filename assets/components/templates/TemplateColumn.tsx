@@ -395,6 +395,9 @@ export default function TemplateColumn({
         onChanged: () => { /* ops appellent déjà props.onChanged (reload de la page) */ },
         onNeedsPasteWarning,
         onDragRange: (slots, pos) => {
+            // Si un bloc est copié, on laisse la sélection en place pour un collage
+            // (Ctrl+V) au lieu d'ouvrir la popup de création par-dessus
+            if (grid.hasClipboard) return;
             // N'ouvrir la création que si la plage ne contient aucun bloc.
             if (slots.every((s) => !ruleBySlot.has(s))) {
                 closeEditor();
