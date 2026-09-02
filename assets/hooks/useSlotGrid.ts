@@ -344,7 +344,13 @@ export function useSlotGrid({
     const onCopy = useCallback(() => {
         const sorted = [...selectedSlots].sort();
         if (0 === sorted.length) return;
-        const anchorIdx = slots.indexOf(sorted[0] as string);
+        // Ancre = début du bloc qui contient le premier créneau sélectionné (et non ce
+        // créneau lui-même). Sinon, copier un bloc depuis un de ses créneaux *autres que
+        // le premier* donnait un offset négatif : au collage le bloc atterrissait avant
+        // le créneau visé, voire hors grille (destIdx < 0 → cellule ignorée, « impossible
+        // de coller »).
+        const firstEntry = entryMap.get(sorted[0] as string) ?? null;
+        const anchorIdx = slots.indexOf(firstEntry ? firstEntry.startedAt : (sorted[0] as string));
         // Un bloc multi-créneaux (même cellule sur plusieurs créneaux) n'est copié qu'une fois,
         // à l'offset de son créneau de départ.
         const seen = new Set<string>();
