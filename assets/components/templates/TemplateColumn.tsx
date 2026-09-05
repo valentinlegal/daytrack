@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JiraTicketInfo, TemplateRule, TimeEntry } from '@/types/api';
 import { EntryType, TemplateRuleType } from '@/types/api';
 import {
@@ -45,8 +45,10 @@ interface TemplateColumnProps {
     onChanged: () => void;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     onNeedsPasteWarning: () => void;
-    /** iso de la colonne dont la sélection est active — les autres colonnes vident la leur. */
-    activeIso: number | null;
+    /** Cette colonne est-elle celle qui a la sélection / la dernière modifiée ? Les autres
+     *  vident leur sélection ; ⌘Z / ⌘Y sont routés vers elle. Booléen (pas l'iso actif) pour
+     *  que `React.memo` ne re-rende que les 2 colonnes dont l'état change. */
+    isActive: boolean;
     onActivate: (iso: number) => void;
 }
 
@@ -70,14 +72,14 @@ function ruleToEntry(r: TemplateRule): TimeEntry {
     };
 }
 
-export default function TemplateColumn({
+function TemplateColumn({
     iso,
     rules,
     knownTickets,
     onChanged,
     scrollRef,
     onNeedsPasteWarning,
-    activeIso,
+    isActive,
     onActivate,
 }: TemplateColumnProps) {
     const columnRules = useMemo(() => entryRulesForWeekday(rules, iso), [rules, iso]);
@@ -177,17 +179,16 @@ export default function TemplateColumn({
     }, [cells]);
 
     const ops = useMemo(() => {
-        // Toute op recharge l'UI en sortie — succès *ou* échec. Une erreur API (ex : 409
-        // à la recréation d'un membre d'alternance) ne doit pas laisser l'écran désynchronisé
-        // de la base : sinon `reconcile` diffe ensuite contre un état périmé et ⌘Z n'a aucun effet.
-        const withReload = <A extends unknown[]>(fn: (...args: A) => Promise<void>) =>
-            async (...args: A): Promise<SlotCell[]> => {
-                try { await fn(...args); } finally { onChanged(); }
-                return [];
-            };
+        // Les `ops` ne rechargent PAS l'UI : `useSlotGrid` appelle son `onChanged` une seule
+        // fois par action utilisateur (après une passe de plusieurs create/update/delete —
+        // coller sur une multi-sélection, reconstruire une alternance…). Sinon on rechargeait
+        // toute la page N fois pour un seul geste → lenteurs. `onChanged` du hook reste
+        // appelé même si une op échoue en cours de route (voir save / reconcile).
+        const op = <A extends unknown[]>(fn: (...args: A) => Promise<void>) =>
+            async (...args: A): Promise<SlotCell[]> => { await fn(...args); return []; };
 
         return {
-            createCell: withReload(async (slot: string, data: SlotCellInput) => {
+            createCell: op(async (slot: string, data: SlotCellInput) => {
                 const isBreak = data.type === EntryType.BREAK;
                 await createTemplateRule({
                     ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
@@ -208,7 +209,7 @@ export default function TemplateColumn({
                     }),
                 });
             }),
-            updateCell: withReload(async (cell: SlotCell, data: SlotCellInput) => {
+            updateCell: op(async (cell: SlotCell, data: SlotCellInput) => {
                 const rule = ruleById.get(cell.id) ?? ruleBySlot.get(cell.startedAt);
                 const targetIsBreak = data.type === EntryType.BREAK;
                 if (rule && targetIsBreak !== (rule.ruleType === TemplateRuleType.BREAK)) {
@@ -257,11 +258,11 @@ export default function TemplateColumn({
                     await updateTemplateRule(cell.id, patch);
                 }
             }),
-            deleteCell: withReload(async (cell: SlotCell) => {
+            deleteCell: op(async (cell: SlotCell) => {
                 await deleteTemplateRule(cell.id);
             }),
             // Retire seulement `slots` d'un bloc : rétrécit (bord) ou scinde en deux règles (milieu).
-            clearSlots: withReload(async (cell: SlotCell, slots: string[]) => {
+            clearSlots: op(async (cell: SlotCell, slots: string[]) => {
                 const rule = ruleById.get(cell.id) ?? ruleBySlot.get(cell.startedAt);
                 if (!rule || rule.startTime === null || rule.durationMinutes === null) {
                     await deleteTemplateRule(cell.id);
@@ -437,12 +438,14 @@ export default function TemplateColumn({
         // 7 colonnes montées : ⌘Z ne doit agir que sur la colonne active (celle qui a une
         // sélection, ou celle dont on vient de modifier un bloc — voir onActivate ci-dessous).
         scopeUndoToSelection: true,
-        isActive: activeIso === iso,
+        isActive,
         // Conteneur de scroll partagé par les 7 colonnes → persistance gérée une
         // seule fois par TemplatesPage, pas par colonne.
         persistScroll: false,
         resolveCopyCell,
-        onChanged: () => { /* ops appellent déjà props.onChanged (reload de la page) */ },
+        // Un seul rechargement par action utilisateur (le hook l'appelle après sa passe
+        // de create/update/delete), au lieu d'un rechargement par op.
+        onChanged: () => onChanged(),
         onNeedsPasteWarning,
         onDragRange: (slots, pos) => {
             // Si un bloc est copié, on laisse la sélection en place pour un collage
@@ -458,13 +461,14 @@ export default function TemplateColumn({
         },
     });
 
-    // Une seule colonne garde sa sélection à la fois.
+    // Une seule colonne garde sa sélection à la fois : quand celle-ci en pose une, elle
+    // devient active ; les colonnes qui perdent le statut actif vident leur sélection.
     useEffect(() => {
-        if (grid.selectedSlots.size > 0 && activeIso !== iso) onActivate(iso);
-    }, [grid.selectedSlots.size, activeIso, iso, onActivate]);
+        if (grid.selectedSlots.size > 0 && !isActive) onActivate(iso);
+    }, [grid.selectedSlots.size, isActive, iso, onActivate]);
     useEffect(() => {
-        if (activeIso !== null && activeIso !== iso) grid.clearSelection();
-    }, [activeIso, iso, grid.clearSelection]);
+        if (!isActive) grid.clearSelection();
+    }, [isActive, grid.clearSelection]);
 
     // ── Objectif du jour ──────────────────────────────────────────────────
     const [editingTarget, setEditingTarget] = useState(false);
@@ -1003,3 +1007,11 @@ export default function TemplateColumn({
         </div>
     );
 }
+
+/**
+ * 7 colonnes montées en permanence : sans mémoïsation, chaque rechargement (une seule
+ * mutation) re-rend les 7 grilles (~370 cellules chacune ≈ 1 s de blocage). Toutes les
+ * props sont stables côté TemplatesPage sauf `rules` (réutilisé par jour si inchangé) et
+ * `isActive` (2 colonnes concernées au plus) → comparaison superficielle suffisante.
+ */
+export default memo(TemplateColumn);

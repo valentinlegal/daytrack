@@ -519,6 +519,7 @@ export function useSlotGrid({
             // manquant, en trop, ou dégradé hors groupe), on purge le créneau et on
             // recrée tous ses membres. Les groupes dont seule change le *contenu*
             // (même membres, même ids) tombent dans les boucles normales (PUT ciblé).
+          try {
             const handled = new Set<string>();
             const targetGroups = new Map<string, SlotCell[]>();
             for (const c of target) {
@@ -591,7 +592,11 @@ export function useSlotGrid({
                     latest = await ops.updateCell(cur, inputOf(tgt, tgtEnd));
                 }
             }
-            onChanged(latest);
+          } finally {
+              // Une seule resynchro, y compris si une op a échoué en cours de route
+              // (409 sur une alternance) : l'UI ne doit pas rester périmée.
+              onChanged(latest);
+          }
         },
         [cells, ops, onChanged],
     );
@@ -626,9 +631,10 @@ export function useSlotGrid({
             if (pendingSlotsRef.current.has(slot)) return;
             pendingSlotsRef.current.add(slot);
             const existing = entryMap.get(slot);
+            let mutated = false;
             try {
                 if (data === null) {
-                    if (existing) { pushHistory(); onChanged(await ops.deleteCell(existing)); }
+                    if (existing) { pushHistory(); mutated = true; await ops.deleteCell(existing); }
                     return;
                 }
                 if (existing) {
@@ -648,18 +654,22 @@ export function useSlotGrid({
                         && anchorUnchanged
                     ) return;
                     pushHistory();
-                    onChanged(await ops.updateCell(existing, data));
+                    mutated = true;
+                    await ops.updateCell(existing, data);
                 } else {
                     pushHistory();
-                    onChanged(await ops.createCell(slot, data));
+                    mutated = true;
+                    await ops.createCell(slot, data);
                 }
             } catch {
                 /* ops gèrent le message */
             } finally {
                 pendingSlotsRef.current.delete(slot);
+                // Une resynchro même si l'op a échoué ; rien si aucune mutation tentée.
+                if (mutated) onChanged(cells);
             }
         },
-        [entryMap, ops, onChanged, pushHistory],
+        [entryMap, cells, ops, onChanged, pushHistory],
     );
 
     const fillRange = useCallback(

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarClock, ChevronLeft } from 'lucide-react';
 import type { FavoriteTicket, JiraTicketInfo, TemplateRule } from '@/types/api';
@@ -12,6 +12,9 @@ import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { t } from '@/i18n/fr';
 import FavoritesPanel from '@/components/layout/FavoritesPanel';
 import TemplateColumn from './TemplateColumn';
+
+/** Référence stable pour une colonne sans règle (évite un tableau neuf par rendu). */
+const EMPTY_RULES: TemplateRule[] = [];
 
 export default function TemplatesPage() {
     const [rules, setRules] = useState<TemplateRule[]>([]);
@@ -40,6 +43,10 @@ export default function TemplatesPage() {
         void listFavorites().then(setFavorites).catch(() => null);
     }, []);
 
+    // Handlers stables → `React.memo(TemplateColumn)` peut sauter les colonnes inchangées.
+    const handleChanged = useCallback(() => { void reload(); }, []);
+    const handleNeedsPasteWarning = useCallback(() => setShowPasteWarning(true), []);
+
     // Persistance de la position de scroll du conteneur commun aux 7 colonnes
     // (les TemplateColumn passent persistScroll:false pour ne pas le faire 7 fois).
     useEffect(() => {
@@ -55,6 +62,7 @@ export default function TemplatesPage() {
     }, [isLoading]);
 
     // Tickets déjà connus (titre + type) pour l'autocomplete du EditPopover, comme Timeline.
+    // Identité stable tant que le contenu ne bouge pas (sinon casse `React.memo` des colonnes).
     const knownTickets = useMemo<Record<string, JiraTicketInfo>>(() => {
         const map: Record<string, JiraTicketInfo> = {};
         for (const r of rules) {
@@ -63,6 +71,32 @@ export default function TemplatesPage() {
             }
         }
         return map;
+    }, [rules]);
+    const knownTicketsRef = useRef(knownTickets);
+    if (JSON.stringify(knownTicketsRef.current) !== JSON.stringify(knownTickets)) {
+        knownTicketsRef.current = knownTickets;
+    }
+    const stableKnownTickets = knownTicketsRef.current;
+
+    // Règles regroupées par jour, avec réutilisation du tableau précédent si le contenu du
+    // jour est inchangé → une mutation dans une colonne ne re-rend pas les 6 autres.
+    const prevBucketsRef = useRef<Map<number, TemplateRule[]>>(new Map());
+    const rulesByIso = useMemo(() => {
+        const next = new Map<number, TemplateRule[]>();
+        for (const iso of WEEKDAYS) next.set(iso, []);
+        for (const r of rules) next.get(r.weekday)?.push(r);
+        const sig = (arr: TemplateRule[]) => arr
+            .map((r) => `${r.id}|${r.startTime}|${r.durationMinutes}|${r.ticketKey}|${r.ticketSummary}`
+                + `|${r.ticketType}|${r.comment}|${r.rotationGroupId}|${r.enabled}|${r.intervalWeeks}`
+                + `|${r.anchorDate}|${r.activeUntil}|${r.targetMinutes}|${r.position}`)
+            .join('\n');
+        for (const iso of WEEKDAYS) {
+            const cur = next.get(iso)!;
+            const prev = prevBucketsRef.current.get(iso);
+            if (prev && sig(prev) === sig(cur)) next.set(iso, prev);
+        }
+        prevBucketsRef.current = next;
+        return next;
     }, [rules]);
 
     const gridHeight = GRID_SLOTS.length * SLOT_PX;
@@ -136,12 +170,12 @@ export default function TemplatesPage() {
                                 <TemplateColumn
                                     key={iso}
                                     iso={iso}
-                                    rules={rules}
-                                    knownTickets={knownTickets}
-                                    onChanged={() => void reload()}
+                                    rules={rulesByIso.get(iso) ?? EMPTY_RULES}
+                                    knownTickets={stableKnownTickets}
+                                    onChanged={handleChanged}
                                     scrollRef={scrollRef}
-                                    onNeedsPasteWarning={() => setShowPasteWarning(true)}
-                                    activeIso={activeIso}
+                                    onNeedsPasteWarning={handleNeedsPasteWarning}
+                                    isActive={activeIso === iso}
                                     onActivate={setActiveIso}
                                 />
                             ))}
