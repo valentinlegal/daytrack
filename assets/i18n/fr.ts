@@ -99,7 +99,7 @@ const fr = {
             every_week: "Toutes les semaines",
             every_n_weeks: "Une semaine sur {n}",
             start_label: "À partir de quelle semaine ?",
-            start_hint: "La cadence est comptée à partir de cette semaine. Aujourd'hui par défaut.",
+            start_hint: "La cadence est comptée à partir de cette semaine.",
             set_end_date: "Ajouter une date de fin…",
             clear_end_date: "Retirer la date de fin",
             end_date_title: "Dernière semaine d'application",
