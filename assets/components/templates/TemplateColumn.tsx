@@ -89,6 +89,11 @@ export default function TemplateColumn({
     const gridHeight = GRID_SLOTS.length * SLOT_PX;
     const bodyRef = useRef<HTMLDivElement>(null);
 
+    // « + » d'alternance : visible seulement au survol d'un bloc porteur d'un ticket,
+    // maintenu tant que sa popup d'ajout est ouverte (le survol part alors sur la popup).
+    const [hoveredRuleId, setHoveredRuleId] = useState<string | null>(null);
+    const [addOpenRuleId, setAddOpenRuleId] = useState<string | null>(null);
+
     /** Règles WORK/BREAK qui couvrent `slot` (0, 1, ou N sur une alternance). */
     function rulesCoveringSlot(slot: string): TemplateRule[] {
         const slotMin = timeToMinutes(slot);
@@ -124,6 +129,13 @@ export default function TemplateColumn({
         if (picked) pickedMemberRef.current.set(slot, picked.id);
     }
 
+    // Règle par id — résolution non ambiguë quand deux membres d'alternance partagent
+    // le même créneau (là où `ruleBySlot`, indexé par créneau, n'en garde qu'un).
+    const ruleById = useMemo(
+        () => new Map(columnRules.map((r) => [r.id, r])),
+        [columnRules],
+    );
+
     // Chaque créneau couvert par une règle → la règle (pas seulement le créneau de départ),
     // pour que le clic droit / l'édition visent tout le bloc.
     const ruleBySlot = useMemo(() => {
@@ -153,6 +165,7 @@ export default function TemplateColumn({
                 endedAt: addMinutes(r.startTime as string, r.durationMinutes as number),
                 intervalWeeks: r.intervalWeeks,
                 anchorDate: r.anchorDate,
+                rotationGroupId: r.rotationGroupId,
             })),
         [columnRules],
     );
@@ -163,148 +176,151 @@ export default function TemplateColumn({
         return ruleId ? cells.find((c) => c.id === ruleId) : undefined;
     }, [cells]);
 
-    const ops = useMemo(() => ({
-        async createCell(slot: string, data: SlotCellInput): Promise<SlotCell[]> {
-            const isBreak = data.type === EntryType.BREAK;
-            await createTemplateRule({
-                ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
-                weekday: iso,
-                startTime: slot,
-                durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(slot)),
-                intervalWeeks: data.intervalWeeks ?? 1,
-                // Semaine d'ancrage choisie (récurrence > 1 sem.). Ignorée si passée
-                // (undo tardif) — le back retombe alors sur la prochaine occurrence.
-                ...(data.anchorDate && data.anchorDate >= today() ? { anchorDate: data.anchorDate } : {}),
-                ...(isBreak ? {} : {
-                    ticketKey: data.ticketKey,
-                    ticketSummary: data.ticketSummary,
-                    ticketType: data.ticketType,
-                    comment: data.comment,
-                }),
-            });
-            onChanged();
-            return [];
-        },
-        async updateCell(cell: SlotCell, data: SlotCellInput): Promise<SlotCell[]> {
-            const rule = ruleBySlot.get(cell.startedAt);
-            const targetIsBreak = data.type === EntryType.BREAK;
-            if (rule && targetIsBreak !== (rule.ruleType === TemplateRuleType.BREAK)) {
-                // Le PUT ne change pas ruleType → delete + recreate en préservant récurrence/rotation.
-                await deleteTemplateRule(cell.id);
+    const ops = useMemo(() => {
+        // Toute op recharge l'UI en sortie — succès *ou* échec. Une erreur API (ex : 409
+        // à la recréation d'un membre d'alternance) ne doit pas laisser l'écran désynchronisé
+        // de la base : sinon `reconcile` diffe ensuite contre un état périmé et ⌘Z n'a aucun effet.
+        const withReload = <A extends unknown[]>(fn: (...args: A) => Promise<void>) =>
+            async (...args: A): Promise<SlotCell[]> => {
+                try { await fn(...args); } finally { onChanged(); }
+                return [];
+            };
+
+        return {
+            createCell: withReload(async (slot: string, data: SlotCellInput) => {
+                const isBreak = data.type === EntryType.BREAK;
                 await createTemplateRule({
-                    ruleType: targetIsBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                    ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
                     weekday: iso,
-                    startTime: cell.startedAt,
-                    durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(cell.startedAt)),
-                    intervalWeeks: data.intervalWeeks ?? rule.intervalWeeks,
-                    anchorDate: rule.anchorDate,
-                    activeUntil: rule.activeUntil,
-                    enabled: rule.enabled,
-                    rotationGroupId: rule.rotationGroupId,
-                    ...(targetIsBreak ? {} : {
+                    startTime: slot,
+                    durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(slot)),
+                    intervalWeeks: data.intervalWeeks ?? 1,
+                    // Semaine d'ancrage choisie (récurrence > 1 sem.). Ignorée si passée
+                    // (undo tardif) — le back retombe alors sur la prochaine occurrence.
+                    ...(data.anchorDate && data.anchorDate >= today() ? { anchorDate: data.anchorDate } : {}),
+                    // Membre d'alternance recréé par un undo/redo → on rattache au même groupe.
+                    ...(data.rotationGroupId ? { rotationGroupId: data.rotationGroupId } : {}),
+                    ...(isBreak ? {} : {
                         ticketKey: data.ticketKey,
                         ticketSummary: data.ticketSummary,
                         ticketType: data.ticketType,
                         comment: data.comment,
                     }),
                 });
-            } else {
-                const patch: Record<string, unknown> = {
-                    ticketKey: targetIsBreak ? null : data.ticketKey,
-                    ticketSummary: targetIsBreak ? null : data.ticketSummary,
-                    ticketType: targetIsBreak ? null : data.ticketType,
-                    comment: targetIsBreak ? null : data.comment,
-                };
-                // Redimensionnement en place (ex : undo d'un rétrécissement) — le PUT
-                // conserve l'id. Pas de patch si la durée ne change pas (édition de contenu).
-                const targetDuration = Math.max(
-                    SLOT_MINUTES,
-                    timeToMinutes(data.endedAt) - timeToMinutes(cell.startedAt),
-                );
-                if (rule && rule.durationMinutes !== targetDuration) {
-                    patch.durationMinutes = targetDuration;
+            }),
+            updateCell: withReload(async (cell: SlotCell, data: SlotCellInput) => {
+                const rule = ruleById.get(cell.id) ?? ruleBySlot.get(cell.startedAt);
+                const targetIsBreak = data.type === EntryType.BREAK;
+                if (rule && targetIsBreak !== (rule.ruleType === TemplateRuleType.BREAK)) {
+                    // Le PUT ne change pas ruleType → delete + recreate en préservant récurrence/rotation.
+                    await deleteTemplateRule(cell.id);
+                    await createTemplateRule({
+                        ruleType: targetIsBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                        weekday: iso,
+                        startTime: cell.startedAt,
+                        durationMinutes: Math.max(SLOT_MINUTES, timeToMinutes(data.endedAt) - timeToMinutes(cell.startedAt)),
+                        intervalWeeks: data.intervalWeeks ?? rule.intervalWeeks,
+                        anchorDate: rule.anchorDate,
+                        activeUntil: rule.activeUntil,
+                        enabled: rule.enabled,
+                        rotationGroupId: rule.rotationGroupId,
+                        ...(targetIsBreak ? {} : {
+                            ticketKey: data.ticketKey,
+                            ticketSummary: data.ticketSummary,
+                            ticketType: data.ticketType,
+                            comment: data.comment,
+                        }),
+                    });
+                } else {
+                    const patch: Record<string, unknown> = {
+                        ticketKey: targetIsBreak ? null : data.ticketKey,
+                        ticketSummary: targetIsBreak ? null : data.ticketSummary,
+                        ticketType: targetIsBreak ? null : data.ticketType,
+                        comment: targetIsBreak ? null : data.comment,
+                    };
+                    // Redimensionnement en place (ex : undo d'un rétrécissement) — le PUT
+                    // conserve l'id. Pas de patch si la durée ne change pas (édition de contenu).
+                    const targetDuration = Math.max(
+                        SLOT_MINUTES,
+                        timeToMinutes(data.endedAt) - timeToMinutes(cell.startedAt),
+                    );
+                    if (rule && rule.durationMinutes !== targetDuration) {
+                        patch.durationMinutes = targetDuration;
+                    }
+                    if (data.intervalWeeks !== undefined && data.intervalWeeks !== rule?.intervalWeeks) {
+                        patch.intervalWeeks = data.intervalWeeks;
+                    }
+                    if (data.anchorDate !== undefined && data.anchorDate !== rule?.anchorDate
+                        && data.anchorDate >= today()) {
+                        patch.anchorDate = data.anchorDate;
+                    }
+                    await updateTemplateRule(cell.id, patch);
                 }
-                if (data.intervalWeeks !== undefined && data.intervalWeeks !== rule?.intervalWeeks) {
-                    patch.intervalWeeks = data.intervalWeeks;
-                }
-                if (data.anchorDate !== undefined && data.anchorDate !== rule?.anchorDate
-                    && data.anchorDate >= today()) {
-                    patch.anchorDate = data.anchorDate;
-                }
-                await updateTemplateRule(cell.id, patch);
-            }
-            onChanged();
-            return [];
-        },
-        async deleteCell(cell: SlotCell): Promise<SlotCell[]> {
-            await deleteTemplateRule(cell.id);
-            onChanged();
-            return [];
-        },
-        // Retire seulement `slots` d'un bloc : rétrécit (bord) ou scinde en deux règles (milieu).
-        async clearSlots(cell: SlotCell, slots: string[]): Promise<SlotCell[]> {
-            const rule = ruleBySlot.get(cell.startedAt);
-            if (!rule || rule.startTime === null || rule.durationMinutes === null) {
+            }),
+            deleteCell: withReload(async (cell: SlotCell) => {
                 await deleteTemplateRule(cell.id);
-                onChanged();
-                return [];
-            }
-            const startMin = timeToMinutes(rule.startTime);
-            const removeMins = new Set(slots.map((s) => timeToMinutes(s)));
-            const remaining: number[] = [];
-            for (let m = startMin; m < startMin + rule.durationMinutes; m += SLOT_MINUTES) {
-                if (!removeMins.has(m)) remaining.push(m);
-            }
-            if (remaining.length === 0) {
-                await deleteTemplateRule(rule.id);
-                onChanged();
-                return [];
-            }
-            // Séries contiguës de créneaux restants.
-            const runs: Array<[number, number]> = [];
-            let runStart = remaining[0]!;
-            let prev = remaining[0]!;
-            for (let i = 1; i < remaining.length; i++) {
-                const m = remaining[i]!;
-                if (m === prev + SLOT_MINUTES) { prev = m; continue; }
+            }),
+            // Retire seulement `slots` d'un bloc : rétrécit (bord) ou scinde en deux règles (milieu).
+            clearSlots: withReload(async (cell: SlotCell, slots: string[]) => {
+                const rule = ruleById.get(cell.id) ?? ruleBySlot.get(cell.startedAt);
+                if (!rule || rule.startTime === null || rule.durationMinutes === null) {
+                    await deleteTemplateRule(cell.id);
+                    return;
+                }
+                const startMin = timeToMinutes(rule.startTime);
+                const removeMins = new Set(slots.map((s) => timeToMinutes(s)));
+                const remaining: number[] = [];
+                for (let m = startMin; m < startMin + rule.durationMinutes; m += SLOT_MINUTES) {
+                    if (!removeMins.has(m)) remaining.push(m);
+                }
+                if (remaining.length === 0) {
+                    await deleteTemplateRule(rule.id);
+                    return;
+                }
+                // Séries contiguës de créneaux restants.
+                const runs: Array<[number, number]> = [];
+                let runStart = remaining[0]!;
+                let prev = remaining[0]!;
+                for (let i = 1; i < remaining.length; i++) {
+                    const m = remaining[i]!;
+                    if (m === prev + SLOT_MINUTES) { prev = m; continue; }
+                    runs.push([runStart, prev + SLOT_MINUTES]);
+                    runStart = m;
+                    prev = m;
+                }
                 runs.push([runStart, prev + SLOT_MINUTES]);
-                runStart = m;
-                prev = m;
-            }
-            runs.push([runStart, prev + SLOT_MINUTES]);
 
-            const isBreak = rule.ruleType === TemplateRuleType.BREAK;
-            const content = isBreak ? {} : {
-                ticketKey: rule.ticketKey,
-                ticketSummary: rule.ticketSummary,
-                ticketType: rule.ticketType,
-                comment: rule.comment,
-            };
-            // 1re série → règle d'origine (mise à jour) ; suivantes → nouvelles règles.
-            const [f0, f1] = runs[0]!;
-            await updateTemplateRule(rule.id, {
-                startTime: minutesToTime(f0),
-                durationMinutes: f1 - f0,
-            });
-            for (let i = 1; i < runs.length; i++) {
-                const [s, e] = runs[i]!;
-                await createTemplateRule({
-                    ruleType: rule.ruleType,
-                    weekday: iso,
-                    startTime: minutesToTime(s),
-                    durationMinutes: e - s,
-                    intervalWeeks: rule.intervalWeeks,
-                    anchorDate: rule.anchorDate,
-                    activeUntil: rule.activeUntil,
-                    enabled: rule.enabled,
-                    rotationGroupId: rule.rotationGroupId,
-                    ...content,
+                const isBreak = rule.ruleType === TemplateRuleType.BREAK;
+                const content = isBreak ? {} : {
+                    ticketKey: rule.ticketKey,
+                    ticketSummary: rule.ticketSummary,
+                    ticketType: rule.ticketType,
+                    comment: rule.comment,
+                };
+                // 1re série → règle d'origine (mise à jour) ; suivantes → nouvelles règles.
+                const [f0, f1] = runs[0]!;
+                await updateTemplateRule(rule.id, {
+                    startTime: minutesToTime(f0),
+                    durationMinutes: f1 - f0,
                 });
-            }
-            onChanged();
-            return [];
-        },
-    }), [iso, ruleBySlot, onChanged]);
+                for (let i = 1; i < runs.length; i++) {
+                    const [s, e] = runs[i]!;
+                    await createTemplateRule({
+                        ruleType: rule.ruleType,
+                        weekday: iso,
+                        startTime: minutesToTime(s),
+                        durationMinutes: e - s,
+                        intervalWeeks: rule.intervalWeeks,
+                        anchorDate: rule.anchorDate,
+                        activeUntil: rule.activeUntil,
+                        enabled: rule.enabled,
+                        rotationGroupId: rule.rotationGroupId,
+                        ...content,
+                    });
+                }
+            }),
+        };
+    }, [iso, ruleById, ruleBySlot, onChanged]);
 
     // ── Édition d'un créneau (création simple + édition d'un bloc existant) ──
     const [editingSlot, setEditingSlot] = useState<string | null>(null);
@@ -324,6 +340,15 @@ export default function TemplateColumn({
 
     // Plage de créneaux libres sélectionnée par clic-glisser → popover de création à la souris.
     const [rangeCreate, setRangeCreate] = useState<{ slots: string[]; pos: { x: number; y: number } } | null>(null);
+
+    /**
+     * Marque cette colonne comme active pour que ⌘Z / ⌘Y y soient routés (`scopeUndoToSelection`),
+     * après une mutation hors moteur qui ne pose pas de sélection (création d'alternance au
+     * survol, édition d'un membre depuis le popover…).
+     */
+    function armUndo() {
+        onActivate(iso);
+    }
 
     function openEditor(rule: TemplateRule | null, slot: string, pos: { x: number; y: number }) {
         setRangeCreate(null);
@@ -405,13 +430,14 @@ export default function TemplateColumn({
         scrollRef,
         ops,
         // L'historique (undo/redo, indexé par id de cellule) reste valide même quand la
-        // colonne porte une alternance : seuls les 3 chemins qui modifient une règle en
-        // dehors du moteur (créer une alternance, éditer/effacer un de ses membres,
-        // pause→travail) invalident l'historique via grid.clearHistory() — voir plus bas.
-        // Le reste (coller, effacer, convertir en pause…) passe par le moteur et reste
-        // undo-able, y compris sur le créneau de l'alternance elle-même.
-        // 7 colonnes montées : ⌘Z ne doit agir que sur celle qui a la sélection.
+        // colonne porte une alternance : les chemins qui modifient une règle en dehors du
+        // moteur (créer une alternance, éditer/effacer un de ses membres, pause→travail)
+        // appellent grid.pushHistory() *avant* la mutation — les snapshots portent
+        // `rotationGroupId`, donc reconcile sait rejouer (undo *et* redo) — voir plus bas.
+        // 7 colonnes montées : ⌘Z ne doit agir que sur la colonne active (celle qui a une
+        // sélection, ou celle dont on vient de modifier un bloc — voir onActivate ci-dessous).
         scopeUndoToSelection: true,
+        isActive: activeIso === iso,
         // Conteneur de scroll partagé par les 7 colonnes → persistance gérée une
         // seule fois par TemplatesPage, pas par colonne.
         persistScroll: false,
@@ -499,32 +525,41 @@ export default function TemplateColumn({
     /** Supprime puis recrée une règle avec un ruleType différent (PUT ne le modifie pas). */
     async function recreateWithType(rule: TemplateRule, nextType: EntryType) {
         const isBreak = nextType === EntryType.BREAK;
-        await deleteTemplateRule(rule.id);
-        await createTemplateRule({
-            ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
-            weekday: rule.weekday,
-            startTime: rule.startTime,
-            durationMinutes: rule.durationMinutes,
-            intervalWeeks: rule.intervalWeeks,
-            anchorDate: rule.anchorDate,
-            activeUntil: rule.activeUntil,
-            enabled: rule.enabled,
-            rotationGroupId: rule.rotationGroupId,
-            ...(isBreak ? {} : {
-                ticketKey: rule.ticketKey,
-                ticketSummary: rule.ticketSummary,
-                ticketType: rule.ticketType,
-                comment: rule.comment,
-            }),
-        });
+        try {
+            await deleteTemplateRule(rule.id);
+            await createTemplateRule({
+                ruleType: isBreak ? TemplateRuleType.BREAK : TemplateRuleType.WORK,
+                weekday: rule.weekday,
+                startTime: rule.startTime,
+                durationMinutes: rule.durationMinutes,
+                intervalWeeks: rule.intervalWeeks,
+                anchorDate: rule.anchorDate,
+                activeUntil: rule.activeUntil,
+                enabled: rule.enabled,
+                rotationGroupId: rule.rotationGroupId,
+                ...(isBreak ? {} : {
+                    ticketKey: rule.ticketKey,
+                    ticketSummary: rule.ticketSummary,
+                    ticketType: rule.ticketType,
+                    comment: rule.comment,
+                }),
+            });
+        } finally {
+            // Recharge même en cas d'échec (409 sur un membre d'alternance) : l'UI ne doit
+            // pas rester désynchronisée du back.
+            onChanged();
+        }
     }
 
     async function setRuleInterval(rule: TemplateRule, n: number) {
-        try { await updateTemplateRule(rule.id, { intervalWeeks: n }); onChanged(); } catch { /* */ }
+        try { await updateTemplateRule(rule.id, { intervalWeeks: n }); } finally { onChanged(); }
     }
 
     async function toggleEnabled(rule: TemplateRule) {
-        try { await updateTemplateRule(rule.id, { enabled: !rule.enabled }); onChanged(); } catch { /* */ }
+        // Action « crue » (pas de pushHistory) : sur un membre d'alternance elle rendrait
+        // le sommet de pile obsolète → on invalide l'historique de la colonne.
+        if (rule.rotationGroupId != null) grid.clearHistory();
+        try { await updateTemplateRule(rule.id, { enabled: !rule.enabled }); } finally { onChanged(); }
     }
 
     async function clearEndDate(rule: TemplateRule) {
@@ -546,8 +581,7 @@ export default function TemplateColumn({
                 ticketType: rule.ticketType,
                 comment: rule.comment,
             });
-            onChanged();
-        } catch { /* */ }
+        } finally { onChanged(); }
     }
 
     async function submitEndDate() {
@@ -555,7 +589,7 @@ export default function TemplateColumn({
         const value = endDateValue;
         setEndDateRuleId(null);
         if (id === null || value === '') return;
-        try { await updateTemplateRule(id, { activeUntil: value }); onChanged(); } catch { /* */ }
+        try { await updateTemplateRule(id, { activeUntil: value }); } finally { onChanged(); }
     }
 
     return (
@@ -664,7 +698,11 @@ export default function TemplateColumn({
                 </div>
 
                 {/* z5 — cellules d'interaction (clic / double-clic / clic droit / drag) */}
-                <div className="absolute inset-0" style={{ zIndex: 5 }}>
+                <div
+                    className="absolute inset-0"
+                    style={{ zIndex: 5 }}
+                    onMouseLeave={() => setHoveredRuleId(null)}
+                >
                     {GRID_SLOTS.map((slot, idx) => {
                         const rule = ruleBySlot.get(slot) ?? null;
                         const entry = grid.entryMap.get(slot) ?? null;
@@ -678,6 +716,7 @@ export default function TemplateColumn({
                                 key={slot}
                                 className="absolute left-0 right-0 group"
                                 style={{ top: idx * SLOT_PX, height: SLOT_PX }}
+                                onMouseEnter={() => setHoveredRuleId(rule?.id ?? null)}
                             >
                                 <div
                                     className={cn(
@@ -721,13 +760,13 @@ export default function TemplateColumn({
                                             )}
                                             onToggleType={() => {
                                                 if (!rule) return;
-                                                // pause → travail : pas d'équivalent dans le moteur → recréation directe,
-                                                // et on invalide l'historique (l'undo ne saurait pas le représenter).
                                                 if (rule.ruleType === TemplateRuleType.BREAK) {
-                                                    void recreateWithType(rule, EntryType.WORK).then(() => {
-                                                        grid.clearHistory();
-                                                        onChanged();
-                                                    });
+                                                    // pause → travail : recréation directe (le moteur n'a pas d'équivalent).
+                                                    // Bloc simple → pushHistory suffit. Membre d'alternance → le back
+                                                    // dégrade le groupe et refuserait le regroupement, donc historique invalidé.
+                                                    if (rule.rotationGroupId != null) grid.clearHistory();
+                                                    else { grid.pushHistory(); armUndo(); }
+                                                    void recreateWithType(rule, EntryType.WORK);
                                                 } else {
                                                     void grid.onConvertToBreak(new Set([slot]));
                                                 }
@@ -764,16 +803,29 @@ export default function TemplateColumn({
                     {blocks.map(({ rule, startSlotIndex, rotationSize, rotationIndex }) => {
                         const widthPct = 100 / rotationSize;
                         const leftPct = rotationIndex * widthPct;
-                        // « + » uniquement sur un bloc simple : il crée une alternance à 2 membres,
-                        // une semaine sur deux. Une alternance ne s'étend pas au-delà de 2.
-                        const showPlus = rule.rotationGroupId === null;
+                        // « + » uniquement sur un bloc simple porteur d'un ticket : il crée une
+                        // alternance à 2 membres, une semaine sur deux. Une alternance ne s'étend
+                        // pas au-delà de 2. Affiché seulement au survol du bloc (ou tant que sa
+                        // popup d'ajout est ouverte).
+                        const canShowPlus = rule.rotationGroupId === null
+                            && rule.ruleType !== TemplateRuleType.BREAK
+                            && rule.ticketKey !== null;
+                        const showPlus = canShowPlus
+                            && (hoveredRuleId === rule.id || addOpenRuleId === rule.id);
                         return (
                             <div
                                 key={rule.id}
                                 className="absolute"
                                 style={{ top: startSlotIndex * SLOT_PX + 3, left: `${leftPct}%`, width: `${widthPct}%` }}
                             >
-                                <div className="absolute right-1 top-0 flex items-center gap-1">
+                                <div
+                                    className={cn(
+                                        'absolute right-1 top-0 flex items-center gap-1',
+                                        (canShowPlus || rotationSize > 1) && 'pointer-events-auto',
+                                    )}
+                                    onMouseEnter={() => setHoveredRuleId(rule.id)}
+                                    onMouseLeave={() => setHoveredRuleId(null)}
+                                >
                                     {rotationSize > 1 && (
                                         <span
                                             className="rounded bg-amber-900/80 px-1 text-[10px] font-semibold text-white"
@@ -791,7 +843,11 @@ export default function TemplateColumn({
                                             iso={iso}
                                             knownTickets={knownTickets}
                                             onChanged={onChanged}
-                                            onHistoryInvalidate={grid.clearHistory}
+                                            onBeforeMutate={() => {
+                                                grid.pushHistory();
+                                                armUndo();
+                                            }}
+                                            onOpenChange={(open) => setAddOpenRuleId(open ? rule.id : null)}
                                         />
                                     )}
                                 </div>
@@ -826,18 +882,26 @@ export default function TemplateColumn({
                                     return; // garde le popover ouvert
                                 }
                                 closeEditor();
-                                const done = () => { grid.clearHistory(); onChanged(); };
-                                if (wantClear) { void deleteTemplateRule(er.id).then(done); return; }
-                                if (toBreak !== (er.ruleType === TemplateRuleType.BREAK)) {
-                                    void recreateWithType(er, toBreak ? EntryType.BREAK : EntryType.WORK).then(done);
-                                } else {
-                                    void updateTemplateRule(er.id, {
-                                        ticketKey: toBreak ? null : ticketKey,
-                                        ticketSummary: toBreak ? null : ticketSummary,
-                                        ticketType: toBreak ? null : ticketType,
-                                        comment: toBreak ? null : comment,
-                                    }).then(done);
+                                const typeChange = toBreak !== (er.ruleType === TemplateRuleType.BREAK);
+                                if (typeChange) {
+                                    // Changer le type d'un membre = delete + recreate : le back dégrade le
+                                    // groupe et refuserait le regroupement (409). Pas undo-able → historique invalidé.
+                                    grid.clearHistory();
+                                    void recreateWithType(er, toBreak ? EntryType.BREAK : EntryType.WORK);
+                                    return;
                                 }
+                                // Suppression d'un membre ou édition de son contenu : `reconcile` sait
+                                // reconstruire le groupe (les snapshots portent `rotationGroupId`).
+                                grid.pushHistory();
+                                armUndo();
+                                const done = () => { onChanged(); };
+                                if (wantClear) { void deleteTemplateRule(er.id).then(done); return; }
+                                void updateTemplateRule(er.id, {
+                                    ticketKey: toBreak ? null : ticketKey,
+                                    ticketSummary: toBreak ? null : ticketSummary,
+                                    ticketType: toBreak ? null : ticketType,
+                                    comment: toBreak ? null : comment,
+                                }).then(done);
                                 return;
                             }
 
@@ -861,7 +925,9 @@ export default function TemplateColumn({
                             const er = editingRule;
                             closeEditor();
                             if (er && er.rotationGroupId != null) {
-                                void deleteTemplateRule(er.id).then(() => { grid.clearHistory(); onChanged(); });
+                                grid.pushHistory();
+                                armUndo();
+                                void deleteTemplateRule(er.id).then(() => { onChanged(); });
                                 return;
                             }
                             if (s !== null && ruleBySlot.has(s)) void grid.save(s, null);
