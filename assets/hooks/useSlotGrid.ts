@@ -25,6 +25,19 @@ function spanMinutes(start: string, end: string): number {
     return slotToMinutes(end) - slotToMinutes(start);
 }
 
+/**
+ * Le menu contextuel (Copier/Couper/Coller/Effacer…) est rendu dans un portail Radix,
+ * hors de `scrollRef`/`bodyRef` dans le DOM — mais React relaie les évènements le long
+ * de l'arbre React (où le menu reste un enfant du composant), pas de l'arbre DOM. Un
+ * clic sur un item y remonte donc à la fois au listener natif `document` et au `onClick`
+ * du fond de grille, qui effaceraient sinon la sélection juste après toute action du
+ * menu. `[data-slot="context-menu-*"]` (voir assets/components/ui/context-menu.tsx)
+ * identifie ce cas pour l'exclure des deux.
+ */
+function isContextMenuClick(target: EventTarget | null): boolean {
+    return target instanceof Element && null !== target.closest('[data-slot^="context-menu-"]');
+}
+
 /** Deux listes de cellules représentent-elles le même état (pour dédoublonner l'historique) ? */
 function sameCells(a: SlotCell[], b: SlotCell[]): boolean {
     if (a.length !== b.length) return false;
@@ -125,6 +138,15 @@ export interface UseSlotGridArgs {
      * initiales se courent après. Le parent gère alors la persistance une seule fois.
      */
     persistScroll?: boolean;
+    /**
+     * Résout la cellule exacte d'un créneau ambigu (vue Modèles : alternance — deux
+     * règles sur le même créneau, que `entryMap` ne peut pas distinguer puisqu'il est
+     * indexé par créneau). Retourne `undefined` pour laisser `entryMap` décider (cas
+     * normal, y compris tout `useSlotGrid` qui n'a pas d'alternance). Utilisé par la
+     * copie — clic droit *et* ⌘C — pour cibler le membre réellement sélectionné plutôt
+     * que le dernier de la liste.
+     */
+    resolveCopyCell?(slot: string): SlotCell | undefined;
 }
 
 export interface UseSlotGridResult {
@@ -151,6 +173,14 @@ export interface UseSlotGridResult {
     clearSelection(): void;
     /** true si le clic vient de terminer un drag (le consommateur ne doit pas déclencher un clic simple). */
     consumeDragMoved(): boolean;
+    /**
+     * Handler `onClick` prêt à l'emploi pour le fond de grille (hors cellules, qui font
+     * leur propre `stopPropagation`) : efface la sélection, sauf si le clic vient de
+     * terminer un drag ou provient du menu contextuel (portail Radix — voir
+     * `isContextMenuClick`, sans quoi cliquer un item du menu effaçait la sélection juste
+     * après toute action, empêchant ⌘Z de cibler la colonne avec `scopeUndoToSelection`).
+     */
+    onBackgroundClick(e: React.MouseEvent): void;
 }
 
 export function useSlotGrid({
@@ -165,6 +195,7 @@ export function useSlotGrid({
     historyEnabled = true,
     scopeUndoToSelection = false,
     persistScroll = true,
+    resolveCopyCell,
 }: UseSlotGridArgs): UseSlotGridResult {
     // Chaque créneau *couvert* par une cellule pointe vers elle (pas seulement son créneau
     // de départ) : en vue jour une cellule = 1 créneau (identique à avant), en vue Modèles
@@ -241,7 +272,9 @@ export function useSlotGrid({
     useEffect(() => {
         if (0 === selectedSlots.size) return;
         function onDocClick(e: MouseEvent) {
-            if (scrollRef.current?.contains(e.target as Node)) return;
+            const target = e.target as Node;
+            if (scrollRef.current?.contains(target)) return;
+            if (isContextMenuClick(target)) return;
             clearSelection();
         }
         document.addEventListener('click', onDocClick);
@@ -285,6 +318,15 @@ export function useSlotGrid({
         }
         return false;
     }, []);
+
+    const onBackgroundClick = useCallback(
+        (e: React.MouseEvent) => {
+            if (consumeDragMoved()) return;
+            if (isContextMenuClick(e.target)) return;
+            clearSelection();
+        },
+        [consumeDragMoved, clearSelection],
+    );
 
     useEffect(() => {
         if (!isDragging) return;
@@ -344,12 +386,18 @@ export function useSlotGrid({
     const onCopy = useCallback(() => {
         const sorted = [...selectedSlots].sort();
         if (0 === sorted.length) return;
+        // `resolveCopyCell` désambiguïse un créneau qui porte plusieurs cellules (vue
+        // Modèles : alternance) en ciblant celle réellement sélectionnée plutôt que la
+        // dernière que `entryMap` — indexé par créneau — retiendrait. `undefined` pour
+        // un créneau normal : `entryMap` décide.
+        const cellAt = (slot: string): SlotCell | null =>
+            resolveCopyCell?.(slot) ?? entryMap.get(slot) ?? null;
         // Ancre = début du bloc qui contient le premier créneau sélectionné (et non ce
         // créneau lui-même). Sinon, copier un bloc depuis un de ses créneaux *autres que
         // le premier* donnait un offset négatif : au collage le bloc atterrissait avant
         // le créneau visé, voire hors grille (destIdx < 0 → cellule ignorée, « impossible
         // de coller »).
-        const firstEntry = entryMap.get(sorted[0] as string) ?? null;
+        const firstEntry = cellAt(sorted[0] as string);
         const anchorIdx = slots.indexOf(firstEntry ? firstEntry.startedAt : (sorted[0] as string));
         // Un bloc multi-créneaux (même cellule sur plusieurs créneaux) n'est copié qu'une fois,
         // à l'offset de son créneau de départ.
@@ -357,7 +405,7 @@ export function useSlotGrid({
         const cellsOut: ClipboardData['cells'] = [];
         for (const slot of sorted) {
             const idx = slots.indexOf(slot);
-            const entry = entryMap.get(slot) ?? null;
+            const entry = cellAt(slot);
             if (entry && seen.has(entry.id)) continue;
             if (entry) seen.add(entry.id);
             const baseIdx = entry ? slots.indexOf(entry.startedAt) : idx;
@@ -376,7 +424,7 @@ export function useSlotGrid({
         const value: ClipboardData = { cells: cellsOut };
         setClipboard(value);
         writeClipboard(value);
-    }, [selectedSlots, slots, entryMap]);
+    }, [selectedSlots, slots, entryMap, resolveCopyCell]);
 
     // ── Garde anti-double-soumission + historique ────────────────────────
     const pendingSlotsRef = useRef<Set<string>>(new Set());
@@ -815,5 +863,6 @@ export function useSlotGrid({
         clearHistory,
         clearSelection,
         consumeDragMoved,
+        onBackgroundClick,
     };
 }

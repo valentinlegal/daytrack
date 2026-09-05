@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JiraTicketInfo, TemplateRule, TimeEntry } from '@/types/api';
 import { EntryType, TemplateRuleType } from '@/types/api';
 import {
@@ -89,14 +89,19 @@ export default function TemplateColumn({
     const gridHeight = GRID_SLOTS.length * SLOT_PX;
     const bodyRef = useRef<HTMLDivElement>(null);
 
-    /** Règle visée sur un créneau ; sur une alternance, choisit le membre selon la position X du clic. */
-    function resolveRuleAt(slot: string, clientX: number): TemplateRule | null {
+    /** Règles WORK/BREAK qui couvrent `slot` (0, 1, ou N sur une alternance). */
+    function rulesCoveringSlot(slot: string): TemplateRule[] {
         const slotMin = timeToMinutes(slot);
-        const here = columnRules.filter(
+        return columnRules.filter(
             (r) => r.startTime !== null && r.durationMinutes !== null
                 && timeToMinutes(r.startTime) <= slotMin
                 && slotMin < timeToMinutes(r.startTime) + r.durationMinutes,
         );
+    }
+
+    /** Règle visée sur un créneau ; sur une alternance, choisit le membre selon la position X du clic. */
+    function resolveRuleAt(slot: string, clientX: number): TemplateRule | null {
+        const here = rulesCoveringSlot(slot);
         if (here.length <= 1) return here[0] ?? null;
         const members = [...here].sort((a, b) => a.anchorDate.localeCompare(b.anchorDate));
         const body = bodyRef.current?.getBoundingClientRect();
@@ -106,6 +111,17 @@ export default function TemplateColumn({
             Math.max(0, Math.floor((clientX - body.left) / (body.width / members.length))),
         );
         return members[idx]!;
+    }
+
+    // Dernier membre d'alternance pointé par créneau (clic gauche ou droit) — permet à la
+    // copie (clic droit *et* ⌘C, ce dernier n'ayant pas de position X) de cibler le membre
+    // réellement sélectionné plutôt que le dernier de la liste (voir `resolveCopyCell`).
+    const pickedMemberRef = useRef<Map<string, string>>(new Map());
+    function notePickedMember(slot: string, clientX: number) {
+        const here = rulesCoveringSlot(slot);
+        if (here.length <= 1) { pickedMemberRef.current.delete(slot); return; }
+        const picked = resolveRuleAt(slot, clientX);
+        if (picked) pickedMemberRef.current.set(slot, picked.id);
     }
 
     // Chaque créneau couvert par une règle → la règle (pas seulement le créneau de départ),
@@ -140,6 +156,12 @@ export default function TemplateColumn({
             })),
         [columnRules],
     );
+
+    /** Cellule du membre d'alternance pointé sur `slot` — voir `pickedMemberRef`. */
+    const resolveCopyCell = useCallback((slot: string): SlotCell | undefined => {
+        const ruleId = pickedMemberRef.current.get(slot);
+        return ruleId ? cells.find((c) => c.id === ruleId) : undefined;
+    }, [cells]);
 
     const ops = useMemo(() => ({
         async createCell(slot: string, data: SlotCellInput): Promise<SlotCell[]> {
@@ -376,26 +398,24 @@ export default function TemplateColumn({
         </div>
     );
 
-    // Une alternance = deux cellules sur le même créneau : le moteur d'historique ne sait
-    // pas la représenter → undo/redo désactivés sur une colonne qui en contient une
-    // (cohérent avec les grid.clearHistory() des chemins d'édition d'alternance).
-    const columnHasRotation = useMemo(
-        () => columnRules.some((r) => r.rotationGroupId !== null),
-        [columnRules],
-    );
-
     const grid = useSlotGrid({
         slots: GRID_SLOTS,
         cells,
         storagePrefix: `daytrack_tmpl_${iso}`,
         scrollRef,
         ops,
-        historyEnabled: !columnHasRotation,
+        // L'historique (undo/redo, indexé par id de cellule) reste valide même quand la
+        // colonne porte une alternance : seuls les 3 chemins qui modifient une règle en
+        // dehors du moteur (créer une alternance, éditer/effacer un de ses membres,
+        // pause→travail) invalident l'historique via grid.clearHistory() — voir plus bas.
+        // Le reste (coller, effacer, convertir en pause…) passe par le moteur et reste
+        // undo-able, y compris sur le créneau de l'alternance elle-même.
         // 7 colonnes montées : ⌘Z ne doit agir que sur celle qui a la sélection.
         scopeUndoToSelection: true,
         // Conteneur de scroll partagé par les 7 colonnes → persistance gérée une
         // seule fois par TemplatesPage, pas par colonne.
         persistScroll: false,
+        resolveCopyCell,
         onChanged: () => { /* ops appellent déjà props.onChanged (reload de la page) */ },
         onNeedsPasteWarning,
         onDragRange: (slots, pos) => {
@@ -583,7 +603,7 @@ export default function TemplateColumn({
                 ref={bodyRef}
                 className="relative mt-2"
                 style={{ height: gridHeight }}
-                onClick={() => { if (!grid.consumeDragMoved()) grid.clearSelection(); }}
+                onClick={grid.onBackgroundClick}
             >
                 {GRID_SLOTS.map((slot, idx) => (
                     <div
@@ -671,10 +691,14 @@ export default function TemplateColumn({
                                 <TimeBlock
                                     slot={slot}
                                     isSelected={grid.selectedSlots.has(slot)}
-                                    onSelect={(e) => grid.onSelect(slot, e)}
+                                    onSelect={(e) => { notePickedMember(slot, e.clientX); grid.onSelect(slot, e); }}
                                     onStartEdit={(x, y) => openEditor(resolveRuleAt(slot, x), slot, { x, y })}
                                     onContextMenuOpen={() => grid.onContextMenuOpen(slot)}
-                                    onContextMenuOpenAt={(r, cx) => { setMenuRect(r); menuClickXRef.current = cx; }}
+                                    onContextMenuOpenAt={(r, cx) => {
+                                        setMenuRect(r);
+                                        menuClickXRef.current = cx;
+                                        notePickedMember(slot, cx);
+                                    }}
                                     onCellMouseDown={(e) => grid.onCellMouseDown(slot, e)}
                                     onDragExtend={() => grid.onDragExtend(slot)}
                                     onDropFavorite={() => grid.onDropFavorite(slot)}

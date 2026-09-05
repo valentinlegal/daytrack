@@ -288,9 +288,7 @@ export default function Timeline({ workDay, onWorkDayUpdate }: TimelineProps) {
                 ref={scrollRef}
                 className="flex-1 overflow-y-auto"
                 style={editingSlot !== null || rangeDraft !== null ? { overflow: 'hidden' } : undefined}
-                onClick={() => {
-                    if (!grid.consumeDragMoved()) grid.clearSelection();
-                }}
+                onClick={grid.onBackgroundClick}
             >
                 {/*
                   Conteneur relatif pour le layer absolu des blocs.
