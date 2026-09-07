@@ -37,6 +37,10 @@ const INTERVAL_CHOICES = [1, 2, 3, 4];
 /** `<ContextMenuContent>` complet d'une cellule Modèles : actions « grille » + actions « règle ». */
 export default function TemplateBlockMenu(p: TemplateBlockMenuProps) {
     const isBreak = p.entry?.type === EntryType.BREAK;
+    // Un membre d'alternance : le back dégrade le groupe dès qu'on change son type ou sa
+    // cadence (et refuse ensuite le regroupement). On masque donc « Convertir en pause » et
+    // « Récurrence » — seules l'édition du ticket et la suppression du membre restent sûres.
+    const isRotationMember = p.rule?.rotationGroupId != null;
 
     return (
         <ContextMenuContent className="min-w-[220px]">
@@ -66,7 +70,7 @@ export default function TemplateBlockMenu(p: TemplateBlockMenuProps) {
             {p.rule && !isBreak && (
                 <ContextMenuItem className="text-sm" onClick={p.onEdit}>{t('templates.block.edit')}</ContextMenuItem>
             )}
-            {p.rule && (
+            {p.rule && !isRotationMember && (
                 <ContextMenuItem className="text-sm" onClick={p.onToggleType}>
                     {isBreak ? t('templates.block.convert_to_work') : t('timeline.convert_to_break')}
                 </ContextMenuItem>
@@ -78,42 +82,35 @@ export default function TemplateBlockMenu(p: TemplateBlockMenuProps) {
                 </ContextMenuItem>
             )}
 
-            {p.rule && (
-                <>
-                    <ContextMenuSub>
-                        <ContextMenuSubTrigger className="text-sm">{t('templates.recurrence.menu')}</ContextMenuSubTrigger>
-                        <ContextMenuSubContent>
-                            {/* Membre d'alternance : cadence verrouillée sur « une semaine sur deux ». */}
-                            {p.rule.rotationGroupId !== null ? (
-                                <ContextMenuItem disabled className="text-sm">
-                                    {t('templates.recurrence.locked_by_rotation')}
-                                </ContextMenuItem>
-                            ) : (
-                                <ContextMenuRadioGroup value={String(p.rule.intervalWeeks)}>
-                                    {INTERVAL_CHOICES.map((n) => (
-                                        <ContextMenuRadioItem key={n} value={String(n)} className="text-sm" onClick={() => p.onSetInterval(n)}>
-                                            {n === 1
-                                                ? t('templates.recurrence.every_week')
-                                                : t('templates.recurrence.every_n_weeks').replace('{n}', String(n))}
-                                        </ContextMenuRadioItem>
-                                    ))}
-                                </ContextMenuRadioGroup>
-                            )}
-                            <ContextMenuSeparator />
-                            <ContextMenuItem className="text-sm" onClick={p.onSetEndDate}>
-                                {t('templates.recurrence.set_end_date')}
+            {p.rule && !isRotationMember && (
+                <ContextMenuSub>
+                    <ContextMenuSubTrigger className="text-sm">{t('templates.recurrence.menu')}</ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                        <ContextMenuRadioGroup value={String(p.rule.intervalWeeks)}>
+                            {INTERVAL_CHOICES.map((n) => (
+                                <ContextMenuRadioItem key={n} value={String(n)} className="text-sm" onClick={() => p.onSetInterval(n)}>
+                                    {n === 1
+                                        ? t('templates.recurrence.every_week')
+                                        : t('templates.recurrence.every_n_weeks').replace('{n}', String(n))}
+                                </ContextMenuRadioItem>
+                            ))}
+                        </ContextMenuRadioGroup>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem className="text-sm" onClick={p.onSetEndDate}>
+                            {t('templates.recurrence.set_end_date')}
+                        </ContextMenuItem>
+                        {p.rule.activeUntil !== null && (
+                            <ContextMenuItem className="text-sm" onClick={p.onClearEndDate}>
+                                {t('templates.recurrence.clear_end_date')}
                             </ContextMenuItem>
-                            {p.rule.activeUntil !== null && (
-                                <ContextMenuItem className="text-sm" onClick={p.onClearEndDate}>
-                                    {t('templates.recurrence.clear_end_date')}
-                                </ContextMenuItem>
-                            )}
-                        </ContextMenuSubContent>
-                    </ContextMenuSub>
-                    <ContextMenuItem className="text-sm" onClick={p.onToggleEnabled}>
-                        {p.rule.enabled ? t('templates.block.disable') : t('templates.block.enable')}
-                    </ContextMenuItem>
-                </>
+                        )}
+                    </ContextMenuSubContent>
+                </ContextMenuSub>
+            )}
+            {p.rule && (
+                <ContextMenuItem className="text-sm" onClick={p.onToggleEnabled}>
+                    {p.rule.enabled ? t('templates.block.disable') : t('templates.block.enable')}
+                </ContextMenuItem>
             )}
 
             <ContextMenuSeparator className="mx-1" />

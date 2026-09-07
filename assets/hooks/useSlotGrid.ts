@@ -25,6 +25,19 @@ function spanMinutes(start: string, end: string): number {
     return slotToMinutes(end) - slotToMinutes(start);
 }
 
+/**
+ * Le menu contextuel (Copier/Couper/Coller/Effacer…) est rendu dans un portail Radix,
+ * hors de `scrollRef`/`bodyRef` dans le DOM — mais React relaie les évènements le long
+ * de l'arbre React (où le menu reste un enfant du composant), pas de l'arbre DOM. Un
+ * clic sur un item y remonte donc à la fois au listener natif `document` et au `onClick`
+ * du fond de grille, qui effaceraient sinon la sélection juste après toute action du
+ * menu. `[data-slot="context-menu-*"]` (voir assets/components/ui/context-menu.tsx)
+ * identifie ce cas pour l'exclure des deux.
+ */
+function isContextMenuClick(target: EventTarget | null): boolean {
+    return target instanceof Element && null !== target.closest('[data-slot^="context-menu-"]');
+}
+
 /** Deux listes de cellules représentent-elles le même état (pour dédoublonner l'historique) ? */
 function sameCells(a: SlotCell[], b: SlotCell[]): boolean {
     if (a.length !== b.length) return false;
@@ -42,6 +55,7 @@ function sameCells(a: SlotCell[], b: SlotCell[]): boolean {
             || o.comment !== c.comment
             || (o.intervalWeeks ?? 1) !== (c.intervalWeeks ?? 1)
             || (o.anchorDate ?? null) !== (c.anchorDate ?? null)
+            || (o.rotationGroupId ?? null) !== (c.rotationGroupId ?? null)
         ) {
             return false;
         }
@@ -63,6 +77,9 @@ export interface SlotCell {
     intervalWeeks?: number;
     /** Semaine d'ancrage de la récurrence "YYYY-MM-DD" (vue Modèles) — absent en vue jour. */
     anchorDate?: string;
+    /** Groupe d'alternance (vue Modèles) — `null`/absent pour un bloc simple. Porté dans
+     *  les snapshots undo/redo pour que `reconcile` sache reconstruire une alternance. */
+    rotationGroupId?: string | null;
 }
 
 export interface SlotCellInput {
@@ -76,6 +93,9 @@ export interface SlotCellInput {
     intervalWeeks?: number;
     /** Semaine d'ancrage "YYYY-MM-DD" (vue Modèles) — ignoré par la vue jour. `undefined` = inchangé. */
     anchorDate?: string;
+    /** Groupe d'alternance (vue Modèles) — passé par `reconcile` pour recréer un membre
+     *  d'alternance à l'identique. Ignoré par la vue jour. */
+    rotationGroupId?: string | null;
 }
 
 export interface SlotGridOps {
@@ -106,12 +126,18 @@ export interface UseSlotGridArgs {
      */
     historyEnabled?: boolean;
     /**
-     * Ne router ⌘Z / ⌘Y vers cette grille que si elle a une sélection (défaut : false).
-     * Indispensable quand plusieurs grilles sont montées (vue Modèles : 7 colonnes) —
-     * sinon un ⌘Z est rejoué par toutes les colonnes qui ont un historique, et défait
-     * une action dans une autre colonne que celle visée.
+     * Ne router ⌘Z / ⌘Y vers cette grille que si elle a une sélection *ou* qu'elle est
+     * la grille active (`isActive`) — défaut : false. Indispensable quand plusieurs
+     * grilles sont montées (vue Modèles : 7 colonnes) : sinon un ⌘Z est rejoué par
+     * toutes les colonnes qui ont un historique, et défait une action ailleurs.
      */
     scopeUndoToSelection?: boolean;
+    /**
+     * Grille active du groupe (vue Modèles : la colonne dont on vient de modifier un
+     * bloc). Avec `scopeUndoToSelection`, ⌘Z / ⌘Y y sont routés même sans sélection —
+     * une action hors moteur (création d'alternance au survol) ne pose pas de sélection.
+     */
+    isActive?: boolean;
     /**
      * Appelé à la fin d'un clic-glisser d'au moins 2 créneaux qui a réellement bougé,
      * avec la position souris du relâchement. Le consommateur décide s'il ouvre un
@@ -125,6 +151,15 @@ export interface UseSlotGridArgs {
      * initiales se courent après. Le parent gère alors la persistance une seule fois.
      */
     persistScroll?: boolean;
+    /**
+     * Résout la cellule exacte d'un créneau ambigu (vue Modèles : alternance — deux
+     * règles sur le même créneau, que `entryMap` ne peut pas distinguer puisqu'il est
+     * indexé par créneau). Retourne `undefined` pour laisser `entryMap` décider (cas
+     * normal, y compris tout `useSlotGrid` qui n'a pas d'alternance). Utilisé par la
+     * copie — clic droit *et* ⌘C — pour cibler le membre réellement sélectionné plutôt
+     * que le dernier de la liste.
+     */
+    resolveCopyCell?(slot: string): SlotCell | undefined;
 }
 
 export interface UseSlotGridResult {
@@ -148,9 +183,24 @@ export interface UseSlotGridResult {
     fillRange(slots: string[], data: SlotCellInput): Promise<void>;
     /** Vide les piles undo/redo (après une action que le moteur ne sait pas représenter). */
     clearHistory(): void;
+    /**
+     * Enregistre l'état courant sur la pile d'annulation, avant une mutation menée
+     * hors du moteur (ex : création d'alternance dans la vue Modèles, qui supprime une
+     * règle et en crée deux). `reconcile` sait rejouer le résultat car les snapshots
+     * portent `rotationGroupId` — inutile donc de `clearHistory()`.
+     */
+    pushHistory(): void;
     clearSelection(): void;
     /** true si le clic vient de terminer un drag (le consommateur ne doit pas déclencher un clic simple). */
     consumeDragMoved(): boolean;
+    /**
+     * Handler `onClick` prêt à l'emploi pour le fond de grille (hors cellules, qui font
+     * leur propre `stopPropagation`) : efface la sélection, sauf si le clic vient de
+     * terminer un drag ou provient du menu contextuel (portail Radix — voir
+     * `isContextMenuClick`, sans quoi cliquer un item du menu effaçait la sélection juste
+     * après toute action, empêchant ⌘Z de cibler la colonne avec `scopeUndoToSelection`).
+     */
+    onBackgroundClick(e: React.MouseEvent): void;
 }
 
 export function useSlotGrid({
@@ -164,7 +214,9 @@ export function useSlotGrid({
     onDragRange,
     historyEnabled = true,
     scopeUndoToSelection = false,
+    isActive = false,
     persistScroll = true,
+    resolveCopyCell,
 }: UseSlotGridArgs): UseSlotGridResult {
     // Chaque créneau *couvert* par une cellule pointe vers elle (pas seulement son créneau
     // de départ) : en vue jour une cellule = 1 créneau (identique à avant), en vue Modèles
@@ -241,7 +293,9 @@ export function useSlotGrid({
     useEffect(() => {
         if (0 === selectedSlots.size) return;
         function onDocClick(e: MouseEvent) {
-            if (scrollRef.current?.contains(e.target as Node)) return;
+            const target = e.target as Node;
+            if (scrollRef.current?.contains(target)) return;
+            if (isContextMenuClick(target)) return;
             clearSelection();
         }
         document.addEventListener('click', onDocClick);
@@ -285,6 +339,15 @@ export function useSlotGrid({
         }
         return false;
     }, []);
+
+    const onBackgroundClick = useCallback(
+        (e: React.MouseEvent) => {
+            if (consumeDragMoved()) return;
+            if (isContextMenuClick(e.target)) return;
+            clearSelection();
+        },
+        [consumeDragMoved, clearSelection],
+    );
 
     useEffect(() => {
         if (!isDragging) return;
@@ -344,14 +407,26 @@ export function useSlotGrid({
     const onCopy = useCallback(() => {
         const sorted = [...selectedSlots].sort();
         if (0 === sorted.length) return;
-        const anchorIdx = slots.indexOf(sorted[0] as string);
+        // `resolveCopyCell` désambiguïse un créneau qui porte plusieurs cellules (vue
+        // Modèles : alternance) en ciblant celle réellement sélectionnée plutôt que la
+        // dernière que `entryMap` — indexé par créneau — retiendrait. `undefined` pour
+        // un créneau normal : `entryMap` décide.
+        const cellAt = (slot: string): SlotCell | null =>
+            resolveCopyCell?.(slot) ?? entryMap.get(slot) ?? null;
+        // Ancre = début du bloc qui contient le premier créneau sélectionné (et non ce
+        // créneau lui-même). Sinon, copier un bloc depuis un de ses créneaux *autres que
+        // le premier* donnait un offset négatif : au collage le bloc atterrissait avant
+        // le créneau visé, voire hors grille (destIdx < 0 → cellule ignorée, « impossible
+        // de coller »).
+        const firstEntry = cellAt(sorted[0] as string);
+        const anchorIdx = slots.indexOf(firstEntry ? firstEntry.startedAt : (sorted[0] as string));
         // Un bloc multi-créneaux (même cellule sur plusieurs créneaux) n'est copié qu'une fois,
         // à l'offset de son créneau de départ.
         const seen = new Set<string>();
         const cellsOut: ClipboardData['cells'] = [];
         for (const slot of sorted) {
             const idx = slots.indexOf(slot);
-            const entry = entryMap.get(slot) ?? null;
+            const entry = cellAt(slot);
             if (entry && seen.has(entry.id)) continue;
             if (entry) seen.add(entry.id);
             const baseIdx = entry ? slots.indexOf(entry.startedAt) : idx;
@@ -370,7 +445,7 @@ export function useSlotGrid({
         const value: ClipboardData = { cells: cellsOut };
         setClipboard(value);
         writeClipboard(value);
-    }, [selectedSlots, slots, entryMap]);
+    }, [selectedSlots, slots, entryMap, resolveCopyCell]);
 
     // ── Garde anti-double-soumission + historique ────────────────────────
     const pendingSlotsRef = useRef<Set<string>>(new Set());
@@ -433,11 +508,57 @@ export function useSlotGrid({
                 endedAt,
                 intervalWeeks: c.intervalWeeks,
                 anchorDate: c.anchorDate,
+                rotationGroupId: c.rotationGroupId,
             });
+
+            // ── Groupes d'alternance : reconstruction en bloc ─────────────────
+            // Le moteur ne sait pas *regrouper* deux règles existantes : le PUT ne
+            // change pas `rotationGroupId`, et le back dégrade un groupe tombé à un
+            // seul membre en règle simple (`rotationGroupId` → null). Donc dès que la
+            // structure d'un groupe présent dans `target` ne correspond plus (membre
+            // manquant, en trop, ou dégradé hors groupe), on purge le créneau et on
+            // recrée tous ses membres. Les groupes dont seule change le *contenu*
+            // (même membres, même ids) tombent dans les boucles normales (PUT ciblé).
+          try {
+            const handled = new Set<string>();
+            const targetGroups = new Map<string, SlotCell[]>();
+            for (const c of target) {
+                if (c.rotationGroupId == null) continue;
+                const g = targetGroups.get(c.rotationGroupId) ?? [];
+                g.push(c);
+                targetGroups.set(c.rotationGroupId, g);
+            }
+            for (const [groupId, members] of targetGroups) {
+                const startedAt = members[0]!.startedAt;
+                const inSpan = cells.filter((c) => c.startedAt === startedAt);
+                const targetIds = new Set(members.map((m) => m.id));
+                const structureOk =
+                    inSpan.length === members.length
+                    && inSpan.every((c) => targetIds.has(c.id) && c.rotationGroupId === groupId);
+                if (structureOk) continue;
+                for (const c of inSpan) {
+                    latest = await ops.deleteCell(c);
+                    handled.add(c.id);
+                }
+                // Recréation ordonnée par anchorDate → phase de rotation déterministe.
+                const ordered = [...members].sort(
+                    (a, b) => (a.anchorDate ?? '').localeCompare(b.anchorDate ?? ''),
+                );
+                for (const m of ordered) {
+                    latest = await ops.createCell(
+                        m.startedAt,
+                        inputOf(m, m.endedAt ?? getNextSlot(m.startedAt)),
+                    );
+                    handled.add(m.id);
+                }
+            }
+
             for (const cur of curById.values()) {
+                if (handled.has(cur.id)) continue;
                 if (!tgtById.has(cur.id)) latest = await ops.deleteCell(cur);
             }
             for (const tgt of tgtById.values()) {
+                if (handled.has(tgt.id)) continue;
                 if (!curById.has(tgt.id)) {
                     latest = await ops.createCell(
                         tgt.startedAt,
@@ -446,6 +567,7 @@ export function useSlotGrid({
                 }
             }
             for (const tgt of tgtById.values()) {
+                if (handled.has(tgt.id)) continue;
                 const cur = curById.get(tgt.id);
                 if (!cur) continue;
                 const tgtEnd = tgt.endedAt ?? getNextSlot(tgt.startedAt);
@@ -470,7 +592,11 @@ export function useSlotGrid({
                     latest = await ops.updateCell(cur, inputOf(tgt, tgtEnd));
                 }
             }
-            onChanged(latest);
+          } finally {
+              // Une seule resynchro, y compris si une op a échoué en cours de route
+              // (409 sur une alternance) : l'UI ne doit pas rester périmée.
+              onChanged(latest);
+          }
         },
         [cells, ops, onChanged],
     );
@@ -505,9 +631,10 @@ export function useSlotGrid({
             if (pendingSlotsRef.current.has(slot)) return;
             pendingSlotsRef.current.add(slot);
             const existing = entryMap.get(slot);
+            let mutated = false;
             try {
                 if (data === null) {
-                    if (existing) { pushHistory(); onChanged(await ops.deleteCell(existing)); }
+                    if (existing) { pushHistory(); mutated = true; await ops.deleteCell(existing); }
                     return;
                 }
                 if (existing) {
@@ -527,18 +654,22 @@ export function useSlotGrid({
                         && anchorUnchanged
                     ) return;
                     pushHistory();
-                    onChanged(await ops.updateCell(existing, data));
+                    mutated = true;
+                    await ops.updateCell(existing, data);
                 } else {
                     pushHistory();
-                    onChanged(await ops.createCell(slot, data));
+                    mutated = true;
+                    await ops.createCell(slot, data);
                 }
             } catch {
                 /* ops gèrent le message */
             } finally {
                 pendingSlotsRef.current.delete(slot);
+                // Une resynchro même si l'op a échoué ; rien si aucune mutation tentée.
+                if (mutated) onChanged(cells);
             }
         },
-        [entryMap, ops, onChanged, pushHistory],
+        [entryMap, cells, ops, onChanged, pushHistory],
     );
 
     const fillRange = useCallback(
@@ -577,7 +708,16 @@ export function useSlotGrid({
                 byId.set(c.id, e);
             }
             if (0 === byId.size) return;
-            pushHistory();
+            // Un membre d'alternance ne peut être rejoué par `reconcile` que s'il est
+            // *entièrement* supprimé (reconstruction du groupe). Un rétrécissement / une
+            // scission partielle casse l'invariant du groupe → on renonce à l'undo.
+            const partialRotationEdit = [...byId.values()].some(
+                ({ cell, slots }) =>
+                    cell.rotationGroupId != null
+                    && slots.length < spanMinutes(cell.startedAt, cell.endedAt ?? getNextSlot(cell.startedAt)) / SLOT_MINUTES,
+            );
+            if (partialRotationEdit) clearHistory();
+            else pushHistory();
             let latest: SlotCell[] = cells;
             for (const { cell, slots: cellSlots } of byId.values()) {
                 try {
@@ -590,7 +730,7 @@ export function useSlotGrid({
             }
             onChanged(latest);
         },
-        [entryMap, cells, ops, onChanged, pushHistory],
+        [entryMap, cells, ops, onChanged, pushHistory, clearHistory],
     );
 
     const onConvertToBreak = useCallback(
@@ -604,7 +744,12 @@ export function useSlotGrid({
             const toConvert = [...byId.values()];
             const empties = arr.filter((s) => !entryMap.has(s));
             if (0 === toConvert.length && 0 === empties.length) return;
-            pushHistory();
+            // Convertir un membre d'alternance = delete + recreate d'une règle groupée : le
+            // back dégrade le groupe, `reconcile` ne saurait pas le refaire fidèlement → on
+            // renonce à l'undo pour ce coup plutôt que de corrompre l'état.
+            const touchesRotation = toConvert.some((c) => c.rotationGroupId != null);
+            if (touchesRotation) clearHistory();
+            else pushHistory();
             let latest: SlotCell[] = cells;
             for (const cell of toConvert) {
                 try {
@@ -629,7 +774,7 @@ export function useSlotGrid({
             }
             onChanged(latest);
         },
-        [entryMap, cells, ops, onChanged, pushHistory],
+        [entryMap, cells, ops, onChanged, pushHistory, clearHistory],
     );
 
     const applyClipboardCell = useCallback(
@@ -775,7 +920,7 @@ export function useSlotGrid({
 
     const undoKeyRef = useRef<((e: KeyboardEvent) => void) | null>(null);
     undoKeyRef.current = (e: KeyboardEvent) => {
-        if (scopeUndoToSelection && 0 === selectedSlots.size) return;
+        if (scopeUndoToSelection && !isActive && 0 === selectedSlots.size) return;
         const active = document.activeElement;
         if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
         const ctrl = e.metaKey || e.ctrlKey;
@@ -807,7 +952,9 @@ export function useSlotGrid({
         save,
         fillRange,
         clearHistory,
+        pushHistory,
         clearSelection,
         consumeDragMoved,
+        onBackgroundClick,
     };
 }

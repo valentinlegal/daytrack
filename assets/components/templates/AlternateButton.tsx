@@ -16,15 +16,18 @@ interface AlternateButtonProps {
     iso: number;
     knownTickets: Record<string, JiraTicketInfo>;
     onChanged: () => void;
-    /** L'alternance ne peut pas être représentée par l'undo → on invalide l'historique de la colonne. */
-    onHistoryInvalidate: () => void;
+    /** Appelé juste avant la mutation (suppression du bloc simple + création des 2 membres) :
+     *  le parent y sélectionne le créneau et snapshote l'historique pour rendre l'action annulable. */
+    onBeforeMutate: () => void;
+    /** Notifié à l'ouverture/fermeture de la popup — le parent garde le « + » monté tant qu'elle est ouverte. */
+    onOpenChange?: (open: boolean) => void;
 }
 
 /**
  * Bouton « + » sur un bloc simple : le transforme en alternance à 2 membres,
  * une semaine sur deux (cadence non modifiable, jamais plus de 2 tickets).
  */
-export default function AlternateButton({ rule, iso, knownTickets, onChanged, onHistoryInvalidate }: AlternateButtonProps) {
+export default function AlternateButton({ rule, iso, knownTickets, onChanged, onBeforeMutate, onOpenChange }: AlternateButtonProps) {
     const [open, setOpen] = useState(false);
     const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
     const [ticket, setTicket] = useState('');
@@ -32,6 +35,13 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const popoverRef = useRef<HTMLDivElement>(null);
+
+    // Remonte l'état d'ouverture au parent sans dépendre de l'identité du callback.
+    const onOpenChangeRef = useRef(onOpenChange);
+    onOpenChangeRef.current = onOpenChange;
+    useEffect(() => {
+        onOpenChangeRef.current?.(open);
+    }, [open]);
 
     // Fermer au clic extérieur ou à Escape
     useEffect(() => {
@@ -99,6 +109,12 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
                 ? {}
                 : { ticketKey: rule.ticketKey, ticketSummary: rule.ticketSummary, ticketType: rule.ticketType, comment: rule.comment };
 
+            // Snapshot avant mutation : reconcile saura défaire (retour au bloc simple) et
+            // refaire (recréation des 2 membres via `rotationGroupId`). En cas de rollback
+            // ci-dessous, ce snapshot reste sur la pile — un ⌘Z y ferait alors un
+            // delete+recreate visuellement neutre du bloc simple, sans dommage.
+            onBeforeMutate();
+
             // Pas de transaction côté API : on supprime le bloc d'origine puis on crée
             // les 2 membres. Si une création échoue, on annule (suppression des membres
             // déjà créés + recréation du bloc simple) pour ne pas laisser la colonne
@@ -136,7 +152,6 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
             }
             setOpen(false);
             setTicket('');
-            onHistoryInvalidate();
             onChanged();
         } catch (e) {
             setError(e instanceof Error ? e.message : t('templates.error.save'));
@@ -163,7 +178,7 @@ export default function AlternateButton({ rule, iso, knownTickets, onChanged, on
                     setError(null);
                     setOpen(true);
                 }}
-                className="pointer-events-auto flex h-4 w-4 items-center justify-center rounded bg-amber-900/70 text-white opacity-60 transition-opacity hover:opacity-100"
+                className="pointer-events-auto flex h-4 w-4 items-center justify-center rounded bg-amber-900/70 text-white opacity-90 transition-opacity hover:opacity-100"
             >
                 <Plus className="h-3 w-3" />
             </button>
