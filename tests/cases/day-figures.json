@@ -1,0 +1,359 @@
+{
+  "about": "Les chiffres du jour : travaillé, reste, solde et fin prévue, en minutes ; la fin prévue part du début du créneau en cours, qui compte comme travaillé saisi ou non, sauf pause, et tombe au quart d'heure supérieur. Le serveur (tests/Day/DayFiguresTest.php) et le navigateur rejouent ces mêmes cas : un écart entre eux est un bug. « now » est l'heure qu'il est quand le jour est aujourd'hui, null pour tout autre jour. Chaque bloc : début, fin, « work » ou « pause ».",
+  "cases": [
+    {
+      "name": "la journée d'exemple en cours, à 15:20 : le créneau en cours compte, même vide",
+      "blocks": [
+        ["09:15", "09:30", "work"],
+        ["09:30", "11:15", "work"],
+        ["11:15", "11:45", "work"],
+        ["11:45", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "14:00", "work"],
+        ["14:00", "15:15", "work"]
+      ],
+      "objective": 450,
+      "now": "15:20",
+      "expected": { "worked": 300, "remaining": 150, "balance": -150, "projectedEnd": "17:45" }
+    },
+    {
+      "name": "le créneau en cours saisi ne déplace pas la fin prévue",
+      "blocks": [
+        ["09:15", "09:30", "work"],
+        ["09:30", "11:15", "work"],
+        ["11:15", "11:45", "work"],
+        ["11:45", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "14:00", "work"],
+        ["14:00", "15:15", "work"],
+        ["15:15", "15:30", "work"]
+      ],
+      "objective": 450,
+      "now": "15:20",
+      "expected": { "worked": 315, "remaining": 135, "balance": -135, "projectedEnd": "17:45" }
+    },
+    {
+      "name": "une pause sur le créneau en cours ne compte pas comme travaillé",
+      "blocks": [
+        ["09:15", "09:30", "work"],
+        ["09:30", "11:15", "work"],
+        ["11:15", "11:45", "work"],
+        ["11:45", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "14:00", "work"],
+        ["14:00", "15:15", "work"],
+        ["15:15", "15:30", "pause"]
+      ],
+      "objective": 450,
+      "now": "15:20",
+      "expected": { "worked": 300, "remaining": 150, "balance": -150, "projectedEnd": "18:00" }
+    },
+    {
+      "name": "à la dernière minute du créneau en cours, la fin prévue ne bouge pas",
+      "blocks": [
+        ["09:15", "09:30", "work"],
+        ["09:30", "11:15", "work"],
+        ["11:15", "11:45", "work"],
+        ["11:45", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "14:00", "work"],
+        ["14:00", "15:15", "work"]
+      ],
+      "objective": 450,
+      "now": "15:29",
+      "expected": { "worked": 300, "remaining": 150, "balance": -150, "projectedEnd": "17:45" }
+    },
+    {
+      "name": "le créneau d'avant, resté vide, ne compte plus",
+      "blocks": [
+        ["09:15", "09:30", "work"],
+        ["09:30", "11:15", "work"],
+        ["11:15", "11:45", "work"],
+        ["11:45", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "14:00", "work"],
+        ["14:00", "15:15", "work"]
+      ],
+      "objective": 450,
+      "now": "15:30",
+      "expected": { "worked": 300, "remaining": 150, "balance": -150, "projectedEnd": "18:00" }
+    },
+    {
+      "name": "une journée vide à 08:40",
+      "blocks": [],
+      "objective": 450,
+      "now": "08:40",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "16:00" }
+    },
+    {
+      "name": "l'objectif atteint, à 17:50",
+      "blocks": [
+        ["09:15", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "17:45", "work"]
+      ],
+      "objective": 450,
+      "now": "17:50",
+      "expected": { "worked": 450, "remaining": 0, "balance": 0, "projectedEnd": null }
+    },
+    {
+      "name": "l'objectif dépassé de 0h45, à 18:40",
+      "blocks": [
+        ["09:15", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "18:30", "work"]
+      ],
+      "objective": 450,
+      "now": "18:40",
+      "expected": { "worked": 495, "remaining": 0, "balance": 45, "projectedEnd": null }
+    },
+    {
+      "name": "un jour passé sous son objectif : un solde, pas de fin prévue",
+      "blocks": [
+        ["09:15", "12:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["13:30", "17:00", "work"]
+      ],
+      "objective": 450,
+      "now": null,
+      "expected": { "worked": 405, "remaining": 45, "balance": -45, "projectedEnd": null }
+    },
+    {
+      "name": "un jour à venir n'a pas de fin prévue",
+      "blocks": [["09:00", "10:00", "work"]],
+      "objective": 450,
+      "now": null,
+      "expected": { "worked": 60, "remaining": 390, "balance": -390, "projectedEnd": null }
+    },
+    {
+      "name": "une pause ne compte jamais dans le travaillé",
+      "blocks": [["12:00", "14:00", "pause"]],
+      "objective": 450,
+      "now": null,
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": null }
+    },
+    {
+      "name": "une pause posée plus tard repousse la fin prévue",
+      "blocks": [
+        ["08:00", "10:00", "work"],
+        ["12:30", "13:30", "pause"]
+      ],
+      "objective": 450,
+      "now": "10:00",
+      "expected": { "worked": 120, "remaining": 330, "balance": -330, "projectedEnd": "16:30" }
+    },
+    {
+      "name": "une pause déjà passée ne repousse rien",
+      "blocks": [
+        ["08:00", "09:00", "work"],
+        ["09:00", "09:30", "pause"],
+        ["09:30", "10:00", "work"]
+      ],
+      "objective": 450,
+      "now": "10:00",
+      "expected": { "worked": 90, "remaining": 360, "balance": -360, "projectedEnd": "16:00" }
+    },
+    {
+      "name": "en pleine pause, la fin prévue compte le reste de la pause",
+      "blocks": [
+        ["08:00", "12:30", "work"],
+        ["12:30", "13:30", "pause"]
+      ],
+      "objective": 450,
+      "now": "12:45",
+      "expected": { "worked": 270, "remaining": 180, "balance": -180, "projectedEnd": "16:30" }
+    },
+    {
+      "name": "un ticket posé plus tard compte dans le travaillé, mais ne change pas la fin prévue",
+      "blocks": [
+        ["08:00", "10:00", "work"],
+        ["14:00", "15:00", "work"]
+      ],
+      "objective": 450,
+      "now": "10:00",
+      "expected": { "worked": 180, "remaining": 270, "balance": -270, "projectedEnd": "15:30" }
+    },
+    {
+      "name": "des tickets posés à l'avance atteignent l'objectif : plus de fin prévue",
+      "blocks": [["08:00", "15:30", "work"]],
+      "objective": 450,
+      "now": "10:00",
+      "expected": { "worked": 450, "remaining": 0, "balance": 0, "projectedEnd": null }
+    },
+    {
+      "name": "au début pile d'un créneau",
+      "blocks": [],
+      "objective": 450,
+      "now": "08:30",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "16:00" }
+    },
+    {
+      "name": "une minute après le début du créneau, la fin prévue ne bouge pas",
+      "blocks": [],
+      "objective": 450,
+      "now": "08:31",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "16:00" }
+    },
+    {
+      "name": "une minute avant le créneau suivant, la fin prévue ne bouge toujours pas",
+      "blocks": [],
+      "objective": 450,
+      "now": "08:44",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "16:00" }
+    },
+    {
+      "name": "le créneau en cours compte, la pause posée plus tard repousse la fin prévue",
+      "blocks": [
+        ["08:00", "10:00", "work"],
+        ["12:30", "13:30", "pause"]
+      ],
+      "objective": 450,
+      "now": "10:05",
+      "expected": { "worked": 120, "remaining": 330, "balance": -330, "projectedEnd": "16:30" }
+    },
+    {
+      "name": "le créneau en cours, déjà saisi, ne compte qu'une fois",
+      "blocks": [["08:00", "09:30", "work"]],
+      "objective": 450,
+      "now": "09:20",
+      "expected": { "worked": 90, "remaining": 360, "balance": -360, "projectedEnd": "15:30" }
+    },
+    {
+      "name": "le créneau en cours, saisi plus loin que lui, ne compte qu'une fois",
+      "blocks": [["08:00", "10:00", "work"]],
+      "objective": 450,
+      "now": "09:20",
+      "expected": { "worked": 120, "remaining": 330, "balance": -330, "projectedEnd": "15:30" }
+    },
+    {
+      "name": "à 06:59, la fin prévue se compte depuis 07:00",
+      "blocks": [],
+      "objective": 450,
+      "now": "06:59",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "14:30" }
+    },
+    {
+      "name": "avant 07:00, la fin prévue se compte depuis 07:00",
+      "blocks": [],
+      "objective": 450,
+      "now": "06:30",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "14:30" }
+    },
+    {
+      "name": "à 07:00 pile",
+      "blocks": [],
+      "objective": 450,
+      "now": "07:00",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "14:30" }
+    },
+    {
+      "name": "minuit passé, le matin : rien n'est compté avant 07:00",
+      "blocks": [],
+      "objective": 450,
+      "now": "00:00",
+      "expected": { "worked": 0, "remaining": 450, "balance": -450, "projectedEnd": "14:30" }
+    },
+    {
+      "name": "toute la grille à faire, dès 07:00 : fin prévue à 20:00",
+      "blocks": [],
+      "objective": 780,
+      "now": "07:00",
+      "expected": { "worked": 0, "remaining": 780, "balance": -780, "projectedEnd": "20:00" }
+    },
+    {
+      "name": "après 20:00, la fin prévue s'affiche encore",
+      "blocks": [["07:00", "13:00", "work"]],
+      "objective": 450,
+      "now": "20:30",
+      "expected": { "worked": 360, "remaining": 90, "balance": -90, "projectedEnd": "22:00" }
+    },
+    {
+      "name": "à 20:07, hors de la grille, le quart d'heure entamé compte de même",
+      "blocks": [["07:00", "13:00", "work"]],
+      "objective": 450,
+      "now": "20:07",
+      "expected": { "worked": 360, "remaining": 90, "balance": -90, "projectedEnd": "21:30" }
+    },
+    {
+      "name": "une fin prévue à 23:45 s'affiche",
+      "blocks": [["07:00", "13:00", "work"]],
+      "objective": 450,
+      "now": "22:15",
+      "expected": { "worked": 360, "remaining": 90, "balance": -90, "projectedEnd": "23:45" }
+    },
+    {
+      "name": "à 22:29, le quart d'heure entamé compte encore : fin prévue à 23:45",
+      "blocks": [["07:00", "13:00", "work"]],
+      "objective": 450,
+      "now": "22:29",
+      "expected": { "worked": 360, "remaining": 90, "balance": -90, "projectedEnd": "23:45" }
+    },
+    {
+      "name": "à 23:50, le dernier quart d'heure à faire tombe à minuit : plus de fin prévue",
+      "blocks": [["07:00", "14:15", "work"]],
+      "objective": 450,
+      "now": "23:50",
+      "expected": { "worked": 435, "remaining": 15, "balance": -15, "projectedEnd": null }
+    },
+    {
+      "name": "à 23:35, le dernier quart d'heure à faire finit à 23:45",
+      "blocks": [["07:00", "14:15", "work"]],
+      "objective": 450,
+      "now": "23:35",
+      "expected": { "worked": 435, "remaining": 15, "balance": -15, "projectedEnd": "23:45" }
+    },
+    {
+      "name": "une fin prévue à minuit pile disparaît",
+      "blocks": [["07:00", "13:00", "work"]],
+      "objective": 450,
+      "now": "22:30",
+      "expected": { "worked": 360, "remaining": 90, "balance": -90, "projectedEnd": null }
+    },
+    {
+      "name": "une fin prévue après minuit disparaît",
+      "blocks": [["07:00", "13:00", "work"]],
+      "objective": 450,
+      "now": "23:59",
+      "expected": { "worked": 360, "remaining": 90, "balance": -90, "projectedEnd": null }
+    },
+    {
+      "name": "un objectif à zéro est atteint d'office",
+      "blocks": [],
+      "objective": 0,
+      "now": "10:00",
+      "expected": { "worked": 0, "remaining": 0, "balance": 0, "projectedEnd": null }
+    },
+    {
+      "name": "avec un objectif à zéro, tout compte en plus",
+      "blocks": [["09:00", "11:00", "work"]],
+      "objective": 0,
+      "now": null,
+      "expected": { "worked": 120, "remaining": 0, "balance": 120, "projectedEnd": null }
+    },
+    {
+      "name": "toute la grille remplie",
+      "blocks": [["07:00", "20:00", "work"]],
+      "objective": 780,
+      "now": null,
+      "expected": { "worked": 780, "remaining": 0, "balance": 0, "projectedEnd": null }
+    },
+    {
+      "name": "le dernier quart d'heure de la grille",
+      "blocks": [["19:45", "20:00", "work"]],
+      "objective": 15,
+      "now": "19:50",
+      "expected": { "worked": 15, "remaining": 0, "balance": 0, "projectedEnd": null }
+    },
+    {
+      "name": "un quart d'heure de travail entre deux pauses",
+      "blocks": [
+        ["12:00", "12:15", "pause"],
+        ["12:15", "12:30", "work"],
+        ["12:30", "12:45", "pause"]
+      ],
+      "objective": 30,
+      "now": "12:00",
+      "expected": { "worked": 15, "remaining": 15, "balance": -15, "projectedEnd": "13:00" }
+    }
+  ]
+}

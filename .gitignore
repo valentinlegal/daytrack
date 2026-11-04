@@ -1,0 +1,31 @@
+.DS_Store
+
+/.env.local
+/.env.local.php
+/.env.*.local
+/config/secrets/prod/prod.decrypt.private.php
+/public/bundles/
+/public/build/
+/var/
+/vendor/
+/node_modules/
+
+# Les bases SQLite du développement et des tests.
+/db/
+
+/compose.override.yaml
+
+# Les outils de vérification : leurs caches et leurs rapports.
+/.phpunit.cache/
+/.php-cs-fixer.cache
+/.php-cs-fixer.php
+/.eslintcache
+/.stylelintcache
+/phpunit.xml
+/test-results/
+/playwright-report/
+
+# Les captures de référence des parcours : chacun prend les siennes.
+/tests/e2e/*-snapshots/
+
+npm-debug.log

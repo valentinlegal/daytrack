@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# Met l'environnement de développement à niveau, et rien d'autre.
+#
+# À lancer après un premier clone, après un « git pull », et surtout après un
+# changement de branche : une branche qui ajoute une dépendance ou une migration
+# laisse l'environnement en retard sans le dire, et l'erreur qu'on obtient ne
+# nomme jamais la vraie cause.
+#
+# Ce script ne touche jamais aux saisies de la base de développement : il démarre
+# les conteneurs, installe ce que les fichiers de verrouillage demandent, et avance
+# les migrations. Seule la base de TEST est refaite à chaque fois : elle ne contient
+# rien que personne n'ait écrit, et la laisser en retard casse les tests sans dire
+# pourquoi.
+#
+#   bin/setup
+#
+set -euo pipefail
+
+cd "$(cd "$(dirname "$0")/.." && pwd)"
+
+COMPOSE="docker compose"
+
+# Pas de « for argument in "$@" » : sous « set -u », le bash 3.2 livré avec macOS
+# traite « $@ » sans argument comme une variable non définie.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            cat <<'USAGE'
+Met l'environnement de développement à niveau : conteneurs, dépendances, migrations.
+À lancer après un clone, un « git pull », et après chaque changement de branche.
+
+  bin/setup
+USAGE
+            exit 0
+            ;;
+        *) echo "Option inconnue : $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+step() { printf '\n▸ %s\n' "$*"; }
+warn() { printf '\n! %s\n' "$*" >&2; }
+
+# « exec -T » : pas de terminal attaché. Sans ça, la moindre exécution depuis un
+# script, sans terminal, échoue sur « the input device is not a TTY ».
+console() { $COMPOSE exec -T app php bin/console "$@" --no-interaction; }
+
+# Le nombre de migrations que la base a jouées et que cette branche ne connaît pas.
+# Une chaîne vide quand le diagnostic n'a pas pu être lu : vide ne veut donc pas
+# dire zéro. Le « || true » n'est pas décoratif : sans lui, « set -e » ferait sortir
+# le script en erreur sur un diagnostic raté, après que tout est en place.
+unavailable_migrations() {
+    console doctrine:migrations:status --no-ansi 2>/dev/null \
+        | awk -F'|' '/Executed Unavailable/ { gsub(/[^0-9]/, "", $4); print $4; exit }' || true
+}
+
+step 'Images'
+$COMPOSE build app
+
+# Les dépendances AVANT de démarrer l'application : elle tourne en mode worker, et
+# un worker qui ne trouve pas « vendor » au démarrage fait tomber le conteneur.
+step 'Dépendances PHP'
+$COMPOSE run --rm --no-deps -T app composer install --no-interaction --no-progress
+
+# « npm ci » efface tout et réinstalle : il ne repart que si le verrou a changé
+# depuis la dernière installation, et jamais pendant que la compilation tourne.
+step 'Dépendances du navigateur'
+lock="$(shasum -a 256 package-lock.json | cut -d' ' -f1)"
+if [ "$(cat node_modules/.daytrack-lock 2>/dev/null || true)" = "$lock" ]; then
+    echo 'À jour.'
+else
+    $COMPOSE stop node 2>/dev/null || true
+    # Le repère s'écrit dans le conteneur : « npm ci » y tourne en administrateur, et sur un
+    # Linux, node_modules/ n'appartient alors plus à celui qui lance ce script.
+    $COMPOSE run --rm --no-deps -T node sh -c "npm ci && printf '%s\n' '$lock' > node_modules/.daytrack-lock"
+fi
+
+# « --wait » : la suite parle à l'application, et la compilation du navigateur doit
+# être écrite avant la première page.
+step 'Conteneurs'
+mkdir -p db var
+$COMPOSE up -d --wait --wait-timeout 300
+
+step 'Base de données'
+console doctrine:migrations:migrate --allow-no-migration
+
+# Ce que « migrate » ne dit pas : la base peut porter des migrations jouées sur une
+# AUTRE branche, qui n'existent pas ici. On le dit, sans rien défaire : cette base
+# porte les saisies du poste.
+unavailable="$(unavailable_migrations)"
+if [ -z "$unavailable" ]; then
+    warn "Impossible de lire l'état des migrations : le diagnostic de divergence entre
+  branches est hors service. La mise à niveau, elle, a bien eu lieu."
+elif [ "$unavailable" != 0 ]; then
+    warn "La base garde $unavailable migration(s) qu'une autre branche a jouées et que celle-ci ne connaît pas.
+  L'application tourne quand même."
+fi
+
+step 'Base de test'
+rm -f db/daytrack_test.db
+console --env=test doctrine:migrations:migrate --allow-no-migration
+
+# L'application joint le Jira simulé comme un vrai Jira : en HTTPS, par son nom, en
+# faisant confiance à l'autorité qui a signé son certificat.
+step 'Jira simulé'
+$COMPOSE exec -T app php -r '
+    $context = stream_context_create(["ssl" => ["cafile" => getenv("JIRA_CA_FILE")], "http" => ["timeout" => 10]]);
+    $answer = @file_get_contents("https://jira/rest/api/3/serverInfo", false, $context);
+    if (false === $answer || "Cloud" !== (json_decode($answer, true)["deploymentType"] ?? null)) {
+        fwrite(STDERR, "Le Jira simulé ne répond pas en HTTPS à l’application.\n");
+        exit(1);
+    }
+    echo "Joint en HTTPS par l’application.\n";
+'
+
+printf '\nPrêt.\n'
+printf '  Application    https://localhost:8443\n'
+printf '  Jira simulé    https://localhost:8444/_simulation\n'

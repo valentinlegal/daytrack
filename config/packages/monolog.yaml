@@ -1,0 +1,48 @@
+monolog:
+    channels: # To see all channels, run bin/console debug:autowiring logger
+        - deprecation # Deprecations are logged in the dedicated "deprecation" channel when it exists
+
+when@dev:
+    monolog:
+        handlers:
+            main:
+                type: stream
+                path: "%kernel.logs_dir%/%kernel.environment%.log"
+                level: debug
+                channels: ["!event"]
+            console:
+                type: console
+                process_psr_3_messages: false
+                channels: ["!event", "!doctrine", "!console"]
+
+when@test:
+    monolog:
+        handlers:
+            main:
+                type: fingers_crossed
+                action_level: error
+                handler: nested
+                excluded_http_codes: [404, 405]
+                channels: ["!event"]
+            nested:
+                type: stream
+                path: "%kernel.logs_dir%/%kernel.environment%.log"
+                level: debug
+
+when@prod:
+    monolog:
+        handlers:
+            # Chez l'utilisateur, seuls les avertissements et les erreurs, dans la
+            # sortie du conteneur (« docker compose logs »). Pas de rejeu des messages
+            # de mise au point autour d'une erreur : moins le journal en dit, moins il
+            # risque d'emporter ce qui ne doit jamais y être : le jeton Jira.
+            main:
+                type: stream
+                path: php://stderr
+                level: warning
+                channels: ["!deprecation", "!event"]
+                formatter: monolog.formatter.json
+            console:
+                type: console
+                process_psr_3_messages: false
+                channels: ["!event", "!doctrine"]

@@ -1,0 +1,13 @@
+# Le Jira simulé du développement (compose.yaml, service « jira »). Joint en HTTPS,
+# comme un vrai Jira, avec un certificat signé par l'autorité locale que l'application
+# partage avec lui.
+{
+	skip_install_trust
+	frankenphp
+}
+
+{$SERVER_NAME} {
+	tls internal
+	root /app/dev/jira/public
+	php_server
+}

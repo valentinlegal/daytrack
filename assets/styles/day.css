@@ -1,0 +1,386 @@
+/*
+ * L'écran Journée : ce que les classes de Tailwind ne savent pas dire avec les
+ * tokens seuls. Le reste de l'écran est écrit en classes, dans ses composants.
+ */
+
+/*
+ * La grille au quart d'heure : une rangée de --h-row par quart d'heure, de 07:00 à
+ * 20:00. Un bloc s'y place par row-start-* et row-end-*, que le composant compose à
+ * l'exécution : app.css les liste, sinon Tailwind ne les générerait pas.
+ */
+@utility quarter-rows {
+    grid-template-rows: repeat(52, var(--h-row));
+}
+
+/* Le trait de chaque heure en --line, celui de chaque quart en --line-soft. */
+@utility quarter-lines {
+    background-image:
+        linear-gradient(to bottom, var(--line) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--line-soft) 1px, transparent 1px);
+    background-size:
+        100% calc(var(--h-row) * 4),
+        100% var(--h-row);
+}
+
+/* Une heure de la colonne des heures, centrée sur le trait de son quart d'heure. */
+@utility hour-mark {
+    translate: 0 -50%;
+}
+
+/* La pause : hachures à 135°, un trait de 1 px tous les --s-2. */
+@utility pause-hatch {
+    background-image: repeating-linear-gradient(135deg, var(--pause-hatch) 0 1px, transparent 1px var(--s-2));
+}
+
+/*
+ * Le bloc qu'ouvre Modifier le ticket : un anneau de --ring en --bg, puis un de
+ * --ring en --focus, à l'extérieur du bloc.
+ */
+@utility edit-ring {
+    box-shadow: var(--shadow-ring);
+}
+
+/* Les minutes écoulées dans le quart d'heure de la ligne « maintenant », de 0 à 14. */
+@utility now-at-* {
+    translate: 0 calc(var(--h-row) * --value(integer) / 15);
+}
+
+/* Le nombre de caractères du plus long identifiant du jour : la colonne des blocs s'y règle. */
+@utility id-ch-* {
+    --id-ch: --value(integer);
+}
+
+@layer components {
+    /* La colonne de l'identifiant d'un bloc, à la largeur du plus long du jour, de --w-id à deux fois --w-id. */
+    .id-column {
+        --id-column-width: clamp(var(--w-id), calc(var(--id-ch, 0) * 1ch), calc(var(--w-id) * 2));
+
+        width: var(--id-column-width);
+    }
+
+    /*
+     * La ligne « maintenant », posée sur la rangée de son quart d'heure puis
+     * descendue de now-at-*, avec son point à gauche.
+     */
+    .now-line {
+        position: absolute;
+        inset-inline: 0;
+        top: 0;
+        z-index: var(--z-now);
+        border-top: var(--b-strong) solid var(--now);
+        pointer-events: none;
+    }
+
+    .now-line::before {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: var(--s-3);
+        height: var(--s-3);
+        content: '';
+        border-radius: var(--r-pill);
+        background: var(--now);
+        translate: -50% calc(-50% - var(--b-strong) / 2);
+    }
+
+    /*
+     * Le tiret de 8 px qui ouvre chaque commentaire du récapitulatif, à 4 px de la
+     * ligne de base : le haut d'une boîte de 4 px, posée sur la ligne de base comme
+     * le texte. C'est un trait de bordure, que le navigateur arrondit au pixel
+     * de la même façon sur chaque ligne : un fond de 1,5 px tombait sur 1 ou 2 pixels
+     * selon la ligne, et un tiret sur deux paraissait plus épais.
+     */
+    .recap-dash::before {
+        flex: none;
+        width: var(--s-2);
+        height: var(--s-1);
+        content: '';
+        border-top: var(--b-mid) solid var(--ink-3);
+    }
+
+    /*
+     * Le récapitulatif glisse en --dur-panel. À partir de 1280 px, il pousse la
+     * grille et se replie sur sa largeur (lg:data-[state=closed]:w-0, dans son
+     * composant : une classe l'emporterait sur cette feuille) ; en dessous, il s'ouvre par-dessus elle,
+     * sous la barre, et s'en va par la droite. Son ombre ne déborde alors que sur
+     * son bord gauche.
+     */
+    .recap-panel {
+        transition-property: width, translate;
+        transition-duration: var(--dur-panel);
+        transition-timing-function: var(--ease);
+    }
+
+    /*
+     * Fermé, il disparaît une fois sorti de l'écran, pas avant. Ouvert, il est visible
+     * tout de suite : le focus peut y passer dès qu'on l'ouvre.
+     */
+    .recap-panel[data-state='closed'] {
+        transition-property: width, translate, visibility;
+        visibility: hidden;
+    }
+
+    @media (width < 1280px) {
+        .recap-panel {
+            position: absolute;
+            top: var(--h-bar);
+            right: 0;
+            bottom: 0;
+            z-index: var(--z-recap);
+            box-shadow: var(--shadow-side);
+            clip-path: inset(0 0 0 calc(var(--s-7) * -1));
+        }
+
+        .recap-panel[data-state='closed'] {
+            translate: 100% 0;
+        }
+    }
+}
+
+@layer components {
+    /*
+     * La barre de progression de la ligne des chiffres : --w-bar-mini sur 4 px, rail
+     * --line. Son remplissage prend la couleur du texte : --ink, --ok une fois
+     * l'objectif atteint.
+     */
+    .mini-progress {
+        display: inline-block;
+        width: var(--w-bar-mini);
+        height: var(--s-1);
+        overflow: hidden;
+        appearance: none;
+        border: none;
+        border-radius: var(--r-1);
+        background: var(--line);
+    }
+
+    .mini-progress::-webkit-progress-bar {
+        background: var(--line);
+    }
+
+    .mini-progress::-webkit-progress-value {
+        border-radius: var(--r-1);
+        background: currentcolor;
+    }
+
+    .mini-progress::-moz-progress-bar {
+        border-radius: var(--r-1);
+        background: currentcolor;
+    }
+}
+
+@layer components {
+    /*
+     * La largeur de la colonne de gauche et de la zone du logo (--w-col) : celle que
+     * le pointeur a réglée (--w-side-chosen, posée sur l'écran par DayScreen),
+     * --w-side sinon. Sous 1280 px, --w-side-narrow, quelle qu'elle soit.
+     */
+    .day-screen {
+        --w-col: var(--w-side-chosen, var(--w-side));
+    }
+
+    @media (width < 1280px) {
+        .day-screen {
+            --w-col: var(--w-side-narrow);
+        }
+    }
+
+    /* La liste des favoris qui défile. */
+    .favorites-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: var(--line-strong) transparent;
+    }
+
+    /* Elle déborde : un fondu de --s-6 en bas, tant qu'il reste à voir. Seule l'opacité du masque compte. */
+    .favorites-fade {
+        mask-image: linear-gradient(to bottom, var(--bg) calc(100% - var(--s-6)), transparent);
+    }
+
+    /*
+     * La carte d'un favori qu'on glisse : elle suit le pointeur (--drag-x et --drag-y,
+     * posés par le glisser), inclinée, au-dessus de tout ce qu'elle survole.
+     */
+    .favorite-drag {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: var(--z-drag);
+        pointer-events: none;
+        translate: var(--drag-x, 0) var(--drag-y, 0);
+        rotate: var(--tilt-drag);
+    }
+}
+
+@layer components {
+    /*
+     * Le bord qui règle la largeur de la colonne : une zone de --s-2 posée sur son trait,
+     * qui l'épaissit au survol, pendant le geste et au clavier.
+     */
+    .column-resizer::after {
+        position: absolute;
+        inset: 0;
+        width: var(--b-strong);
+        margin-inline: auto;
+        content: '';
+        transition-property: background-color;
+        transition-duration: var(--dur-fast);
+        transition-timing-function: var(--ease);
+    }
+
+    .column-resizer:hover::after,
+    .column-resizer:active::after {
+        background: var(--line-strong);
+    }
+
+    .column-resizer:focus-visible::after {
+        background: var(--focus);
+    }
+}
+
+/*
+ * La marque d'un jour du calendrier, collée sous son chiffre : une forme par état, pour
+ * ne jamais dépendre de la couleur. Sans marque, elle garde sa place.
+ */
+.day-mark {
+    flex: none;
+    width: var(--s-2);
+    height: var(--s-2);
+    border-radius: var(--r-pill);
+}
+
+.day-mark[data-mark='sent'] {
+    background: var(--ok);
+}
+
+.day-mark[data-mark='unsent'] {
+    border: var(--b-strong) solid var(--warn);
+}
+
+.day-mark[data-mark='modified'] {
+    border: var(--b-strong) solid var(--warn);
+    background-image: linear-gradient(to right, var(--warn) 50%, transparent 50%);
+}
+
+.day-mark[data-mark='incomplete'] {
+    border-radius: 0;
+    background: var(--inc);
+    rotate: 45deg;
+}
+
+/* Le bouton Jira : sa pastille, dans son coin,
+   cernée du fond de la page. Elle est décorative : son infobulle et son nom la disent. */
+.send-badge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    translate: var(--s-1) calc(var(--s-1) * -1);
+    width: var(--s-3);
+    height: var(--s-3);
+    border-radius: var(--r-pill);
+    box-shadow: 0 0 0 var(--ring) var(--bg);
+}
+
+.send-badge[data-badge='unsent'] {
+    background: var(--warn);
+}
+
+.send-badge[data-badge='modified'] {
+    border: var(--b-strong) solid var(--warn);
+    background-image: linear-gradient(to right, var(--warn) 50%, var(--bg) 50%);
+}
+
+.send-badge[data-badge='error'] {
+    translate: var(--s-2) calc(var(--s-2) * -1);
+    width: var(--s-4);
+    height: var(--s-4);
+    background: var(--bg);
+}
+
+/* Pendant l'envoi, l'écran est bloqué : le voile couvre la journée, barre comprise, et
+   seul le bouton Jira passe au-dessus. */
+.send-veil {
+    position: absolute;
+    inset: 0;
+    z-index: var(--z-veil);
+    background: var(--veil);
+    cursor: progress;
+}
+
+/* La gerbe d'un envoi réussi : elle ne prend ni le pointeur ni le curseur. */
+.send-confetti {
+    position: absolute;
+    inset: 0;
+    z-index: var(--z-confetti);
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* La liste d'une fenêtre d'envoi, en tableau : ses lignes
+   partagent les colonnes de la liste — la marque d'envoi quand elle en a, la pastille à la
+   largeur de la plus longue, le titre, la durée —, et les titres s'alignent. Les colonnes
+   de bord prennent la largeur de leur contenu : la marge des lignes ne les rogne pas. */
+.send-list {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    column-gap: var(--s-3);
+}
+
+.send-list[data-marks] {
+    grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
+}
+
+.send-list > li {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: 1 / -1;
+    align-items: center;
+    row-gap: var(--s-1);
+}
+
+/* Le total, sous la marque, la pastille et le titre. */
+.send-total {
+    grid-column: 1 / -2;
+}
+
+/* Pourquoi un ticket n'est pas arrivé : sous sa pastille. */
+.send-why {
+    grid-column: 2 / -1;
+}
+
+/* Dans l'en-tête d'une carte, ce qui manque de place se prend d'abord sur le type. */
+.recap-type {
+    flex: 0 99 auto;
+}
+
+/* « Non envoyé » dans le récapitulatif : l'icône d'erreur à la taille de son texte. */
+.recap-error svg {
+    width: var(--s-3);
+    height: var(--s-3);
+}
+
+/* Le pied de colonne : à sa largeur par défaut, tout y tient. Plus étroit, le bouton « Nouvelle
+   version » garde son texte et le numéro s'efface, lisible dans les réglages.
+   Se règle sur la colonne, que l'on peut régler à tout écran, pas sur la fenêtre. La largeur
+   d'un conteneur se compte sans ses marges ni le trait de la colonne : 223 px pour une
+   colonne de --w-side. */
+.column-foot {
+    container-type: inline-size;
+}
+
+@container (width < 223px) {
+    .column-version[data-crowded] {
+        display: none;
+    }
+}
+
+/* Le lien des nouveautés est seul sur sa ligne : son icône à --s-1, centrée. */
+.update-notes a {
+    display: inline-flex;
+    gap: var(--s-1);
+    align-items: center;
+}
+
+.update-notes .external-icon {
+    margin-left: 0;
+}

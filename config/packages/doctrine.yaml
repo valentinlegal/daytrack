@@ -1,0 +1,44 @@
+doctrine:
+    dbal:
+        # SQLite : une installation n'a qu'un utilisateur, sa base tient dans un
+        # fichier, et se sauvegarde par une copie. Ce fichier vit dans db/, le volume
+        # où la v1 gardait déjà la sienne, sous un autre nom : celle de la v1 reste
+        # intacte à côté.
+        url: '%env(resolve:DATABASE_URL)%'
+        profiling_collect_backtrace: '%kernel.debug%'
+    orm:
+        validate_xml_mapping: true
+        naming_strategy: doctrine.orm.naming_strategy.underscore
+        auto_mapping: true
+        mappings:
+            App:
+                type: attribute
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Entity'
+                prefix: 'App\Entity'
+                alias: App
+
+services:
+    # SQLite n'applique les clés étrangères que si on le lui demande, à chaque
+    # connexion. Sans ce réglage, une saisie peut pointer vers une journée
+    # supprimée sans que la base ne proteste.
+    Doctrine\DBAL\Driver\AbstractSQLiteDriver\Middleware\EnableForeignKeys:
+        tags: [doctrine.middleware]
+
+when@prod:
+    doctrine:
+        orm:
+            query_cache_driver:
+                type: pool
+                pool: doctrine.system_cache_pool
+            result_cache_driver:
+                type: pool
+                pool: doctrine.result_cache_pool
+
+    framework:
+        cache:
+            pools:
+                doctrine.result_cache_pool:
+                    adapter: cache.app
+                doctrine.system_cache_pool:
+                    adapter: cache.system

@@ -1,0 +1,45 @@
+# Le serveur de DayTrack, le même en développement et chez l'utilisateur.
+#
+# Par défaut, il sert https://localhost avec un certificat qu'il fabrique lui-même,
+# et renvoie le HTTP vers le HTTPS. Derrière un proxy qui porte le HTTPS et le nom
+# de domaine, SERVER_NAME=":80" le fait servir en HTTP sur le port interne, et
+# TRUSTED_PROXIES dit à Symfony de croire ce que le proxy lui transmet.
+
+{
+	# Le certificat local ne s'installe pas dans le magasin du conteneur : personne
+	# n'y navigue. C'est le navigateur du poste qui doit lui faire confiance.
+	skip_install_trust
+
+	# HTTP/1.1 et HTTP/2 seulement : HTTP/3 passe par UDP, qu'aucun port ne publie.
+	servers {
+		protocols h1 h2
+	}
+
+	{$CADDY_GLOBAL_OPTIONS}
+
+	frankenphp {
+		# L'application reste chargée en mémoire d'une requête à l'autre, en développement
+		# comme en production : aucun service ne garde d'état, et c'est ici qu'une fuite
+		# d'une requête à l'autre doit se voir d'abord.
+		worker {
+			file ./public/index.php
+			{$FRANKENPHP_WORKER_CONFIG}
+		}
+	}
+}
+
+{$SERVER_NAME:localhost} {
+	root public/
+	encode zstd br gzip
+
+	header {
+		# Le serveur ne dit pas ce qu'il est.
+		-Server
+		# Une page de DayTrack ne s'affiche dans le cadre d'aucune autre page.
+		X-Frame-Options DENY
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+	}
+
+	php_server
+}

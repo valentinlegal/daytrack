@@ -1,0 +1,44 @@
+/*
+ * La page Réglages : ce que les classes de Tailwind ne savent pas dire avec les tokens
+ * seuls. Une mesure calculée à partir de tokens passe par une variable, comme dans
+ * app.css.
+ */
+
+@layer components {
+    /* La colonne des réglages : le titre d'une section, son écart, sa carte (664 px). */
+    .settings-column {
+        --settings-width: calc(var(--w-side-narrow) + var(--s-7) + var(--w-pop));
+
+        width: var(--settings-width);
+    }
+
+    .settings-section {
+        grid-template-columns: var(--w-side-narrow) var(--w-pop);
+    }
+
+    /* Le pas à pas de l'objectif habituel : ses deux boutons, leurs écarts, et la place d'une durée. */
+    .settings-stepper {
+        --stepper-width: calc(var(--h-field) * 2 + var(--s-2) * 2 + var(--w-id));
+
+        width: var(--stepper-width);
+    }
+
+    /* Son refus prend la largeur de la carte, pas celle du contrôle. */
+    .settings-stepper p {
+        white-space: nowrap;
+    }
+
+    /* Le bouton de la teinte d'un type : 136 px. */
+    .tint-button {
+        --tint-button-width: calc(var(--s-7) * 3 + var(--s-4));
+
+        width: var(--tint-button-width);
+    }
+
+    /* La teinte d'un type, dans la grille : un anneau --ink entoure celle qui est choisie. */
+    [data-state='checked'] > .tint-swatch {
+        --swatch-ring: 0 0 0 var(--ring) var(--bg-raise), 0 0 0 calc(var(--ring) * 2) var(--ink);
+
+        box-shadow: var(--swatch-ring);
+    }
+}

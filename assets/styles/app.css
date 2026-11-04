@@ -1,0 +1,164 @@
+/*
+ * La feuille de l'application : les tokens, puis Tailwind réduit à eux.
+ *
+ * Son thème par défaut est retiré (« --*: initial ») : une classe qui ne passe pas
+ * par un token — bg-red-500, p-8, text-base — ne se génère pas, et l'écran le montre
+ * aussitôt. tests/front/tailwind.test.ts le vérifie.
+ *
+ * Les noms suivent ceux des tokens : bg-bg-side, text-ink-3, border-line-strong,
+ * p-3 (--s-3), h-ctl (--h-ctl), w-side (--w-side), rounded-2 (--r-2), text-md.
+ *
+ * Tailwind ne lit que assets/, comme l'étage de l'image qui compile cette feuille :
+ * une classe écrite ailleurs, dans un test par exemple, se générerait en développement
+ * et manquerait dans l'image.
+ */
+
+@import './tokens.css';
+@import 'tailwindcss' source('..');
+@import './day.css';
+@import './components.css';
+@import './jira.css';
+@import './settings.css';
+
+/*
+ * Les classes qu'un composant compose à l'exécution, et que Tailwind ne lit donc
+ * nulle part : la place d'un bloc dans la grille au quart d'heure (day.css), le
+ * nombre de lignes de son commentaire, et le plus long identifiant du jour.
+ */
+@source inline('row-start-{1..52} row-end-{2..53} now-at-{0..14} line-clamp-{1..52} id-ch-{0..50}');
+
+@theme {
+    --*: initial;
+
+    /*
+     * Les largeurs d'écran : à partir de 1440 px tout s'affiche (xl), en dessous de
+     * 1280 px le récapitulatif passe par-dessus la grille (lg). Les media queries ne lisent
+     * pas les variables : ces deux valeurs ne peuvent pas venir de tokens.css.
+     */
+    --breakpoint-lg: 1280px;
+    --breakpoint-xl: 1440px;
+
+    /* Zéro n'est pas une valeur visuelle : min-w-0, inset-0. */
+    --spacing-0: 0px;
+}
+
+@theme inline {
+    --default-font-family: var(--f-ui);
+    --default-mono-font-family: var(--f-mono);
+    --default-transition-duration: var(--dur-fast);
+    --default-transition-timing-function: var(--ease);
+
+    --font-ui: var(--f-ui);
+    --font-mono: var(--f-mono);
+
+    --text-xs: var(--t-xs);
+    --text-sm: var(--t-sm);
+    --text-md: var(--t-md);
+    --text-lg: var(--t-lg);
+    --text-xl: var(--t-xl);
+
+    --font-weight-regular: var(--fw-regular);
+    --font-weight-medium: var(--fw-medium);
+    --font-weight-semibold: var(--fw-semibold);
+    --font-weight-bold: var(--fw-bold);
+
+    /* Espacements, puis hauteurs et largeurs : un seul espace de noms chez Tailwind. */
+    --spacing-1: var(--s-1);
+    --spacing-2: var(--s-2);
+    --spacing-3: var(--s-3);
+    --spacing-4: var(--s-4);
+    --spacing-5: var(--s-5);
+    --spacing-6: var(--s-6);
+    --spacing-7: var(--s-7);
+    --spacing-ring: var(--ring);
+    --spacing-bar: var(--h-bar);
+    --spacing-ctl: var(--h-ctl);
+    --spacing-ctl-sm: var(--h-ctl-sm);
+    --spacing-field: var(--h-field);
+    --spacing-row: var(--h-row);
+    --spacing-foot: var(--h-foot);
+    --spacing-side: var(--w-side);
+    --spacing-side-narrow: var(--w-side-narrow);
+    --spacing-col: var(--w-col);
+
+    /* La carte d'un favori qu'on glisse : la largeur d'une carte de la liste. */
+    --spacing-favorite: calc(var(--w-col) - var(--s-4) * 2);
+    --spacing-recap: var(--w-recap);
+    --spacing-gut: var(--w-gut);
+    --spacing-id: var(--w-id);
+
+    /* Le champ d'un identifiant de ticket : assez pour PLATFORM-12345. */
+    --spacing-ticket: calc(var(--w-id) * 2);
+
+    /* La zone de texte au départ : deux lignes. */
+    --spacing-area: calc(var(--h-field) + var(--h-row));
+    --spacing-pop: var(--w-pop);
+    --spacing-pop-sm: var(--w-pop-sm);
+    --spacing-pop-md: var(--w-pop-md);
+    --spacing-pop-send: var(--w-pop-send);
+    --spacing-menu: var(--w-menu);
+    --spacing-bar-mini: var(--w-bar-mini);
+
+    --radius-1: var(--r-1);
+    --radius-2: var(--r-2);
+    --radius-3: var(--r-3);
+    --radius-pill: var(--r-pill);
+
+    --shadow-1: var(--shadow-1);
+    --shadow-pop: var(--shadow);
+    --shadow-side: var(--shadow-side);
+
+    --color-bg: var(--bg);
+    --color-bg-side: var(--bg-side);
+    --color-bg-raise: var(--bg-raise);
+    --color-bg-hover: var(--bg-hover);
+    --color-bg-press: var(--bg-press);
+    --color-bg-sel: var(--bg-sel);
+    --color-line: var(--line);
+    --color-line-soft: var(--line-soft);
+    --color-line-strong: var(--line-strong);
+    --color-line-field: var(--line-field);
+    --color-ink: var(--ink);
+    --color-ink-2: var(--ink-2);
+    --color-ink-3: var(--ink-3);
+    --color-btn: var(--btn);
+    --color-btn-hover: var(--btn-hover);
+    --color-on-btn: var(--on-btn);
+    --color-focus: var(--focus);
+    --color-now: var(--now);
+    --color-ok: var(--ok);
+    --color-warn: var(--warn);
+    --color-inc: var(--inc);
+    --color-inc-bg: var(--inc-bg);
+    --color-inc-line: var(--inc-line);
+    --color-pause-bg: var(--pause-bg);
+    --color-pause-hatch: var(--pause-hatch);
+    --color-pause-ink: var(--pause-ink);
+    --color-toast-ink-2: var(--toast-ink-2);
+    --color-toast-line: var(--toast-line);
+    --color-sel-fill: var(--sel-fill);
+    --color-veil: var(--veil);
+
+    /* La teinte d'un ticket, posée par data-color sur l'élément (tokens.css). */
+    --color-ty-bar: var(--ty-bar);
+    --color-ty-bg: var(--ty-bg);
+    --color-ty-line: var(--ty-line);
+    --color-ty-id: var(--ty-id);
+}
+
+@layer base {
+    html {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--f-ui);
+        font-size: var(--t-md);
+        line-height: var(--lh);
+        -webkit-font-smoothing: antialiased;
+    }
+
+    /* Tout élément atteint au clavier porte l'anneau, à l'écart de son bord. */
+    :focus-visible {
+        outline: var(--ring) solid var(--focus);
+        outline-offset: var(--ring);
+    }
+}

@@ -1,0 +1,113 @@
+{
+  "about": "Le découpage d'une journée en blocs : les quarts d'heure voisins au même contenu forment un bloc, et rien d'autre ne les regroupe. Le serveur (tests/Day/GridTest.php) et le navigateur (tests/front/grid/grid.test.ts) rejouent ces mêmes cas : un écart entre eux est un bug. « slots » pose chaque plage quart d'heure par quart d'heure ; « blocks » est ce que la grille doit afficher. Chaque plage : début, fin, « work » ou « pause », ticket, commentaire.",
+  "cases": [
+    {
+      "name": "une journée vide n'a aucun bloc",
+      "slots": [],
+      "blocks": []
+    },
+    {
+      "name": "deux plages voisines identiques forment un seul bloc",
+      "slots": [
+        ["09:00", "09:30", "work", "OPS-12", "Daily"],
+        ["09:30", "09:45", "work", "OPS-12", "Daily"]
+      ],
+      "blocks": [["09:00", "09:45", "work", "OPS-12", "Daily"]]
+    },
+    {
+      "name": "un commentaire différent coupe le bloc",
+      "slots": [
+        ["09:00", "09:15", "work", "SHOP-482", "Mapping"],
+        ["09:15", "09:30", "work", "SHOP-482", "Tests"]
+      ],
+      "blocks": [
+        ["09:00", "09:15", "work", "SHOP-482", "Mapping"],
+        ["09:15", "09:30", "work", "SHOP-482", "Tests"]
+      ]
+    },
+    {
+      "name": "un commentaire et pas de commentaire font deux blocs",
+      "slots": [
+        ["09:00", "09:15", "work", "SHOP-482", null],
+        ["09:15", "09:30", "work", "SHOP-482", "Tests"]
+      ],
+      "blocks": [
+        ["09:00", "09:15", "work", "SHOP-482", null],
+        ["09:15", "09:30", "work", "SHOP-482", "Tests"]
+      ]
+    },
+    {
+      "name": "la casse du commentaire compte",
+      "slots": [
+        ["09:00", "09:15", "work", "SHOP-482", "Tests"],
+        ["09:15", "09:30", "work", "SHOP-482", "tests"]
+      ],
+      "blocks": [
+        ["09:00", "09:15", "work", "SHOP-482", "Tests"],
+        ["09:15", "09:30", "work", "SHOP-482", "tests"]
+      ]
+    },
+    {
+      "name": "deux tickets voisins font deux blocs",
+      "slots": [
+        ["10:00", "11:00", "work", "SHOP-482", null],
+        ["11:00", "11:15", "work", "SHOP-519", null]
+      ],
+      "blocks": [
+        ["10:00", "11:00", "work", "SHOP-482", null],
+        ["11:00", "11:15", "work", "SHOP-519", null]
+      ]
+    },
+    {
+      "name": "un trou coupe le bloc",
+      "slots": [
+        ["09:00", "09:15", "work", "SHOP-482", null],
+        ["09:30", "09:45", "work", "SHOP-482", null]
+      ],
+      "blocks": [
+        ["09:00", "09:15", "work", "SHOP-482", null],
+        ["09:30", "09:45", "work", "SHOP-482", null]
+      ]
+    },
+    {
+      "name": "des pauses voisines forment une seule pause",
+      "slots": [
+        ["12:30", "12:45", "pause", null, null],
+        ["12:45", "13:30", "pause", null, null]
+      ],
+      "blocks": [["12:30", "13:30", "pause", null, null]]
+    },
+    {
+      "name": "une pause coupe un ticket en deux",
+      "slots": [
+        ["09:00", "10:00", "work", "SHOP-482", null],
+        ["10:00", "10:15", "pause", null, null],
+        ["10:15", "11:00", "work", "SHOP-482", null]
+      ],
+      "blocks": [
+        ["09:00", "10:00", "work", "SHOP-482", null],
+        ["10:00", "10:15", "pause", null, null],
+        ["10:15", "11:00", "work", "SHOP-482", null]
+      ]
+    },
+    {
+      "name": "le premier et le dernier quart d'heure de la grille",
+      "slots": [
+        ["07:00", "07:15", "work", "OPS-7", null],
+        ["19:45", "20:00", "work", "OPS-7", null]
+      ],
+      "blocks": [
+        ["07:00", "07:15", "work", "OPS-7", null],
+        ["19:45", "20:00", "work", "OPS-7", null]
+      ]
+    },
+    {
+      "name": "toute la grille d'un seul ticket",
+      "slots": [
+        ["07:00", "13:00", "work", "OPS-7", "Astreinte"],
+        ["13:00", "20:00", "work", "OPS-7", "Astreinte"]
+      ],
+      "blocks": [["07:00", "20:00", "work", "OPS-7", "Astreinte"]]
+    }
+  ]
+}

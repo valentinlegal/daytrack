@@ -1,0 +1,42 @@
+name: Signaler un bug
+description: DayTrack ne fait pas ce qu'il devrait.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        DayTrack est un projet personnel. Tout est lu, mais sans promesse de réponse ni de délai.
+
+        **N'écrivez ici ni jeton Jira, ni titre de ticket de votre entreprise, ni nom de collègue** : ce dépôt est public.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Elle s'affiche dans les réglages, en bas de page.
+      placeholder: "2.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Ce que vous avez fait
+      description: Les gestes, dans l'ordre, pour que le bug se reproduise.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Ce qui s'est passé
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ce que vous attendiez
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Votre installation
+      description: Système, navigateur, et tout ce qui peut aider, journal du conteneur compris (relisez-le avant de le coller).

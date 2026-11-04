@@ -1,0 +1,17 @@
+# Les services des tests seuls. Jamais dans l'image publiée (.dockerignore).
+services:
+    # Aucun test n'atteint un vrai Jira : le client de Jira est le Jira simulé, en
+    # mémoire, que les tests relisent et mettent en panne (dev/jira).
+    App\Dev\Jira\FakeJira:
+        arguments: ['@App\Dev\Jira\MemoryStore']
+        public: true
+    App\Dev\Jira\MemoryStore: ~
+    jira.client:
+        class: Symfony\Component\HttpClient\MockHttpClient
+        factory: ['App\Dev\Jira\FakeJiraHttpClient', 'create']
+        arguments: ['@App\Dev\Jira\FakeJira']
+    # De même pour le registre des images.
+    registry.client:
+        class: Symfony\Component\HttpClient\MockHttpClient
+        factory: ['App\Dev\Jira\FakeJiraHttpClient', 'create']
+        arguments: ['@App\Dev\Jira\FakeJira']

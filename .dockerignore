@@ -1,0 +1,48 @@
+# Ce qui n'entre jamais dans l'image : rien de ce qui sert à tester ne doit s'y retrouver.
+
+# Dépendances, caches et compilations : refaits dans l'image.
+/vendor/
+/node_modules/
+/var/
+/db/
+/public/build/
+/public/bundles/
+/.phpunit.cache/
+/.php-cs-fixer.cache
+/test-results/
+/playwright-report/
+
+# Ce qui sert à tester : le Jira simulé d'abord, puis les tests et leurs outils.
+/dev/
+/config/services_dev.yaml
+/config/services_test.yaml
+/tests/
+/bin/phpunit
+/phpunit.dist.xml
+/phpstan.dist.neon
+/.php-cs-fixer.dist.php
+/vitest.config.ts
+/playwright.config.ts
+/eslint.config.js
+/eslint-restrictions.js
+/stylelint.config.js
+/.prettierrc.json
+/.prettierignore
+
+# Le développement et le dépôt.
+/.git/
+/.github/
+/bin/setup
+/compose.yaml
+/compose.override.yaml
+/docker-compose.yml
+/README.md
+/.dockerignore
+/.editorconfig
+
+# Secrets et surcharges locales : jamais copiés.
+/.env.local
+/.env.*.local
+/.env.dev
+/.env.test
+/config/secrets/prod/prod.decrypt.private.php

@@ -1,0 +1,26 @@
+# Les services du développement seul. Jamais dans l'image publiée (.dockerignore).
+services:
+    # Le Jira simulé a un certificat signé par l'autorité locale de Caddy : on ne lui
+    # fait confiance qu'à lui, et un vrai Jira joint depuis le poste garde les
+    # autorités du système.
+    jira.client.simulated:
+        class: Symfony\Component\HttpClient\ScopingHttpClient
+        decorates: jira.client
+        arguments:
+            - '@.inner'
+            - { '^https://jira(:\d+)?/': { cafile: '%env(JIRA_CA_FILE)%' } }
+
+    # La vraie passerelle d'Atlassian, sauf pour le site du Jira simulé, qui la joue
+    # aussi (dev/jira/src/SimulatedGateway.php). Elle passe avant la confiance
+    # ci-dessus, qui s'applique à l'adresse qu'elle rend.
+    jira.client.simulated_gateway:
+        class: App\Dev\Jira\SimulatedGateway
+        decorates: jira.client
+        decoration_priority: -1
+        arguments: ['@.inner', '%env(JIRA_GATEWAY_URL)%']
+
+    # Le registre des images, joué par le Jira simulé : rien ne part vers ghcr.io.
+    registry.client.simulated:
+        class: App\Dev\Jira\SimulatedRegistry
+        decorates: registry.client
+        arguments: ['@.inner', '%env(JIRA_CA_FILE)%']

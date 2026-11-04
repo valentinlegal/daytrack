@@ -1,0 +1,81 @@
+/*
+ * La bienvenue, la section Jira des réglages et la fenêtre de ticket reliée à Jira : ce que les classes
+ * de Tailwind ne savent pas dire avec les tokens seuls. Une mesure calculée à partir de
+ * tokens passe par une variable, comme dans app.css.
+ */
+
+@layer components {
+    /*
+     * Une icône de --s-4 devant un texte qui peut passer sur deux lignes reste en face de
+     * la première : centrée sur sa hauteur de ligne.
+     */
+    .first-line-icon {
+        --first-line-offset: calc((var(--t-sm) * var(--lh) - var(--s-4)) / 2);
+
+        margin-top: var(--first-line-offset);
+    }
+
+    /* Le numéro d'une étape de l'aide au jeton, un disque de --s-5 centré sur sa première ligne. */
+    .first-line-disc {
+        --first-line-offset: calc((var(--t-sm) * var(--lh) - var(--s-5)) / 2);
+
+        margin-top: var(--first-line-offset);
+    }
+
+    /* Le chevron d'une aide qui se déplie : vers la droite fermée, vers le bas ouverte. */
+    [aria-expanded='true'] > .disclosure {
+        rotate: 90deg;
+    }
+
+    /* L'icône d'un lien qui ouvre un nouvel onglet, posée sur la ligne de son texte. */
+    .external-icon {
+        --external-drop: calc(var(--s-half) * -1);
+
+        display: inline;
+        margin-left: var(--s-half);
+        vertical-align: var(--external-drop);
+    }
+
+    /* Une étape de l'aide : son numéro, sa phrase, et dessous les boutons des périmètres. */
+    .token-step {
+        display: grid;
+        grid-template-columns: var(--s-5) minmax(0, 1fr);
+        gap: var(--s-2) var(--s-3);
+        align-items: start;
+    }
+
+    .token-step > :not(:first-child) {
+        grid-column: 2;
+    }
+
+    /*
+     * L'aperçu du ticket dans la fenêtre, à --s-2 du champ Ticket et à sa hauteur, sur le
+     * reste de la ligne : sous le libellé, à côté des 160 px du champ. Gris pendant la
+     * recherche, à la teinte du type ensuite.
+     */
+    .ticket-preview {
+        --preview-top: calc(var(--t-sm) * var(--lh) + var(--s-2));
+        --preview-left: calc(var(--w-id) * 2 + var(--s-2));
+
+        position: absolute;
+        top: var(--preview-top);
+        right: 0;
+        left: var(--preview-left);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+        height: var(--h-field);
+        padding: 0 var(--s-3);
+        border-left: var(--b-ty) solid var(--ty-bar);
+        border-radius: var(--r-1);
+        background: var(--ty-bg);
+        font-size: var(--t-sm);
+        line-height: var(--lh);
+    }
+
+    .ticket-preview[data-state='searching'] {
+        --ty-bar: var(--line-strong);
+        --ty-bg: var(--bg-sel);
+    }
+}

@@ -1,0 +1,31 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        DayTrack est un projet personnel, développé selon mes besoins et mon temps. Je lis tout quand j'en ai le temps, mais une proposition n'est pas une promesse : ni réponse, ni délai, ni reprise garantie.
+
+        Le code de DayTrack ne se contribue pas directement : si une modification me plaît, je m'en inspire de mon côté.
+  - type: textarea
+    id: need
+    attributes:
+      label: Votre besoin
+      description: Ce que vous voudriez pouvoir faire, et pourquoi. Le besoin compte plus que la solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Votre idée
+      description: Comment vous la voyez à l'écran, si vous avez une idée précise.
+  - type: input
+    id: fork
+    attributes:
+      label: Votre fork
+      description: Le lien vers la modification, si vous l'avez déjà faite.
+      placeholder: https://github.com/…
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: Si vous proposez du code
+      options:
+        - label: J'accepte que ce code soit repris dans DayTrack, sous sa licence, sans contrepartie.

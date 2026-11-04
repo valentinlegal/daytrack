@@ -1,0 +1,23 @@
+includes:
+    - vendor/phpstan/phpstan-symfony/extension.neon
+    - vendor/phpstan/phpstan-symfony/rules.neon
+    - vendor/phpstan/phpstan-doctrine/extension.neon
+    - vendor/phpstan/phpstan-doctrine/rules.neon
+    - vendor/phpstan/phpstan-phpunit/extension.neon
+    - vendor/phpstan/phpstan-phpunit/rules.neon
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+
+parameters:
+    # Le plus strict que PHPStan propose aujourd'hui. Le nombre est figé plutôt que
+    # « max », qui se déplacerait tout seul à la prochaine montée de version et
+    # ferait échouer l'analyse sans qu'on l'ait décidé.
+    level: 10
+    paths:
+        - src
+        - tests
+        - dev/jira
+        - migrations
+    symfony:
+        containerXmlPath: var/cache/dev/App_KernelDevDebugContainer.xml
+    doctrine:
+        objectManagerLoader: tests/object-manager.php

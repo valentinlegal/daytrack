@@ -1,0 +1,37 @@
+# see https://symfony.com/doc/current/reference/configuration/framework.html
+framework:
+    # Propre à chaque installation, tiré de sa clé (src/Installation/) : jamais vide,
+    # jamais dans l'image.
+    secret: '%env(installation_secret:resolve:DAYTRACK_KEY_FILE)%'
+
+    # Pas de compte, donc pas de session : rien à retenir d'une requête à l'autre.
+    session: false
+
+    # Derrière un proxy qui porte le HTTPS et le nom de domaine, Symfony doit croire
+    # ce qu'il lui transmet : le schéma, l'hôte, le port et l'adresse d'origine. Il
+    # ne croit que les adresses de TRUSTED_PROXIES, vide par défaut — personne.
+    trusted_proxies: '%env(TRUSTED_PROXIES)%'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port']
+
+    http_client:
+        scoped_clients:
+            # Ce qui part vers Jira : en HTTPS seulement, sans suivre de redirection
+            # (src/Jira/JiraClient.php refuse le reste), et jamais plus de quelques
+            # secondes d'attente — la v1 n'en fixait aucune, et un Jira muet la figeait
+            # une minute.
+            jira.client:
+                scope: '^https://'
+                timeout: 5
+                max_duration: 10
+                headers:
+                    Accept: 'application/json'
+            # Ce qui lit les versions publiées : un avis ne vaut pas qu'on attende.
+            registry.client:
+                scope: '^https://ghcr\.io/'
+                timeout: 3
+                max_duration: 5
+                max_redirects: 0
+
+when@test:
+    framework:
+        test: true

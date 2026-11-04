@@ -1,0 +1,17 @@
+# Prettier ne met en forme que le code du navigateur et sa configuration. Le reste
+# a ses propres règles (php-cs-fixer) ou n'est pas à nous.
+*
+!assets/
+!assets/**
+!tests/
+!tests/front/
+!tests/front/**
+!tests/e2e/
+!tests/e2e/**
+!*.config.js
+!*.config.ts
+!package.json
+!tsconfig.json
+!.prettierrc.json
+tests/e2e/**/*-snapshots/
+assets/styles/tokens.css

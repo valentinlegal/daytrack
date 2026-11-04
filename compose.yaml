@@ -1,0 +1,117 @@
+# L'environnement de développement. « bin/setup » le démarre et le tient à jour.
+#
+# Rien n'écoute ailleurs que sur la machine elle-même (127.0.0.1) : sans compte,
+# quiconque atteint DayTrack agit au nom de son utilisateur, jusque dans Jira.
+# Les ports 80 et 443 restent libres pour une installation de DayTrack sur le même poste.
+name: daytrack-v2
+
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    image: daytrack-v2-dev
+    container_name: daytrack-v2-app
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - .:/app
+      # La configuration du serveur, relue au redémarrage sans reconstruire l'image.
+      - ./frankenphp/Caddyfile:/etc/frankenphp/Caddyfile:ro
+      - ./frankenphp/conf.d/10-app.ini:/usr/local/etc/php/conf.d/10-app.ini:ro
+      # Le certificat local et l'autorité qui le signe. Gardés d'un démarrage à
+      # l'autre : le navigateur qui l'a approuvé une fois n'a pas à recommencer.
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SERVER_NAME: "https://localhost:8443"
+      # Une adresse tapée sans « https:// » arrive en HTTP sur ce port HTTPS : elle est
+      # renvoyée vers le HTTPS, au lieu d'une phrase d'erreur du serveur, en anglais.
+      # Seulement ici : chez l'utilisateur, le HTTP arrive sur le port 80, déjà
+      # renvoyé, et derrière un proxy, le port 80 doit rester en HTTP.
+      CADDY_GLOBAL_OPTIONS: |
+        servers :8443 {
+          protocols h1 h2
+          listener_wrappers {
+            http_redirect
+            tls
+          }
+        }
+      # Le code est relu dès qu'il change, les dépendances dès que Composer les
+      # réinstalle — « bin/setup » après un changement de branche —, et la liste des
+      # fichiers du navigateur à chaque compilation : le worker la garde en mémoire, et
+      # servirait sinon des noms de fichiers qui n'existent plus. Pas « var/ » : le
+      # cache s'y écrit à chaque requête, et l'application redémarrerait en boucle.
+      FRANKENPHP_WORKER_CONFIG: |
+        watch ./src/**/*.php
+        watch ./config/**/*.{php,yaml}
+        watch ./templates/**/*.twig
+        watch ./.env
+        watch ./.env.dev
+        watch ./vendor/composer/installed.json
+        watch ./public/build/entrypoints.json
+      # L'autorité qui a signé le certificat du Jira simulé : celle de Caddy,
+      # partagée par les deux services. Le Jira de l'utilisateur, lui, a un vrai
+      # certificat, et cette variable n'existe pas chez lui.
+      JIRA_CA_FILE: /data/caddy/pki/authorities/local/root.crt
+
+  # Le Jira simulé (dev/jira) : un service à part, comme un vrai Jira, joint en
+  # HTTPS comme un vrai Jira. Il garde ce qu'il reçoit dans var/jira/, et se lit
+  # dans le navigateur sur https://localhost:8444. Jamais dans l'image publiée.
+  jira:
+    image: daytrack-v2-dev
+    container_name: daytrack-v2-jira
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8444:8444"
+    volumes:
+      - .:/app
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SERVER_NAME: "https://jira, https://localhost:8444"
+    command: ["frankenphp", "run", "--config", "/app/dev/jira/Caddyfile"]
+
+  # Les fichiers du navigateur, recompilés dès qu'ils changent. Node vit ici, pas
+  # dans l'image PHP. Debian plutôt qu'Alpine : les modules natifs qu'il installe
+  # servent aussi au conteneur de Playwright, qui est un Ubuntu.
+  node:
+    image: node@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446
+    container_name: daytrack-v2-node
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: ["npm", "run", "watch"]
+    # Prêt quand la première compilation est écrite : « bin/setup » l'attend.
+    healthcheck:
+      test: ["CMD", "test", "-f", "public/build/entrypoints.json"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  # Les parcours dans le navigateur, et les captures de référence. Toujours ce
+  # conteneur-là : les polices et le rendu du texte changent d'un système à l'autre.
+  #
+  # Il tourne dans l'architecture du poste. Sur un Mac Apple, l'amd64 émulé par
+  # Rosetta fausse les calculs de Chromium (Math.pow y rend 0) : axe s'y trompe, et
+  # le code de l'écran pourrait s'y tromper aussi. Comparer des captures n'a de sens
+  # que sur une même architecture (tests/e2e/fixtures.ts).
+  #
+  # Il partage le réseau de l'application : « https://localhost:8443 » y désigne
+  # DayTrack, exactement comme dans le navigateur du poste.
+  playwright:
+    profiles: [tests]
+    image: mcr.microsoft.com/playwright:v1.64.1-noble
+    network_mode: "service:app"
+    working_dir: /app
+    volumes:
+      - .:/app
+    ipc: host
+    environment:
+      CI: ${CI:-}
+
+volumes:
+  caddy_data:
+  caddy_config:

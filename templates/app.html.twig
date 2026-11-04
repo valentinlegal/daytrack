@@ -1,0 +1,5 @@
+{% extends 'base.html.twig' %}
+
+{% block body %}
+    <div id="app" data-screen="{{ screen }}" data-date="{{ date }}" data-timezone="{{ timezone }}" data-future-days="{{ future_days }}" data-working-days="{{ working_days }}" data-jira="{{ jira }}" data-jira-scopes="{{ jira_scopes }}" data-old-compose="{{ old_compose }}" data-v1-left-out="{{ v1_left_out|json_encode }}"></div>
+{% endblock %}

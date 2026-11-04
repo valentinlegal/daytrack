@@ -1,0 +1,224 @@
+/*
+ * DayTrack, tokens de design : c'est ici qu'ils vivent, et nulle part ailleurs.
+ *
+ * Règles d'usage
+ * - Aucune valeur en dur dans les composants : couleurs, espacements, tailles de texte,
+ *   hauteurs, rayons et ombres passent par ces variables.
+ * - Thème clair sur :root. Thème sombre avec data-theme="dark" sur <html>.
+ *   Trois réglages, dans la page Réglages : Clair, Sombre, Système (par défaut).
+ *   Avec « Système », l'application pose data-theme selon prefers-color-scheme et
+ *   suit ses changements en direct. Le choix est mémorisé dans le navigateur.
+ * - Couleur d'un ticket : poser data-color="<teinte>" sur l'élément (bloc, pastille,
+ *   aperçu, zone de dépôt). Il reçoit alors --ty-bar, --ty-bg, --ty-line et --ty-id.
+ *   Par défaut : Story = vert, Bug = rouge, Tâche = bleu, Epic = violet.
+ * - Contrastes vérifiés : textes 4,5:1 au moins, éléments graphiques 3:1, dans les deux thèmes.
+ * - Largeurs d'écran (les media queries ne lisent pas les variables) :
+ *   moins de 1440 px avec le récapitulatif ouvert, « Reste » s'efface ;
+ *   moins de 1280 px, colonne de gauche à --w-side-narrow et récapitulatif par-dessus la grille.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Polices du système : rien à télécharger */
+  --f-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Ubuntu", "Cantarell", sans-serif;
+  --f-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+
+  /* Espacements */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px; --s-7: 40px;
+  --s-half: calc(var(--s-1) / 2); /* entre deux lignes d'un bloc */
+
+  /* Anneau de focus : son épaisseur, et son écart avec ce qu'il entoure */
+  --ring: 2px;
+
+  /* Traits plus épais que le trait ordinaire de 1 px */
+  --b-mid: 1.5px;  /* tiret d'un commentaire du récapitulatif */
+  --b-strong: 2px; /* ligne « maintenant » */
+  --b-ty: 3px;     /* bord gauche d'un ticket : bloc, aperçu */
+
+  /* Rayons */
+  --r-1: 4px;   /* blocs, pastilles d'identifiant */
+  --r-2: 6px;   /* boutons, champs, cartes de favori */
+  --r-3: 10px;  /* fenêtres */
+  --r-pill: 999px; /* pastille « Pause », bouton « Nouvelle version » */
+
+  /* Tailles de texte : celles de Jira, 12, 14, 16 et 20 px. --t-xs et --t-sm valent
+     autant, mais ne nomment pas les mêmes textes : l'un peut bouger sans l'autre. */
+  --t-xs: 12px;  /* heures de la grille, légende, type de ticket */
+  --t-sm: 12px;  /* identifiants, libellés, textes secondaires */
+  --t-md: 14px;  /* texte courant, ligne des chiffres, boutons */
+  --t-lg: 16px;  /* titres de fenêtre et de panneau, durées du récapitulatif */
+  --t-xl: 20px;  /* date du jour */
+  --lh: 1.4;     /* interligne du texte courant */
+
+  /* Graisses */
+  --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600; --fw-bold: 650;
+
+  /* Hauteurs */
+  --h-bar: 64px;      /* barre du haut et en-tête du récapitulatif */
+  --h-ctl: 32px;      /* boutons de la barre */
+  --h-ctl-sm: 28px;   /* boutons des fenêtres et des listes */
+  --h-field: 34px;    /* champs de saisie */
+  --h-row: 24px;      /* un quart d'heure dans la grille */
+  --h-line: calc(var(--h-row) - var(--s-half)); /* une ligne d'un bloc de deux lignes : avec son écart, elle tient dans son quart d'heure */
+  --h-foot: 48px;     /* pied de la colonne de gauche */
+
+  /* Largeurs */
+  --w-side: 256px;    /* colonne de gauche et zone du logo */
+  --w-side-narrow: 224px; /* la même sous 1280 px, et la plus étroite qu'on règle */
+  --w-side-max: 360px; /* la plus large qu'on règle */
+  --w-recap: 328px;   /* panneau Récapitulatif */
+  --w-gut: 64px;      /* colonne des heures */
+  --w-id: 80px;       /* colonne de l'identifiant dans un bloc */
+  --w-pop: 400px;     /* fenêtres Nouveau ticket et Modifier le ticket */
+  --w-pop-sm: 320px;  /* fenêtre Objectif du jour */
+  --w-pop-md: 360px;  /* fenêtre Nouvelle version */
+  --w-pop-send: 400px; /* fenêtres Envoyer sur Jira et Envoi partiel */
+  --w-menu: 248px;    /* menu du clic droit */
+  --w-bar-mini: 56px; /* barre de progression de la ligne des chiffres */
+
+  /* Surfaces */
+  --bg: #FFFFFF;        /* fond de page, grille */
+  --bg-side: #F7F7F8;   /* colonne de gauche */
+  --bg-raise: #FFFFFF;  /* fenêtres, cartes, boutons secondaires */
+  --bg-hover: #F1F2F4;
+  --bg-press: #E9EBEE;  /* bouton enfoncé, objectif en cours de réglage */
+  --bg-sel: #F3F4F6;    /* créneau visé, bloc de commandes */
+
+  /* Traits */
+  --line: #E5E7EB;        /* séparations, lignes des heures */
+  --line-soft: #F2F3F5;   /* lignes des quarts d'heure */
+  --line-strong: #CBCFD6; /* bord des boutons secondaires, survol */
+  --line-field: #8D919B;  /* bord des champs (3:1) */
+
+  /* Texte */
+  --ink: #16181D;
+  --ink-2: #4B4F59;
+  --ink-3: #616570; /* 4,5:1 sur un bloc sélectionné, le fond le plus sombre où il se pose */
+
+  /* Action principale et focus */
+  --btn: #16181D; --on-btn: #FFFFFF;
+  --btn-hover: #2B2E35; /* l'action principale survolée */
+  --focus: #16181D;     /* anneau de focus 2 px, décalé de 2 px */
+
+  /* États */
+  --now: #E03A2F;  /* ligne « maintenant » */
+  --ok: #1F9D55;   /* Envoyé */
+  --warn: #D06F05; /* Non envoyé, Modifié depuis l'envoi */
+  --inc: #D2382F;  /* Incomplet, Supprimer ; 4,5:1 sur --bg-side */
+  --inc-bg: #FDF2F1;   /* bandeau d'alerte */
+  --inc-line: #F2D2CE;
+
+  /* Pause */
+  --pause-bg: #F7F7F6; --pause-hatch: #D8D9D5; --pause-ink: #585C65;
+
+  /* Message d'annulation : couleurs inversées sur --btn */
+  --toast-ink-2: #B4B7BF; /* raccourci, croix */
+  --toast-line: #71757F;  /* bord du bouton Annuler */
+
+  /* Sélection de plusieurs créneaux */
+  --sel-fill: color-mix(in srgb, var(--focus) 7%, transparent);
+
+  /* Ombres : seulement au survol, pendant un glisser, et pour les fenêtres */
+  --shadow-1: 0 1px 2px rgba(22, 24, 29, .07);
+  --shadow: 0 1px 2px rgba(22, 24, 29, .06), 0 10px 28px rgba(22, 24, 29, .13);
+  --shadow-side: -12px 0 28px -10px rgba(22, 24, 29, .22); /* récapitulatif par-dessus la grille, bord gauche seulement */
+  --shadow-ring: 0 0 0 var(--ring) var(--bg), 0 0 0 calc(var(--ring) * 2) var(--focus); /* bloc ouvert dans Modifier le ticket */
+  --veil: rgba(255, 255, 255, .62); /* voile pendant l'envoi sur Jira */
+
+  /* Empilement */
+  --z-sel: 3; --z-now: 4; --z-pop: 6; --z-arrow: 7; --z-drag: 8;
+  --z-recap: 9; /* récapitulatif par-dessus la grille, sous 1280 px */
+  --z-toast: 10; /* message en bas de la grille, au-dessus du récapitulatif posé sur elle */
+  --z-veil: 12;       /* le voile d'un envoi sur Jira, sur toute la journée */
+  --z-above-veil: 13; /* le bouton Jira, net au-dessus du voile */
+  --z-confetti: 14;   /* la gerbe d'un envoi réussi */
+  --z-tip: 15;   /* une infobulle, au-dessus de tout ce qu'elle peut désigner */
+
+  /* Un contrôle désactivé */
+  --o-disabled: .45;
+
+  /* Mouvement */
+  --ease: cubic-bezier(.2, 0, 0, 1);
+  --tilt-drag: -1.5deg; /* la carte d'un favori qu'on glisse */
+  --dur-fast: 120ms;  /* fenêtres, survols */
+  --dur-panel: 200ms; /* ouverture et fermeture du récapitulatif */
+  --dur-spin: 800ms;  /* un tour de la roue d'un bouton occupé */
+
+  /* Palette des types de ticket : douze teintes (bar, fond, bordure, identifiant).
+     Pour un même rôle, les douze ont le même contraste : fond à 1,19:1 contre la page,
+     au plus foncé que --ink-3 permet sous le voile d'une sélection, trait à 3,2:1 contre
+     son fond, identifiant à 5,9:1.
+     En sombre : fond à 1,22:1, trait à 4,6:1, identifiant à 8,1:1. */
+  --c-rouge-bar: #E64D4B; --c-rouge-bg: #FEE6E3; --c-rouge-line: #FDBBB5; --c-rouge-id: #A2302F;
+  --c-orange-bar: #C86A13; --c-orange-bg: #FEE7D8; --c-orange-line: #FCBE95; --c-orange-id: #8A470A;
+  --c-ambre-bar: #A67C13; --c-ambre-bg: #F8EACE; --c-ambre-line: #E8C787; --c-ambre-id: #725409;
+  --c-olive-bar: #7C8A13; --c-olive-bg: #E8EFD1; --c-olive-line: #C5D28E; --c-olive-id: #545E09;
+  --c-vert-bar: #15973A; --c-vert-bg: #D9F2DB; --c-vert-line: #A2D9A7; --c-vert-id: #0B6725;
+  --c-sarcelle-bar: #16937C; --c-sarcelle-bg: #CFF3E9; --c-sarcelle-line: #85DBC6; --c-sarcelle-id: #0C6554;
+  --c-cyan-bar: #168EAE; --c-cyan-bg: #CEF1FE; --c-cyan-line: #84D7F3; --c-cyan-id: #0B6177;
+  --c-bleu-bar: #417EF5; --c-bleu-bg: #E2ECFE; --c-bleu-line: #B2CDFD; --c-bleu-id: #2855AD;
+  --c-violet-bar: #9569EC; --c-violet-bg: #EDE9FE; --c-violet-line: #D2C4FD; --c-violet-id: #6746A7;
+  --c-magenta-bar: #C457C3; --c-magenta-bg: #FCE4FB; --c-magenta-line: #F0BAED; --c-magenta-id: #893888;
+  --c-rose-bar: #DE4C8C; --c-rose-bg: #FEE5ED; --c-rose-line: #FDB9D0; --c-rose-id: #9C2F60;
+  --c-gris-bar: #818386; --c-gris-bg: #E9EBEF; --c-gris-line: #C9CBCF; --c-gris-id: #57595C;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #15161A; --bg-side: #191A1F; --bg-raise: #202227;
+  --bg-hover: #24262C; --bg-press: #2B2E35; --bg-sel: #202228;
+
+  --line: #2B2E34; --line-soft: #202227; --line-strong: #43464E; --line-field: #6A6E78;
+
+  --ink: #ECEDF0; --ink-2: #BBBEC6; --ink-3: #9599A3;
+
+  --btn: #ECEDF0; --on-btn: #15161A; --focus: #ECEDF0; --btn-hover: #D4D6DB;
+
+  --now: #F26A61; --ok: #4CC783; --warn: #F2B33D; --inc: #F07167;
+  --inc-bg: #2A1B1B;
+  --inc-line: #4C2B29;
+
+  --pause-bg: #191A1E; --pause-hatch: #34373D; --pause-ink: #AFB3BB;
+
+  --toast-ink-2: #4B4F59; --toast-line: #80848D;
+  --sel-fill: color-mix(in srgb, var(--focus) 7%, transparent);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 14px 36px rgba(0, 0, 0, .55);
+  --shadow-side: -12px 0 28px -10px rgba(0, 0, 0, .7);
+  --shadow-ring: 0 0 0 var(--ring) var(--bg), 0 0 0 calc(var(--ring) * 2) var(--focus);
+  --veil: rgba(21, 22, 26, .62);
+
+  --c-rouge-bar: #E26B65; --c-rouge-bg: #3A211F; --c-rouge-line: #643A37; --c-rouge-id: #F8ADA6;
+  --c-orange-bar: #D77624; --c-orange-bg: #382315; --c-orange-line: #603E26; --c-orange-id: #F0B38A;
+  --c-ambre-bar: #B58816; --c-ambre-bg: #31260F; --c-ambre-line: #55431C; --c-ambre-id: #DBBB7B;
+  --c-olive-bar: #889816; --c-olive-bg: #262A12; --c-olive-line: #424922; --c-olive-id: #BAC683;
+  --c-vert-bar: #3FA251; --c-vert-bg: #192C1B; --c-vert-line: #2D4C30; --c-vert-id: #96CD9B;
+  --c-sarcelle-bar: #19A188; --c-sarcelle-bg: #0D2D26; --c-sarcelle-line: #184E42; --c-sarcelle-id: #79D0BA;
+  --c-cyan-bar: #199BBE; --c-cyan-bg: #0C2B35; --c-cyan-line: #174B5B; --c-cyan-id: #78CBE7;
+  --c-bleu-bar: #5C8EEC; --c-bleu-bg: #1D283C; --c-bleu-line: #344666; --c-bleu-id: #A1C1FB;
+  --c-violet-bar: #9C7DE4; --c-violet-bg: #2A243A; --c-violet-line: #494063; --c-violet-id: #C6B6F6;
+  --c-magenta-bar: #C671C4; --c-magenta-bg: #342233; --c-magenta-line: #593C58; --c-magenta-id: #E4AFE1;
+  --c-rose-bar: #DB6996; --c-rose-bg: #392029; --c-rose-line: #613948; --c-rose-id: #F3ABC4;
+  --c-gris-bar: #8E9093; --c-gris-bg: #26282B; --c-gris-line: #444549; --c-gris-id: #BEC0C4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-panel: 0ms; }
+}
+
+/* Couleur d'un ticket : data-color sur l'élément */
+[data-color="rouge"] { --ty-bar: var(--c-rouge-bar); --ty-bg: var(--c-rouge-bg); --ty-line: var(--c-rouge-line); --ty-id: var(--c-rouge-id); }
+[data-color="orange"] { --ty-bar: var(--c-orange-bar); --ty-bg: var(--c-orange-bg); --ty-line: var(--c-orange-line); --ty-id: var(--c-orange-id); }
+[data-color="ambre"] { --ty-bar: var(--c-ambre-bar); --ty-bg: var(--c-ambre-bg); --ty-line: var(--c-ambre-line); --ty-id: var(--c-ambre-id); }
+[data-color="olive"] { --ty-bar: var(--c-olive-bar); --ty-bg: var(--c-olive-bg); --ty-line: var(--c-olive-line); --ty-id: var(--c-olive-id); }
+[data-color="vert"] { --ty-bar: var(--c-vert-bar); --ty-bg: var(--c-vert-bg); --ty-line: var(--c-vert-line); --ty-id: var(--c-vert-id); }
+[data-color="sarcelle"] { --ty-bar: var(--c-sarcelle-bar); --ty-bg: var(--c-sarcelle-bg); --ty-line: var(--c-sarcelle-line); --ty-id: var(--c-sarcelle-id); }
+[data-color="cyan"] { --ty-bar: var(--c-cyan-bar); --ty-bg: var(--c-cyan-bg); --ty-line: var(--c-cyan-line); --ty-id: var(--c-cyan-id); }
+[data-color="bleu"] { --ty-bar: var(--c-bleu-bar); --ty-bg: var(--c-bleu-bg); --ty-line: var(--c-bleu-line); --ty-id: var(--c-bleu-id); }
+[data-color="violet"] { --ty-bar: var(--c-violet-bar); --ty-bg: var(--c-violet-bg); --ty-line: var(--c-violet-line); --ty-id: var(--c-violet-id); }
+[data-color="magenta"] { --ty-bar: var(--c-magenta-bar); --ty-bg: var(--c-magenta-bg); --ty-line: var(--c-magenta-line); --ty-id: var(--c-magenta-id); }
+[data-color="rose"] { --ty-bar: var(--c-rose-bar); --ty-bg: var(--c-rose-bg); --ty-line: var(--c-rose-line); --ty-id: var(--c-rose-id); }
+[data-color="gris"] { --ty-bar: var(--c-gris-bar); --ty-bg: var(--c-gris-bg); --ty-line: var(--c-gris-line); --ty-id: var(--c-gris-id); }

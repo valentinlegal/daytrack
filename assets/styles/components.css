@@ -1,0 +1,111 @@
+/*
+ * Les composants partagés (assets/components/) : ce que les classes de Tailwind ne savent
+ * pas dire avec les tokens seuls.
+ */
+
+/*
+ * L'infobulle apparaît en fondu, en glissant de --s-half depuis ce qu'elle désigne, en
+ * --dur-fast, et s'efface en fondu. Passée d'un bouton à son voisin (instant-open), elle
+ * s'affiche d'un coup. Quand le système demande moins de mouvement, --dur-fast vaut 0 :
+ * elle apparaît sans transition.
+ */
+@keyframes tip-in {
+    from {
+        opacity: 0;
+        translate: var(--tip-from);
+    }
+}
+
+@keyframes tip-out {
+    to {
+        opacity: 0;
+    }
+}
+
+@layer components {
+    .tip-motion {
+        --tip-from: 0 calc(var(--s-half) * -1);
+
+        animation-duration: var(--dur-fast);
+        animation-timing-function: var(--ease);
+    }
+
+    .tip-motion[data-side='top'] {
+        --tip-from: 0 var(--s-half);
+    }
+
+    .tip-motion[data-side='left'] {
+        --tip-from: var(--s-half) 0;
+    }
+
+    .tip-motion[data-side='right'] {
+        --tip-from: calc(var(--s-half) * -1) 0;
+    }
+
+    .tip-motion[data-state='delayed-open'] {
+        animation-name: tip-in;
+    }
+
+    .tip-motion[data-state='closed'] {
+        animation-name: tip-out;
+    }
+}
+
+/*
+ * La roue d'un bouton occupé : un cercle de --s-4
+ * à la couleur du texte, ouvert d'un quart, qui tourne. Elle ne paraît qu'après
+ * --dur-panel : une réponse rapide ne la fait pas clignoter. Quand le système demande
+ * moins de mouvement, elle s'arrête en cercle plein, estompé, et paraît aussitôt.
+ */
+@keyframes spin {
+    to {
+        rotate: 1turn;
+    }
+}
+
+@keyframes spin-show {
+    from {
+        visibility: hidden;
+    }
+}
+
+@layer components {
+    .spin {
+        flex: none;
+        width: var(--s-4);
+        height: var(--s-4);
+        animation-name: spin-show;
+        animation-duration: var(--dur-panel);
+        animation-timing-function: step-end;
+    }
+
+    .spin::before {
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        border: var(--b-strong) solid currentcolor;
+        border-right-color: transparent;
+        border-radius: var(--r-pill);
+        content: '';
+        animation-name: spin;
+        animation-duration: var(--dur-spin);
+        animation-timing-function: linear;
+        animation-iteration-count: infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .spin {
+            opacity: var(--o-disabled);
+        }
+
+        .spin,
+        .spin::before {
+            animation: none;
+        }
+
+        .spin::before {
+            border-right-color: currentcolor;
+        }
+    }
+}

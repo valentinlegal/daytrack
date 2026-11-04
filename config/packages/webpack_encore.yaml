@@ -1,0 +1,21 @@
+webpack_encore:
+    # Là où Encore écrit les fichiers du navigateur (webpack.config.js).
+    output_path: '%kernel.project_dir%/public/build'
+    script_attributes:
+        defer: true
+
+framework:
+    assets:
+        json_manifest_path: '%kernel.project_dir%/public/build/manifest.json'
+
+when@prod:
+    webpack_encore:
+        # Les fichiers du navigateur ne changent qu'avec l'image : leur liste se lit une fois.
+        cache: true
+
+when@test:
+    webpack_encore:
+        # Les tests HTTP ne compilent pas le navigateur : sans fichiers compilés, la
+        # page se rend sans leurs balises au lieu d'échouer. Les parcours Playwright,
+        # eux, tournent sur la vraie compilation.
+        strict_mode: false

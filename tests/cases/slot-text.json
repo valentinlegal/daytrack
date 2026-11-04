@@ -1,0 +1,71 @@
+{
+  "about": "Ce que deviennent le ticket et le commentaire d'un créneau avant d'être comparés ou enregistrés. Le serveur (tests/Api/SlotTextTest.php) et le navigateur (tests/front/grid/grid.test.ts) rejouent ces mêmes cas : un écart entre eux fait partir deux fois le même geste. null : le champ est vide.",
+  "cases": [
+    {
+      "name": "le ticket passe en majuscules, comme dans Jira",
+      "ticket": "shop-482",
+      "comment": null,
+      "expected": { "ticket": "SHOP-482", "comment": null }
+    },
+    {
+      "name": "seules les lettres sans accent passent en majuscules",
+      "ticket": "shop-é1",
+      "comment": null,
+      "expected": { "ticket": "SHOP-é1", "comment": null }
+    },
+    {
+      "name": "le ticket perd les espaces qui l'entourent",
+      "ticket": "  SHOP-482\t",
+      "comment": null,
+      "expected": { "ticket": "SHOP-482", "comment": null }
+    },
+    {
+      "name": "le ticket perd l'espace insécable et le caractère invisible collés avec lui",
+      "ticket": " SHOP-482​",
+      "comment": null,
+      "expected": { "ticket": "SHOP-482", "comment": null }
+    },
+    {
+      "name": "un ticket fait d'espaces est vide",
+      "ticket": "   ",
+      "comment": null,
+      "expected": { "ticket": null, "comment": null }
+    },
+    {
+      "name": "deux espaces dans le commentaire n'en font qu'une",
+      "ticket": "SHOP-482",
+      "comment": "Revue  du   code",
+      "expected": { "ticket": "SHOP-482", "comment": "Revue du code" }
+    },
+    {
+      "name": "une espace insécable dans le commentaire devient une espace",
+      "ticket": "SHOP-482",
+      "comment": "Revue du code",
+      "expected": { "ticket": "SHOP-482", "comment": "Revue du code" }
+    },
+    {
+      "name": "le commentaire perd ce qui l'entoure d'invisible, saut de ligne compris",
+      "ticket": "SHOP-482",
+      "comment": "\n Tests  ",
+      "expected": { "ticket": "SHOP-482", "comment": "Tests" }
+    },
+    {
+      "name": "une tabulation au milieu du commentaire reste : la validation la refuse",
+      "ticket": "SHOP-482",
+      "comment": "Revue\tdu code",
+      "expected": { "ticket": "SHOP-482", "comment": "Revue\tdu code" }
+    },
+    {
+      "name": "un commentaire fait d'espaces est vide",
+      "ticket": "SHOP-482",
+      "comment": "   ",
+      "expected": { "ticket": "SHOP-482", "comment": null }
+    },
+    {
+      "name": "un commentaire garde sa casse",
+      "ticket": "SHOP-482",
+      "comment": "Tests e2e",
+      "expected": { "ticket": "SHOP-482", "comment": "Tests e2e" }
+    }
+  ]
+}

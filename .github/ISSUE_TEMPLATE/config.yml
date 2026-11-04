@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Proposer une idée ou une modification
+    url: https://github.com/valentinlegal/daytrack/discussions/categories/propositions
+    about: Les idées et les modifications faites dans un fork se proposent ici, pas dans les tickets.
+  - name: Signaler une faille de sécurité
+    url: https://github.com/valentinlegal/daytrack/security/advisories/new
+    about: En privé, pour ne pas l'exposer avant qu'elle soit corrigée.
