@@ -1,11 +1,9 @@
 import type { SlotChange } from '../grid/changes';
-import { readDay } from '../grid/day';
-import type { DayApi, SendResult, Violation, WriteResult } from '../grid/daySession';
+import { type DayState, readDay } from '../grid/day';
+import type { DayApi, SendResult, WriteResult } from '../grid/daySession';
 import { isRecord } from '../grid/json';
 import { type TicketInfo, ticketsOf } from '../jira/ticketInfo';
-
-/** Ce qu'une requête qui survit à la page peut porter (norme fetch, « keepalive »). */
-const KEEPALIVE_LIMIT = 64 * 1024;
+import { refused, serverApi } from '../serverApi';
 
 /**
  * L'API des journées (src/Controller/Api/DayController.php), vue du moteur.
@@ -17,107 +15,60 @@ const KEEPALIVE_LIMIT = 64 * 1024;
  * à qui les affiche (onTickets), jamais au moteur, qui n'en a pas besoin.
  */
 export function httpDayApi(
-    fetcher: typeof fetch = (input, init) => fetch(input, init),
+    fetcher?: typeof fetch,
     onTickets: (tickets: Record<string, TicketInfo>) => void = () => undefined,
 ): DayApi {
+    const server = serverApi(fetcher);
     const url = (date: string, path = ''): string => `/api/days/${encodeURIComponent(date)}${path}`;
 
-    async function write(method: 'PATCH' | 'PUT', target: string, body: unknown): Promise<WriteResult> {
-        const sent = JSON.stringify(body);
-        const response = await fetcher(target, {
+    const day = (json: unknown): DayState => {
+        ticketsOf(json, onTickets);
+
+        return readDay(json);
+    };
+    // La journée à jour, que joint un refus (409).
+    const dayIn = (json: unknown): DayState => day(isRecord(json) ? json.day : undefined);
+
+    function write(method: 'PATCH' | 'PUT', target: string, body: unknown): Promise<WriteResult> {
+        return server.request<WriteResult>(
             method,
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: sent,
-            // Une fenêtre qui s'enregistre au moment où l'on quitte la page arrive quand
-            // même. Le navigateur refuse une telle requête au-delà de 64 Kio : une plus
-            // grosse — annuler l'effacement d'une journée aux longs commentaires — part
-            // comme les autres.
-            keepalive: new TextEncoder().encode(sent).length <= KEEPALIVE_LIMIT,
-        });
-        const json = await bodyOf(response);
-        if (response.status === 200) {
-            ticketsOf(json, onTickets);
-
-            return { status: 'saved', day: readDay(json) };
-        }
-        if (response.status === 409 && isRecord(json)) {
-            ticketsOf(json.day, onTickets);
-
-            return { status: 'stale', day: readDay(json.day) };
-        }
-        if (response.status === 422 && isRecord(json)) {
-            return { status: 'invalid', violations: readViolations(json.violations) };
-        }
-
-        throw new Error(`L'API a répondu ${String(response.status)} à ${method} ${target}.`);
+            target,
+            {
+                200: (json) => ({ status: 'saved', day: day(json) }),
+                409: (json) => ({ status: 'stale', day: dayIn(json) }),
+                422: refused,
+            },
+            { body, keepalive: true },
+        );
     }
 
     return {
-        async read(date) {
-            const response = await fetcher(url(date), { headers: { Accept: 'application/json' } });
-            if (response.status !== 200) {
-                throw new Error(`L'API a répondu ${String(response.status)} pour le ${date}.`);
-            }
-
-            const json = await bodyOf(response);
-            ticketsOf(json, onTickets);
-
-            return readDay(json);
-        },
+        read: (date) => server.read(url(date), day),
         changeSlots(date, version, changes: readonly SlotChange[]) {
             return write('PATCH', url(date, '/slots'), { version, changes });
         },
         setObjective(date, version, objective) {
             return write('PUT', url(date, '/objective'), { version, objective });
         },
-        async send(date, version): Promise<SendResult> {
+        send(date, version) {
             const target = url(date, '/send');
-            const response = await fetcher(target, {
-                method: 'POST',
-                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-                body: JSON.stringify({ version }),
-            });
-            const json = await bodyOf(response);
-            if (response.status === 200) {
-                ticketsOf(json, onTickets);
 
-                return { status: 'done', day: readDay(json) };
-            }
-            if (
-                response.status === 409 &&
-                isRecord(json) &&
-                (json.error === 'stale' || json.error === 'sending' || json.error === 'nothing')
-            ) {
-                ticketsOf(json.day, onTickets);
+            return server.request<SendResult>(
+                'POST',
+                target,
+                {
+                    200: (json) => ({ status: 'done', day: day(json) }),
+                    409: (json) => {
+                        const error = isRecord(json) ? json.error : undefined;
+                        if (error !== 'stale' && error !== 'sending' && error !== 'nothing') {
+                            throw new Error(`L'API a répondu 409 à POST ${target} sans dire pourquoi.`);
+                        }
 
-                return { status: json.error, day: readDay(json.day) };
-            }
-
-            throw new Error(`L'API a répondu ${String(response.status)} à POST ${target}.`);
+                        return { status: error, day: dayIn(json) };
+                    },
+                },
+                { body: { version } },
+            );
         },
     };
-}
-
-/** Le corps JSON d'une réponse, ou null s'il ne se lit pas. */
-export async function bodyOf(response: Response): Promise<unknown> {
-    try {
-        return await response.json();
-    } catch {
-        return null;
-    }
-}
-
-/** Les refus d'une saisie, champ par champ (src/EventListener/ApiErrorListener.php). */
-export function readViolations(json: unknown): Violation[] {
-    if (!Array.isArray(json)) {
-        throw new TypeError("L'API refuse le geste sans dire pourquoi.");
-    }
-
-    return json.map((violation: unknown) => {
-        if (!isRecord(violation) || typeof violation.field !== 'string' || typeof violation.message !== 'string') {
-            throw new TypeError("L'API refuse le geste sans dire pourquoi.");
-        }
-
-        return { field: violation.field, message: violation.message };
-    });
 }

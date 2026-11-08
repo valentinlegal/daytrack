@@ -1,9 +1,8 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { clearDay, weekday, writeDay } from './day';
+import { daysFrom, weekday, writeDay } from './day';
 import { doubleClickSlot, openSampleDay, ticketWindow } from './editing';
-import { expect, expectScreen, refusedWith, test, THEMES, VIEWPORTS } from './fixtures';
+import { expect, expectAccessible, expectScreen, OPEN_TOOLTIP, refusedWith, test, THEMES, VIEWPORTS } from './fixtures';
 import { SAMPLE_ACCOUNT, type JiraSetup, serveSampleConnection } from './jira';
 import { SCENARIOS } from './scenarios';
 import { pinFooter } from './settings';
@@ -31,9 +30,7 @@ const MISSING_SCOPE =
  * Le jour d'un parcours : `index` jours après le 1er avril 2024, à l'écart des autres
  * parcours (jira.spec.ts prend mars 2024, favorites.spec.ts juillet).
  */
-function day(index: number): string {
-    return new Date(Date.UTC(2024, 3, 1 + index)).toISOString().slice(0, 10);
-}
+const day = daysFrom('2024-04-01');
 
 /**
  * Le jour d'un écran qui montre une journée : un jour de semaine — un samedi serait fermé
@@ -230,15 +227,7 @@ test.describe('les écrans de Jira relié', () => {
                         if (viewport.width === 1440) {
                             // L'infobulle ouverte — « Copié » — se pose à la racine de la page,
                             // hors des repères, comme toute infobulle.
-                            const results = await new AxeBuilder({ page })
-                                .exclude('[data-radix-popper-content-wrapper]:has([role="tooltip"])')
-                                .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                                .analyze();
-                            expect(results.violations).toEqual([]);
-                        }
-
-                        if (screen.day === true) {
-                            await clearDay(request, date);
+                            await expectAccessible(page, { exclude: [OPEN_TOOLTIP] });
                         }
                     });
                 });

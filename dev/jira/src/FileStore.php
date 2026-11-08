@@ -53,6 +53,8 @@ final readonly class FileStore implements StateStore
             $state->writesByIssue = [];
             $state->remaining = [];
             $state->imageTags = State::IMAGE_TAGS;
+            $state->vanishing = [];
+            $state->vanished = [];
         });
     }
 }

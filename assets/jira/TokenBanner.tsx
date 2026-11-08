@@ -1,5 +1,5 @@
 import { AlertBanner } from '../components/AlertBanner';
-import type { JiraStatusSnapshot } from './jiraStatus';
+import { type JiraStatusSnapshot, TOKEN_EXPIRED } from './jiraStatus';
 
 /**
  * Le bandeau du jeton refusé : tout en haut de la fenêtre, sur toute sa largeur, tant que
@@ -18,17 +18,13 @@ export function TokenBanner({ status, onUpdate }: { status: JiraStatusSnapshot; 
     );
 }
 
-export function isTokenRefused({ state }: JiraStatusSnapshot): boolean {
-    return state === 'refused' || state === 'missing_scope';
-}
-
 /**
  * Ce que Jira reproche au jeton : « Jira refuse le jeton enregistré, il a sans doute
  * expiré. », ou ce qui lui manque, quand on le sait.
  */
 export function refusalSentence({ state, missingScopes }: JiraStatusSnapshot): string {
     if (state !== 'missing_scope') {
-        return 'Jira refuse le jeton enregistré, il a sans doute expiré.';
+        return TOKEN_EXPIRED;
     }
     const [last, ...others] = [...missingScopes].reverse();
     if (last === undefined) {

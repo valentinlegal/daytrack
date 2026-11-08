@@ -2,12 +2,13 @@ import { DropdownMenu } from 'radix-ui';
 import type { FocusEvent, KeyboardEvent } from 'react';
 
 import { Button } from '../components/Button';
+import { GeneralError } from '../components/Field';
 import { ChevronDownIcon } from '../components/icons';
 import { tokenPixels } from '../components/tokenPixels';
 import { Unread } from './DaySection';
 import type { IssueTypeSetting } from './settingsApi';
 import type { EditorSnapshot, SettingsEditor } from './settingsEditor';
-import { SettingsCard, SettingsError, SettingsRow, SettingsSection } from './SettingsSection';
+import { SettingsCard, SettingsRow, SettingsSection } from './SettingsSection';
 import { isTint, type Tint, TINT_NAMES, TINTS } from './tints';
 
 /** Combien de teintes par ligne dans la grille : les flèches haut et bas sautent d'une ligne. */
@@ -54,7 +55,9 @@ export function TypesSection({ editor, snapshot }: { editor: SettingsEditor; sna
                         </SettingsRow>
                     ))
                 )}
-                {snapshot.errors.types !== undefined && <SettingsError message={snapshot.errors.types} />}
+                {snapshot.errors.types !== undefined && (
+                    <GeneralError message={snapshot.errors.types} className="pb-4" />
+                )}
             </SettingsCard>
         </SettingsSection>
     );

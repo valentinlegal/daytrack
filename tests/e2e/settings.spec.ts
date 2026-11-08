@@ -1,9 +1,8 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 
-import { clearDay, writeDay } from './day';
+import { daysFrom, writeDay } from './day';
 import { dragSlots, openSampleDay, slotPoint, ticketWindow } from './editing';
-import { expect, test } from './fixtures';
+import { expect, expectAccessible, test } from './fixtures';
 import { SAMPLE_SETTINGS } from './settings';
 
 /**
@@ -17,11 +16,7 @@ import { SAMPLE_SETTINGS } from './settings';
  */
 
 /** Le jour d'un parcours : `index` jours après le 2 septembre 2024, que les autres parcours ne prennent pas. */
-function day(index: number): string {
-    return new Date(Date.UTC(2024, 8, 2 + index)).toISOString().slice(0, 10);
-}
-
-const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
+const day = daysFrom('2024-09-02');
 
 const SUPPORT = SAMPLE_SETTINGS.issueTypes[4]?.id ?? '';
 
@@ -74,8 +69,7 @@ test.describe('les réglages de la journée', () => {
         ]);
         await expect(page.getByRole('radio', { name: 'Système', exact: true })).toHaveAttribute('aria-checked', 'true');
 
-        const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
-        expect(results.violations).toEqual([]);
+        await expectAccessible(page);
     });
 
     test('enregistrent l’objectif habituel à chaque − et +, sans sortir de 0h00 à 13h00', async ({
@@ -420,8 +414,6 @@ test.describe('les teintes des types', () => {
         await ticketWindow(page).getByLabel('Ticket').fill('SHOP-498');
         await expect(ticketWindow(page).locator('.ticket-preview')).toHaveAttribute('data-color', 'vert');
         await page.keyboard.press('Escape');
-
-        await clearDay(request, date);
     });
 });
 
@@ -531,7 +523,6 @@ test.describe('l’objectif habituel dans la journée', () => {
         await page.getByRole('button', { name: /^Objectif du jour, / }).click();
 
         await expect(page.getByRole('button', { name: 'Revenir à 6h45' })).toBeVisible();
-        await clearDay(request, date);
     });
 });
 

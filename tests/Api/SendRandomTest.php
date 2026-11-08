@@ -18,6 +18,10 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
  * heure de collègue touchée. Et une saisie qui survit d'un envoi à l'autre garde son
  * identifiant dans Jira : renvoyer ne laisse pas de traces.
  *
+ * Seule exception, un ticket que Jira ne montre plus après qu'on y a écrit (DISPARU) :
+ * ses heures y restent, que DayTrack ne voit ni ne peut retirer. Une journée qui se dit
+ * envoyée n'en garde alors que si l'écran l'a dit, à l'envoi qui l'a trouvé introuvable.
+ *
  * Chaque passage tire une graine neuve ; RANDOM_SEED en rejoue une.
  */
 final class SendRandomTest extends WebTestCase
@@ -45,6 +49,8 @@ final class SendRandomTest extends WebTestCase
         ['work', 'MOITIE-1', null],
         ['work', 'MUET-1', null],
         ['work', 'SOURD-1', null],
+        // Un par suite : Jira ne le montre plus dès qu'il a relu ses heures.
+        ['work', 'DISPARU-%d', null],
         ['pause', null, null],
         ['empty', null, null],
     ];
@@ -53,16 +59,30 @@ final class SendRandomTest extends WebTestCase
     {
         $random = $this->randomizer();
         $this->linkJira();
+        /** @var int $vanishedSeen les tickets introuvables que les envois ont signalés */
+        $vanishedSeen = 0;
 
         for ($sequence = 0; $sequence < self::SEQUENCES; ++$sequence) {
             $date = \sprintf('2026-09-%02d', $sequence + 1);
             $day = $this->day($date);
             /** @var array<string, string> $ids l'identifiant Jira de chaque saisie au dernier envoi abouti */
             $ids = [];
+            /** @var array<string, true> $reported les tickets introuvables que l'écran a signalés */
+            $reported = [];
+            // La première suite s'ouvre sur le cas que chaque passage doit atteindre : un ticket
+            // que Jira ne montre plus une fois relu, retiré de la journée, puis l'envoi. Le
+            // hasard seul le manque une fois sur trente.
+            $prelude = 0 === $sequence ? [
+                ['start' => '09:00', 'end' => '09:30', 'kind' => 'work', 'ticket' => 'DISPARU-1', 'comment' => null],
+                'send',
+                ['start' => '09:00', 'end' => '09:30', 'kind' => 'empty'],
+                'send',
+            ] : [];
 
             for ($step = 0; $step < self::STEPS; ++$step) {
-                if (0 === $random->getInt(0, 3)) {
-                    $down = 0 === $random->getInt(0, 4);
+                $scripted = $prelude[$step] ?? null;
+                if ('send' === $scripted || (null === $scripted && 0 === $random->getInt(0, 3))) {
+                    $down = null === $scripted && 0 === $random->getInt(0, 4);
                     if ($down) {
                         $this->simulate('panne', ['panne' => true]);
                     }
@@ -75,12 +95,17 @@ final class SendRandomTest extends WebTestCase
                     if (409 === $status) {
                         self::assertSame('nothing', $sent['error'] ?? null);
                         $day = self::arrayAt($sent, 'day');
-                        $this->assertSentMeansInJira($day, $date, $ids);
+                        $this->assertSentMeansInJira($day, $date, $ids, $reported);
                         continue;
                     }
 
                     self::assertSame(200, $status, (string) json_encode($sent));
                     $day = $sent;
+                    foreach (self::arrayAt($day, 'send', 'vanished') as $ticket) {
+                        self::assertIsString($ticket);
+                        $reported[$ticket] = true;
+                        ++$vanishedSeen;
+                    }
 
                     // Jira muet n'écrit rien : après un essai qui a pu écrire, il n'est pas vide pour autant.
                     if ($down) {
@@ -90,10 +115,10 @@ final class SendRandomTest extends WebTestCase
                     // eu dans Jira arrive en entier.
                     foreach (self::arrayAt($day, 'send', 'outcomes') as $ticket => $failure) {
                         if (null !== $failure && !$down) {
-                            self::assertContains($ticket, ['FERME-1', 'MOITIE-1', 'MUET-1', 'SOURD-1'], (string) json_encode(self::at($day, 'send')));
+                            self::assertContains($ticket, ['FERME-1', 'MOITIE-1', 'MUET-1', 'SOURD-1', \sprintf('DISPARU-%d', $sequence + 1)], (string) json_encode(self::at($day, 'send')));
                         }
                     }
-                    $this->assertSentMeansInJira($day, $date, $ids);
+                    $this->assertSentMeansInJira($day, $date, $ids, $reported);
                     if (!$down) {
                         $this->assertInJiraIsWhatJiraHolds($day, $date);
                     }
@@ -101,21 +126,26 @@ final class SendRandomTest extends WebTestCase
                     continue;
                 }
 
-                $start = $random->getInt(0, self::QUARTERS - 1);
-                $end = $random->getInt($start + 1, self::QUARTERS);
-                [$kind, $ticket, $comment] = self::CONTENTS[$random->getInt(0, \count(self::CONTENTS) - 1)];
-                $change = ['start' => Quarter::format(self::FIRST + 15 * $start), 'end' => Quarter::format(self::FIRST + 15 * $end), 'kind' => $kind];
-                if ('work' === $kind) {
-                    $change += ['ticket' => $ticket, 'comment' => $comment];
+                if (\is_array($scripted)) {
+                    $change = $scripted;
+                } else {
+                    $start = $random->getInt(0, self::QUARTERS - 1);
+                    $end = $random->getInt($start + 1, self::QUARTERS);
+                    [$kind, $ticket, $comment] = self::CONTENTS[$random->getInt(0, \count(self::CONTENTS) - 1)];
+                    $change = ['start' => Quarter::format(self::FIRST + 15 * $start), 'end' => Quarter::format(self::FIRST + 15 * $end), 'kind' => $kind];
+                    if ('work' === $kind) {
+                        $change += ['ticket' => \sprintf((string) $ticket, $sequence + 1), 'comment' => $comment];
+                    }
                 }
 
                 [$status, $written] = $this->patchSlots(self::intAt($day, 'version'), [$change], $date);
                 self::assertSame(200, $status, (string) json_encode($written));
                 $day = $written;
-                $this->assertSentMeansInJira($day, $date, $ids);
+                $this->assertSentMeansInJira($day, $date, $ids, $reported);
             }
         }
 
+        self::assertGreaterThan(0, $vanishedSeen, 'La suite a atteint un ticket que Jira ne trouve plus.');
         $colleague = array_filter(self::listAt($this->jiraState(), 'worklogs'), static fn (array $worklog): bool => Catalog::COLLEAGUE_ID === $worklog['authorId']);
         self::assertNotEmpty($colleague);
         self::assertSame([], array_filter(self::listAt($this->jiraState(), 'journal'), static fn (array $entry): bool => isset($entry['alerte'])), 'Aucune heure de collègue n\'a été touchée.');
@@ -142,15 +172,35 @@ final class SendRandomTest extends WebTestCase
     /**
      * Une journée qui se dit envoyée est, à la seconde près, ce que Jira a : à chaque pas,
      * après un geste comme après un envoi. Une saisie qui survit d'un envoi complet au
-     * suivant garde son identifiant, à moins qu'un essai entre les deux l'ait retirée.
+     * suivant garde son identifiant, à moins qu'un essai entre les deux l'ait retirée, ou
+     * l'envoi de la journée vidée.
+     *
+     * Les heures d'un ticket que Jira ne montre plus, et que la journée a quitté, ne
+     * comptent pas : elles ne se voient ni ne se retirent. Une journée envoyée, ou sans
+     * rien à envoyer, n'en garde que si l'écran l'a dit. Encore dans la journée, il compte :
+     * ses heures sont celles qu'elle a envoyées avant qu'il disparaisse.
      *
      * @param array<mixed>          $day
-     * @param array<string, string> $ids l'identifiant Jira de chaque saisie au dernier envoi complet
+     * @param array<string, string> $ids      l'identifiant Jira de chaque saisie au dernier envoi complet
+     * @param array<string, true>   $reported les tickets introuvables que l'écran a signalés
      */
-    private function assertSentMeansInJira(array $day, string $date, array &$ids): void
+    private function assertSentMeansInJira(array $day, string $date, array &$ids, array $reported): void
     {
         $state = self::at($day, 'send', 'state');
         if (\in_array($state, ['partial', 'unverified', 'failed'], true)) {
+            $ids = [];
+        }
+        $left = array_values(array_diff($this->hidden(), self::ticketsOf($day)));
+        // Rien à envoyer : DayTrack n'a rien laissé dans Jira ce jour-là. Une journée vidée
+        // puis envoyée y a retiré ses saisies ; remises ensuite, elles y reviennent sous un
+        // nouvel identifiant, et c'est voulu.
+        if ('nothing' === $state || 'sent' === $state) {
+            foreach ($this->hiddenWorklogs($date, $left) as $ticket) {
+                self::assertArrayHasKey($ticket, $reported, 'Jira garde des heures de '.$ticket.', qu\'il ne montre plus, sans que l\'écran l\'ait dit.');
+            }
+        }
+        if ('nothing' === $state) {
+            self::assertSame([], $this->myWorklogs($date, $left), 'Une journée sans rien à envoyer n\'a rien laissé dans Jira.');
             $ids = [];
         }
         if ('sent' !== $state) {
@@ -158,7 +208,7 @@ final class SendRandomTest extends WebTestCase
         }
 
         $expected = self::worklogsOf($day, $date);
-        $actual = $this->myWorklogs($date);
+        $actual = $this->myWorklogs($date, $left);
         self::assertSame(array_keys($expected), array_keys($actual), 'Une journée dite envoyée a exactement ses saisies dans Jira.');
         foreach ($expected as $key => $worklog) {
             self::assertSame($worklog, $actual[$key]['worklog'], $key);
@@ -200,13 +250,17 @@ final class SendRandomTest extends WebTestCase
     }
 
     /**
+     * Les saisies de l'utilisateur ce jour-là, hors celles des tickets $left.
+     *
+     * @param list<string> $left
+     *
      * @return array<string, array{id: string, worklog: string}>
      */
-    private function myWorklogs(string $date): array
+    private function myWorklogs(string $date, array $left = []): array
     {
         $found = [];
         foreach (self::listAt($this->jiraState(), 'worklogs') as $worklog) {
-            if (Catalog::ACCOUNT_ID !== $worklog['authorId'] || !str_starts_with(self::stringAt($worklog, 'started'), $date)) {
+            if (Catalog::ACCOUNT_ID !== $worklog['authorId'] || !str_starts_with(self::stringAt($worklog, 'started'), $date) || \in_array($worklog['issueKey'], $left, true)) {
                 continue;
             }
             $key = self::stringAt($worklog, 'issueKey').' « '.(JiraWorklog::textOf($worklog['comment']) ?? '').' »';
@@ -216,5 +270,54 @@ final class SendRandomTest extends WebTestCase
         ksort($found);
 
         return $found;
+    }
+
+    /**
+     * Ceux des tickets $left où l'utilisateur a encore des heures ce jour-là.
+     *
+     * @param list<string> $left
+     *
+     * @return list<string>
+     */
+    private function hiddenWorklogs(string $date, array $left): array
+    {
+        $tickets = [];
+        foreach (self::listAt($this->jiraState(), 'worklogs') as $worklog) {
+            $ticket = self::stringAt($worklog, 'issueKey');
+            if (Catalog::ACCOUNT_ID === $worklog['authorId'] && str_starts_with(self::stringAt($worklog, 'started'), $date) && \in_array($ticket, $left, true)) {
+                $tickets[$ticket] = $ticket;
+            }
+        }
+
+        return array_values($tickets);
+    }
+
+    /**
+     * Les tickets que Jira ne montre plus.
+     *
+     * @return list<string>
+     */
+    private function hidden(): array
+    {
+        return array_map('strval', array_keys(self::arrayAt($this->jiraState(), 'disparus')));
+    }
+
+    /**
+     * Les tickets de la journée.
+     *
+     * @param array<mixed> $day
+     *
+     * @return list<string>
+     */
+    private static function ticketsOf(array $day): array
+    {
+        $tickets = [];
+        foreach (self::listAt($day, 'blocks') as $block) {
+            if ('work' === $block['kind']) {
+                $tickets[] = self::stringAt($block, 'ticket');
+            }
+        }
+
+        return array_values(array_unique($tickets));
     }
 }

@@ -7,6 +7,13 @@ framework:
     # Pas de compte, donc pas de session : rien à retenir d'une requête à l'autre.
     session: false
 
+    # Un objet reste un objet même vide : « (object) [] » part en {}, pas en []. Le
+    # navigateur y cherche une clé — un ticket, un jour —, et un tableau vide n'en a pas.
+    # Seuls les objets sont concernés : une liste vide reste [].
+    serializer:
+        default_context:
+            preserve_empty_objects: true
+
     # Derrière un proxy qui porte le HTTPS et le nom de domaine, Symfony doit croire
     # ce qu'il lui transmet : le schéma, l'hôte, le port et l'adresse d'origine. Il
     # ne croit que les adresses de TRUSTED_PROXIES, vide par défaut — personne.

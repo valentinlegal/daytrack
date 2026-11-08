@@ -1,8 +1,7 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page } from '@playwright/test';
 
-import { clearDay, startTimeAt, weekday, writeDay } from './day';
-import { expect, expectScreen, serveFavorites, test, THEMES, VIEWPORTS } from './fixtures';
+import { clearDay, startTimeAt, weekdaysFrom, writeDay } from './day';
+import { expect, expectAccessible, expectScreen, serveFavorites, test, THEMES, VIEWPORTS } from './fixtures';
 import { SCENARIOS } from './scenarios';
 
 /**
@@ -21,9 +20,7 @@ const RENAMED: Readonly<Record<string, string>> = { 'SHOP-501': MEDIUM, 'OPS-12'
 
 const ENTRIES = SCENARIOS.find((scenario) => scenario.name === 'en-cours')?.entries ?? [];
 
-function day(index: number): string {
-    return weekday('2022-03-07', index);
-}
+const workday = weekdaysFrom('2022-03-07');
 
 async function openLongIds(page: Page, date: string): Promise<void> {
     await serveFavorites(page, [
@@ -69,7 +66,7 @@ async function expectIdInside(page: Page, ticket: string): Promise<void> {
 
 test.describe('un identifiant long', () => {
     test('reste visible dans un bloc d’une ligne', async ({ page, request }) => {
-        const date = day(26);
+        const date = workday(26);
         await writeDay(request, date, ENTRIES);
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`/${date}`);
@@ -78,15 +75,14 @@ test.describe('un identifiant long', () => {
         await expectIdInside(page, 'OPS-12');
         await clearDay(request, date);
 
-        const longDate = day(27);
+        const longDate = workday(27);
         await writeDay(request, longDate, ENTRIES);
         await openLongIds(page, longDate);
         await expectIdInside(page, LONG);
-        await clearDay(request, longDate);
     });
 
     test('élargit la colonne de tous les blocs, jusqu’à deux fois --w-id', async ({ page, request }) => {
-        const date = day(0);
+        const date = workday(0);
         await writeDay(request, date, ENTRIES);
         await page.setViewportSize({ width: 1440, height: 900 });
         await openLongIds(page, date);
@@ -96,22 +92,20 @@ test.describe('un identifiant long', () => {
             .evaluateAll((columns) => columns.map((column) => column.getBoundingClientRect().width));
         expect(new Set(widths).size).toBe(1);
         expect(widths[0]).toBe(160);
-        await clearDay(request, date);
     });
 
     test('garde la colonne à --w-id quand aucun ne le demande', async ({ page, request }) => {
-        const date = day(1);
+        const date = workday(1);
         await writeDay(request, date, ENTRIES);
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`/${date}`);
         await expect(page.getByRole('group', { name: 'Chiffres du jour' })).toBeVisible();
 
         expect((await idColumn(page, 'SHOP-482').boundingBox())?.width).toBe(80);
-        await clearDay(request, date);
     });
 
     test('coupe la clé et garde le numéro entier, sans mordre sur le titre', async ({ page, request }) => {
-        const date = day(2);
+        const date = workday(2);
         await writeDay(request, date, ENTRIES);
         await page.setViewportSize({ width: 1440, height: 900 });
         await openLongIds(page, date);
@@ -125,14 +119,57 @@ test.describe('un identifiant long', () => {
         expect((shown?.x ?? 0) + (shown?.width ?? 0)).toBeLessThanOrEqual((column?.x ?? 0) + (column?.width ?? 0));
         // Entier pour le lecteur d'écran.
         await expect(block(page, LONG)).toContainText(LONG);
-        await clearDay(request, date);
+    });
+
+    test('se lit en entier et d’un seul tenant au lecteur d’écran, même coupé', async ({ page, request }) => {
+        const date = workday(4);
+        await writeDay(request, date, ENTRIES);
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await openLongIds(page, date);
+
+        // Coupé, l'identifiant s'affiche en deux morceaux, que Chromium exposait comme deux
+        // textes : « MIGRATIONDESDONNEESDELANCIENCRM », puis « -12345 », lu comme un nombre négatif.
+        const favorites = page.getByRole('list', { name: 'Favoris' });
+        await expect(favorites.getByRole('button', { name: LONG, exact: true })).toBeVisible();
+
+        const recap = page.getByRole('complementary', { name: 'Récapitulatif' });
+        const card = recap.getByRole('listitem').filter({ hasText: LONG }).first();
+        expect(await card.ariaSnapshot()).toContain(`${LONG} ,`);
+        // Le texte lu par le lecteur d'écran ne se copie pas : la pastille copiée ne donne
+        // l'identifiant qu'une fois.
+        const copied = await card
+            .locator('.font-mono')
+            .first()
+            .evaluate((chip) => {
+                const range = document.createRange();
+                range.selectNodeContents(chip);
+                const selection = document.getSelection();
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+                const text = selection?.toString() ?? '';
+                selection?.removeAllRanges();
+
+                return text;
+            });
+        expect(copied.split('-12345')).toHaveLength(2);
+
+        // Le bloc de la grille le lit une seule fois.
+        const blockText = await block(page, LONG).ariaSnapshot();
+        expect(blockText.split(LONG)).toHaveLength(2);
+
+        await page.getByRole('button', { name: /^Envoyer sur Jira/ }).click();
+        const window = page.getByRole('dialog', { name: 'Envoyer sur Jira' });
+        const line = window.getByRole('listitem').filter({ hasText: LONG });
+        expect(await line.ariaSnapshot()).toContain(`${LONG} 0h45`);
+        await page.keyboard.press('Escape');
+        await expect(window).toHaveCount(0);
     });
 
     test('dans le récapitulatif, garde la durée dans le panneau et donne l’infobulle de l’identifiant', async ({
         page,
         request,
     }) => {
-        const date = day(3);
+        const date = workday(3);
         await writeDay(request, date, ENTRIES);
         await page.setViewportSize({ width: 1440, height: 900 });
         await openLongIds(page, date);
@@ -154,7 +191,6 @@ test.describe('un identifiant long', () => {
         await recap.getByRole('listitem').filter({ hasText: MEDIUM }).getByText(MEDIUM, { exact: true }).hover();
         await page.waitForTimeout(600);
         await expect(page.getByRole('tooltip')).toHaveCount(0);
-        await clearDay(request, date);
     });
 });
 
@@ -165,7 +201,7 @@ test.describe('l’écran identifiant-long', () => {
                 page,
                 request,
             }, testInfo) => {
-                const date = day(6 + v * 2 + t);
+                const date = workday(6 + v * 2 + t);
                 await writeDay(request, date, ENTRIES);
                 await page.setViewportSize(viewport);
                 await page.emulateMedia({ colorScheme: scheme });
@@ -174,12 +210,8 @@ test.describe('l’écran identifiant-long', () => {
                 await expectScreen(page, testInfo, `identifiant-long-${String(viewport.width)}-${name}.png`);
 
                 if (viewport.width === 1440) {
-                    const results = await new AxeBuilder({ page })
-                        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                        .analyze();
-                    expect(results.violations).toEqual([]);
+                    await expectAccessible(page);
                 }
-                await clearDay(request, date);
             });
         });
     });

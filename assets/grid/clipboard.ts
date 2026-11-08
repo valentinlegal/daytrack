@@ -28,18 +28,22 @@ export type Paste =
     /** Rien n'est sélectionné. */
     | { readonly kind: 'nothing' };
 
-/** Copier la sélection ; null quand elle est vide. */
+/**
+ * Copier la sélection ; null quand elle est vide, ou qu'elle ne couvre que des créneaux
+ * vides : une plage vide ne se copie pas, et le presse-papier garde ce qu'il tenait.
+ */
 export function copy(grid: Grid, selection: Selection): Clipboard | null {
     const first = selection.quarters.at(0);
+    if (first === undefined || selection.quarters.every((quarter) => grid.at(quarter) === null)) {
+        return null;
+    }
 
-    return first === undefined
-        ? null
-        : {
-              cells: selection.quarters.map((quarter) => ({
-                  offset: (quarter - first) / Quarter.MINUTES,
-                  content: grid.at(quarter),
-              })),
-          };
+    return {
+        cells: selection.quarters.map((quarter) => ({
+            offset: (quarter - first) / Quarter.MINUTES,
+            content: grid.at(quarter),
+        })),
+    };
 }
 
 /** Un seul ticket à coller : ce que copie un clic sur un favori. */

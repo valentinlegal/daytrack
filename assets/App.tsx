@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
+import {
+    type Address,
+    currentAddress,
+    dayAddress,
+    followArrow,
+    refuseArrow,
+    SETTINGS,
+    showAddress,
+    useBrowserArrows,
+    WELCOME,
+} from './address';
 import { TooltipProvider } from './components/Tooltip';
-import { isDate } from './day/calendar';
 import { httpCalendarApi } from './day/calendarApi';
 import { httpDayApi } from './day/dayApi';
 import { type DayConfig, DayScreen } from './day/DayScreen';
@@ -10,11 +20,11 @@ import { FavoriteList } from './favorites/favoriteList';
 import { httpFavoritesApi } from './favorites/favoritesApi';
 import { tabStorage } from './grid/tabStore';
 import { httpJiraApi } from './jira/jiraApi';
-import { JiraStatus, type JiraStatusSnapshot } from './jira/jiraStatus';
+import { isTokenRefusal, JiraStatus, type JiraStatusSnapshot } from './jira/jiraStatus';
 import { TicketBook } from './jira/ticketBook';
 import type { TicketInfo } from './jira/ticketInfo';
 import { TicketsProvider } from './jira/TicketsContext';
-import { isTokenRefused, TokenBanner } from './jira/TokenBanner';
+import { TokenBanner } from './jira/TokenBanner';
 import { WelcomeScreen } from './jira/WelcomeScreen';
 import { httpSettingsApi } from './settings/settingsApi';
 import { SettingsScreen } from './settings/SettingsScreen';
@@ -32,9 +42,6 @@ export interface AppConfig {
     readonly oldCompose: OldCompose | null;
     readonly v1LeftOut: V1LeftOut;
 }
-
-/** L'adresse de la bienvenue, tant que Jira n'est pas relié. */
-const WELCOME_PATH = '/bienvenue';
 
 type Screen =
     | { readonly name: 'day'; readonly date: string }
@@ -80,11 +87,11 @@ export function App({ config }: { config: AppConfig }) {
     // Relié, on retrouve le jour qu'elle disait, sans rien ajouter à l'historique.
     const welcoming = jira.state === 'unlinked';
     useEffect(() => {
-        const path = window.location.pathname;
-        if (welcoming && path !== WELCOME_PATH) {
-            window.history.replaceState(null, '', WELCOME_PATH);
-        } else if (!welcoming && path === WELCOME_PATH) {
-            window.history.replaceState(null, '', `/${config.day.date}`);
+        const here = currentAddress().screen;
+        if (welcoming && here !== 'welcome') {
+            showAddress(WELCOME, 'replace');
+        } else if (!welcoming && here === 'welcome') {
+            showAddress(dayAddress(config.day.date), 'replace');
         }
     }, [welcoming, config.day.date]);
 
@@ -93,6 +100,8 @@ export function App({ config }: { config: AppConfig }) {
     const [sendingDay, setSendingDay] = useState(false);
     // Ce qui enregistre les fenêtres ouvertes de la journée avant de la quitter.
     const leaveDayRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
+    // Ce que la journée fait des flèches du navigateur, tant qu'elle est affichée.
+    const dayArrowsRef = useRef<((address: Address) => void) | null>(null);
     // Ce qui enregistre les réglages avant de revenir à la journée par la flèche du navigateur.
     const leaveSettingsRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
 
@@ -105,58 +114,61 @@ export function App({ config }: { config: AppConfig }) {
         }
     }, [status, checkOnOpen]);
 
+    /** Les réglages s'ouvrent sur le jour qu'on quitte, où les ramène « Retour à la journée ». */
+    const showSettings = (back: string, token: boolean) => {
+        memory.setSettingsBack(back);
+        setScreen({ name: 'settings', back, token });
+    };
+
     /**
-     * Les réglages s'ouvrent sur le jour affiché, que l'adresse dit toujours. Les
-     * fenêtres ouvertes s'enregistrent d'abord, comme avant de changer de jour : refusée,
-     * une fenêtre reste ouverte avec son message, et la journée aussi.
+     * Le bouton Réglages, ou « Mettre à jour le jeton » : les réglages s'ouvrent sur le jour
+     * affiché, que l'adresse dit toujours. Les fenêtres ouvertes s'enregistrent d'abord,
+     * comme avant de changer de jour : refusée, une fenêtre reste ouverte avec son message,
+     * et la journée aussi. La flèche du navigateur fait de même (useDayNavigation).
      */
     const openSettings = (token: boolean) => {
         void leaveDayRef.current().then((left) => {
             if (!left) {
                 return;
             }
-            const path = window.location.pathname.slice(1);
-            const back = isDate(path) ? path : config.day.date;
-            memory.setSettingsBack(back);
-            window.history.pushState(null, '', '/reglages');
-            setScreen({ name: 'settings', back, token });
+            const here = currentAddress();
+            showAddress(SETTINGS);
+            showSettings(here.screen === 'day' ? here.date : config.day.date, token);
         });
     };
 
     const backToDay = (date: string) => {
-        window.history.pushState(null, '', `/${date}`);
+        showAddress(dayAddress(date));
         setScreen({ name: 'day', date });
     };
 
-    // La flèche du navigateur vers un jour, depuis les réglages : la journée se lit une
-    // fois les réglages enregistrés, pour qu'un jour vide montre le nouvel objectif. Vers
-    // les réglages, depuis la journée, c'est la journée qui recharge la page (DayScreen).
-    const onPopState = useEffectEvent(() => {
-        const path = window.location.pathname.slice(1);
-        if (screen.name === 'settings' && isDate(path)) {
-            void leaveSettingsRef.current().then((left) => {
-                // Revenu entre-temps aux réglages, par la flèche « Suivant » : on y reste.
-                if (window.location.pathname.slice(1) !== path) {
-                    return;
-                }
-                if (left) {
-                    setScreen({ name: 'day', date: path });
-                } else {
-                    window.history.pushState(null, '', '/reglages');
-                }
-            });
-        }
-    });
-    useEffect(() => {
-        const listener = () => {
-            onPopState();
-        };
-        window.addEventListener('popstate', listener);
+    // Les flèches du navigateur. Vers un jour, depuis les réglages : la journée se lit une
+    // fois les réglages enregistrés, pour qu'un jour vide montre le nouvel objectif ;
+    // refusés, ils restent, et l'historique reste tel qu'il était. Depuis la journée, c'est
+    // elle qui décide (useDayNavigation).
+    useBrowserArrows((address) => {
+        if (screen.name !== 'settings') {
+            dayArrowsRef.current?.(address);
 
-        return () => {
-            window.removeEventListener('popstate', listener);
-        };
-    }, []);
+            return;
+        }
+        if (address.screen !== 'day') {
+            return;
+        }
+        void leaveSettingsRef.current().then((left) => {
+            // Revenu entre-temps aux réglages, par la flèche « Suivant » : on y reste.
+            const here = currentAddress();
+            if (here.screen !== 'day' || here.date !== address.date) {
+                return;
+            }
+            if (left) {
+                followArrow();
+                setScreen({ name: 'day', date: address.date });
+            } else {
+                refuseArrow(SETTINGS);
+            }
+        });
+    });
 
     return (
         <TooltipProvider>
@@ -192,7 +204,7 @@ export function App({ config }: { config: AppConfig }) {
                         <div inert={sendingDay} className="contents">
                             {/* Un seul bandeau à la fois. L'ancien fichier passe en dernier : il reste
                                 tant que le fichier n'est pas remplacé, et cacherait la liste pour toujours. */}
-                            {isTokenRefused(jira) ? (
+                            {isTokenRefusal(jira.state) ? (
                                 <TokenBanner
                                     status={jira}
                                     onUpdate={() => {
@@ -219,9 +231,14 @@ export function App({ config }: { config: AppConfig }) {
                                 storage={storage}
                                 favorites={favorites}
                                 leaveRef={leaveDayRef}
+                                arrowsRef={dayArrowsRef}
                                 readHabitual={readHabitual}
                                 onSettings={() => {
                                     openSettings(false);
+                                }}
+                                onSettingsArrow={(back) => {
+                                    followArrow();
+                                    showSettings(back, false);
                                 }}
                                 onUpdateToken={() => {
                                     openSettings(true);

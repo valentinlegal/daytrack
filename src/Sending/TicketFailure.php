@@ -2,6 +2,8 @@
 
 namespace App\Sending;
 
+use App\Jira\JiraFailure;
+
 /**
  * Pourquoi un ticket n'est pas arrivé dans Jira tel que la journée le dit : ce que la
  * fenêtre du résultat écrit sous lui.
@@ -26,6 +28,16 @@ enum TicketFailure: string
     case Unanswered = 'unanswered';
     /** Jira a refusé le jeton avant que ses écritures partent. */
     case TokenRefused = 'token_refused';
+
+    /** Ce que l'échec d'un appel à Jira dit d'un ticket : la seule traduction de l'un en l'autre. */
+    public static function fromJira(JiraFailure $failure): self
+    {
+        return match ($failure) {
+            JiraFailure::Refused, JiraFailure::MissingScope => self::TokenRefused,
+            JiraFailure::NotFound => self::NotFound,
+            JiraFailure::Unreachable => self::Unreachable,
+        };
+    }
 
     /** Ses heures sont peut-être dans Jira, sans qu'on ait pu le vérifier. */
     public function isUnverified(): bool

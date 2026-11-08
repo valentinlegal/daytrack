@@ -2,6 +2,8 @@
 
 namespace App\Repository;
 
+use App\Database\Lockable;
+use App\Database\LocksItsTable;
 use App\Entity\Day;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\ParameterType;
@@ -11,8 +13,10 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * @extends ServiceEntityRepository<Day>
  */
-final class DayRepository extends ServiceEntityRepository
+final class DayRepository extends ServiceEntityRepository implements Lockable
 {
+    use LocksItsTable;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, Day::class);

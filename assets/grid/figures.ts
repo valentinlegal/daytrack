@@ -49,7 +49,7 @@ export function dayFigures(grid: Grid, objective: number, now: number | null): D
  * À minuit ou après, il n'y a plus de fin prévue, « Reste » suffit.
  */
 function projectedEnd(grid: Grid, objective: number, now: number): number | null {
-    let quarter = Math.max(now - (now % Quarter.MINUTES), Quarter.FIRST);
+    let quarter = Math.max(Quarter.floor(now), Quarter.FIRST);
     let toWork = objective - grid.workedBefore(quarter);
 
     // Les pauses ne vivent que sur la grille : passé 20:00, chaque quart d'heure

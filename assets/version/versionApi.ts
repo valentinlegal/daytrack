@@ -1,4 +1,5 @@
 import { isRecord } from '../grid/json';
+import { serverApi } from '../serverApi';
 
 /** La version à installer, que le serveur lit dans le registre (src/Controller/Api/VersionController.php). */
 export interface VersionApi {
@@ -6,16 +7,11 @@ export interface VersionApi {
     available(): Promise<string | null>;
 }
 
-export function httpVersionApi(fetcher: typeof fetch = (input, init) => fetch(input, init)): VersionApi {
-    return {
-        async available() {
-            const response = await fetcher('/api/version', { headers: { Accept: 'application/json' } });
-            if (response.status !== 200) {
-                throw new Error(`L'API a répondu ${String(response.status)} pour la version.`);
-            }
+export function httpVersionApi(fetcher?: typeof fetch): VersionApi {
+    const server = serverApi(fetcher);
 
-            return readAvailable(await response.json());
-        },
+    return {
+        available: () => server.read('/api/version', readAvailable),
     };
 }
 

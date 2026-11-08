@@ -16,7 +16,16 @@ const day = {
         { start: '12:30', end: '13:30', kind: 'pause', ticket: null, comment: null },
     ],
     figures: { worked: 120, remaining: 330, balance: -330, projectedEnd: '17:00' },
-    send: { state: 'nothing', sentAt: null, attemptedAt: null, failure: null, inJira: {}, outcomes: {}, removed: [] },
+    send: {
+        state: 'nothing',
+        sentAt: null,
+        attemptedAt: null,
+        failure: null,
+        inJira: {},
+        outcomes: {},
+        removed: [],
+        vanished: [],
+    },
 };
 
 describe('readDay', () => {

@@ -1,7 +1,7 @@
 import { type RefObject, useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/Button';
-import { ErrorIcon } from '../components/icons';
+import { GeneralError } from '../components/Field';
 import { type Measurable, Popover } from '../components/Popover';
 import { Stepper } from '../components/Stepper';
 import { tokenPixels } from '../components/tokenPixels';
@@ -135,6 +135,20 @@ function ObjectiveForm({
     useEffect(() => {
         sessionRef.current = session;
     }, [session]);
+    // L'objectif relu sous la fenêtre ouverte — au retour sur la page — a changé ailleurs.
+    // Sans rien de tapé, elle montre le nouveau ; sinon, elle garde ce qu'on y a tapé. Elle
+    // dit que la journée a changé : l'enregistrer n'écrase jamais en silence ce qu'un autre
+    // onglet a choisi. Pendant qu'elle s'enregistre, c'est sa réponse qui en décide.
+    const [shownObjective, setShownObjective] = useState(day.objective);
+    if (shownObjective !== day.objective) {
+        setShownObjective(day.objective);
+        if (!sending) {
+            if (text === duration(shownObjective)) {
+                setText(duration(day.objective));
+            }
+            setGeneral(windowRefusal({ kind: 'stale' }));
+        }
+    }
 
     const reading = readObjective(text);
     const draft = reading.kind === 'ok' ? reading.minutes : null;
@@ -284,12 +298,7 @@ function ObjectiveForm({
                     </Button>
                 )}
             </div>
-            {general !== null && (
-                <p role="alert" className="flex items-start gap-2 text-sm leading-(--lh) text-inc">
-                    <ErrorIcon />
-                    {general}
-                </p>
-            )}
+            {general !== null && <GeneralError message={general} />}
         </Popover>
     );
 }

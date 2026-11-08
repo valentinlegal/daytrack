@@ -17,9 +17,6 @@ final class CalendarApiTest extends WebTestCase
 {
     use DayApi;
 
-    private const string FROM = '2026-09-28';
-    private const string TO = '2026-11-01';
-
     public function testUnMoisSansSaisieNAAucuneMarqueEtRienNEstEcrit(): void
     {
         self::assertSame([], $this->marks());
@@ -247,7 +244,7 @@ final class CalendarApiTest extends WebTestCase
             '2026-10-02' => 'unsent',
             '2026-10-03' => 'incomplete',
         ], $this->marks());
-        self::assertSame([1, 2, 3, 4, 6], $this->lastJson()['workingDays'] ?? null, 'Le calendrier grise d\'après les mêmes réglages.');
+        self::assertSame([1, 2, 3, 4, 6], $this->json()['workingDays'] ?? null, 'Le calendrier grise d\'après les mêmes réglages.');
     }
 
     public function testUnJourGardeLObjectifQuIlAvaitASaPremiereSaisie(): void
@@ -301,49 +298,16 @@ final class CalendarApiTest extends WebTestCase
 
     public function testLeCalendrierNeSEcritPas(): void
     {
-        [$status] = $this->send('POST', '/api/calendar/'.self::FROM.'/'.self::TO, []);
+        [$status] = $this->send('POST', '/api/calendar/'.self::MONTH_FROM.'/'.self::MONTH_TO, []);
         self::assertSame(405, $status);
     }
 
     /**
      * @return array<mixed>
      */
-    private function lastJson(): array
-    {
-        $json = json_decode((string) $this->browser->getResponse()->getContent(), true, flags: \JSON_THROW_ON_ERROR);
-        self::assertIsArray($json);
-
-        return $json;
-    }
-
-    /**
-     * @return array<mixed>
-     */
-    private function marks(string $from = self::FROM, string $to = self::TO): array
-    {
-        return self::arrayAt($this->calendar($from, $to), 'marks');
-    }
-
-    /**
-     * @return array<mixed>
-     */
-    private function daysOff(string $from = self::FROM, string $to = self::TO): array
+    private function daysOff(string $from = self::MONTH_FROM, string $to = self::MONTH_TO): array
     {
         return self::arrayAt($this->calendar($from, $to), 'daysOff');
-    }
-
-    /**
-     * @return array<mixed>
-     */
-    private function calendar(string $from, string $to): array
-    {
-        $this->browser->request('GET', '/api/calendar/'.$from.'/'.$to);
-        self::assertResponseIsSuccessful();
-        $calendar = json_decode((string) $this->browser->getResponse()->getContent(), true, flags: \JSON_THROW_ON_ERROR);
-        self::assertIsArray($calendar);
-        self::assertSame(['marks', 'daysOff', 'workingDays'], array_keys($calendar));
-
-        return $calendar;
     }
 
     private function rowsIn(string $table): int

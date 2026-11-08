@@ -2,6 +2,7 @@
 
 namespace App\EventListener;
 
+use App\Api\ApiError;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -38,9 +39,9 @@ final readonly class SameOriginGuard
         }
 
         if (!self::isSameOrigin($request)) {
-            $event->setResponse(new JsonResponse(['error' => 'cross_origin'], Response::HTTP_FORBIDDEN));
+            $event->setResponse(new JsonResponse(ApiError::CrossOrigin->body(), Response::HTTP_FORBIDDEN));
         } elseif ('json' !== $request->getContentTypeFormat()) {
-            $event->setResponse(new JsonResponse(['error' => 'unsupported_media_type'], Response::HTTP_UNSUPPORTED_MEDIA_TYPE));
+            $event->setResponse(new JsonResponse(ApiError::UnsupportedMediaType->body(), Response::HTTP_UNSUPPORTED_MEDIA_TYPE));
         }
     }
 

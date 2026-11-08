@@ -6,6 +6,7 @@ use App\Day\Objective;
 use App\Day\UserCalendar;
 use App\Entity\Day;
 use App\Repository\DayRepository;
+use App\Tests\Support\PurgesDatabase;
 use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -17,6 +18,8 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
  */
 final class SimultaneousWritesTest extends KernelTestCase
 {
+    use PurgesDatabase;
+
     private Connection $connection;
 
     private \PDO $other;
@@ -25,8 +28,7 @@ final class SimultaneousWritesTest extends KernelTestCase
     {
         self::bootKernel();
         $this->connection = self::getContainer()->get('doctrine.dbal.default_connection');
-        $this->connection->executeStatement('DELETE FROM slot');
-        $this->connection->executeStatement('DELETE FROM day');
+        self::purgeDatabase();
 
         // L'autre écriture, par sa propre connexion au même fichier. Elle n'attend
         // pas : un verrou se voit tout de suite.

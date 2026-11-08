@@ -1,6 +1,5 @@
-import { bodyOf, readViolations } from '../day/dayApi';
-import type { Violation } from '../grid/daySession';
 import { isRecord } from '../grid/json';
+import { type Refused, refused, serverApi } from '../serverApi';
 import { isTint, type Tint } from './tints';
 
 /** Un type de ticket rencontré dans les saisies ou les favoris, et sa teinte. */
@@ -22,9 +21,7 @@ export interface Settings {
 
 export type SettingsResult =
     /** Enregistré, ou rien à changer (un type disparu entre-temps) : voici les réglages à jour. */
-    | { readonly status: 'saved'; readonly settings: Settings }
-    /** Une règle refuse la valeur : rien n'est écrit (422). */
-    | { readonly status: 'invalid'; readonly violations: readonly Violation[] };
+    { readonly status: 'saved'; readonly settings: Settings } | Refused;
 
 /** L'API des réglages, vue de la page. Une panne — réseau, erreur du serveur — lève. */
 export interface SettingsApi {
@@ -35,36 +32,17 @@ export interface SettingsApi {
 }
 
 /** L'API des réglages (src/Controller/Api/SettingsController.php). */
-export function httpSettingsApi(fetcher: typeof fetch = (input, init) => fetch(input, init)): SettingsApi {
+export function httpSettingsApi(fetcher?: typeof fetch): SettingsApi {
     const BASE = '/api/settings';
+    const server = serverApi(fetcher);
 
-    async function write(target: string, body: unknown): Promise<SettingsResult> {
-        const response = await fetcher(target, {
-            method: 'PUT',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        const json = await bodyOf(response);
-        // Un type que la base n'a plus (404) ne change rien : la réponse rend les réglages.
-        if (response.status === 200 || response.status === 404) {
-            return { status: 'saved', settings: readSettings(json) };
-        }
-        if (response.status === 422 && isRecord(json)) {
-            return { status: 'invalid', violations: readViolations(json.violations) };
-        }
-
-        throw new Error(`L'API a répondu ${String(response.status)} à PUT ${target}.`);
-    }
+    const saved = (json: unknown) => ({ status: 'saved', settings: readSettings(json) }) as const;
+    // Un type que la base n'a plus (404) ne change rien : la réponse rend les réglages.
+    const write = (target: string, body: unknown) =>
+        server.request<SettingsResult>('PUT', target, { 200: saved, 404: saved, 422: refused }, { body });
 
     return {
-        async read() {
-            const response = await fetcher(BASE, { headers: { Accept: 'application/json' } });
-            if (response.status !== 200) {
-                throw new Error(`L'API a répondu ${String(response.status)} pour les réglages.`);
-            }
-
-            return readSettings(await bodyOf(response));
-        },
+        read: () => server.read(BASE, readSettings),
         setHabitualObjective: (minutes) => write(`${BASE}/habitual-objective`, { objective: minutes }),
         setWorkingDay: (day, worked) => write(`${BASE}/working-days/${String(day)}`, { worked }),
         recolor: (type, color) => write(`${BASE}/issue-types/${encodeURIComponent(type)}`, { color }),

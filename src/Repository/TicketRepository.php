@@ -2,6 +2,8 @@
 
 namespace App\Repository;
 
+use App\Database\Lockable;
+use App\Database\LocksItsTable;
 use App\Entity\Favorite;
 use App\Entity\Slot;
 use App\Entity\Ticket;
@@ -12,8 +14,10 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * @extends ServiceEntityRepository<Ticket>
  */
-final class TicketRepository extends ServiceEntityRepository
+final class TicketRepository extends ServiceEntityRepository implements Lockable
 {
+    use LocksItsTable;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, Ticket::class);
@@ -82,14 +86,5 @@ final class TicketRepository extends ServiceEntityRepository
     public function forgetAll(): void
     {
         $this->createQueryBuilder('ticket')->update()->set('ticket.readAt', ':never')->setParameter('never', null)->getQuery()->execute();
-    }
-
-    /**
-     * Une écriture qui ne change rien : dans une transaction, elle prend le verrou de
-     * la base jusqu'à la fin de celle-ci (TicketBook).
-     */
-    public function lock(): void
-    {
-        $this->getEntityManager()->getConnection()->executeStatement("UPDATE ticket SET ticket_key = ticket_key WHERE ticket_key = ''");
     }
 }

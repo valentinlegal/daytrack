@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { httpJiraApi } from '../../../assets/jira/jiraApi';
 import { describedTicket, readTickets } from '../../../assets/jira/ticketInfo';
+import { answering, type SentRequest } from '../fakeServer';
 
 const CONNECTION = {
     linked: true,
@@ -12,24 +13,12 @@ const CONNECTION = {
     missingScopes: [],
 };
 
-/** Un serveur qui répond toujours la même chose, et garde les requêtes reçues. */
-function answering(status: number, body: unknown) {
-    const sent: { url: string; init: RequestInit | undefined }[] = [];
-    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
-        sent.push({ url: input instanceof Request ? input.url : input.toString(), init });
-
-        return Promise.resolve(new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }));
-    }) as typeof fetch;
-
-    return { api: httpJiraApi(fetcher), sent };
-}
-
-const request = ({ url, init }: { url: string; init: RequestInit | undefined }) =>
+const request = ({ url, init }: SentRequest) =>
     `${String(init?.method)} ${url} ${typeof init?.body === 'string' ? init.body : 'null'}`;
 
 describe("l'API de Jira", () => {
     it('envoie le jeton dans le corps, jamais dans l’adresse, et seulement s’il a été collé', async () => {
-        const { api, sent } = answering(200, CONNECTION);
+        const { api, sent } = answering(httpJiraApi, 200, CONNECTION);
         const form = { site: 'https://jira', email: 'dev@daytrack.test' };
 
         await api.link({ ...form, token: 'jeton-colle' });
@@ -48,19 +37,25 @@ describe("l'API de Jira", () => {
         const form = { site: 'https://jira', email: 'dev@daytrack.test', token: 'x' };
         const violations = [{ field: 'token', message: 'Jira refuse cette adresse e-mail ou ce jeton.' }];
 
-        expect(await answering(200, { account: 'Camille Martin' }).api.test(form)).toEqual({
+        expect(await answering(httpJiraApi, 200, { account: 'Camille Martin' }).api.test(form)).toEqual({
             status: 'connected',
             account: 'Camille Martin',
         });
-        expect(await answering(422, { violations }).api.test(form)).toEqual({ status: 'invalid', violations });
-        expect(await answering(422, { violations }).api.link(form)).toEqual({ status: 'invalid', violations });
-        await expect(answering(500, {}).api.link(form)).rejects.toThrow();
+        expect(await answering(httpJiraApi, 422, { violations }).api.test(form)).toEqual({
+            status: 'invalid',
+            violations,
+        });
+        expect(await answering(httpJiraApi, 422, { violations }).api.link(form)).toEqual({
+            status: 'invalid',
+            violations,
+        });
+        await expect(answering(httpJiraApi, 500, {}).api.link(form)).rejects.toThrow();
     });
 
     it('lit la connexion enregistrée, ou son absence', async () => {
-        expect(await answering(200, { linked: false }).api.connection()).toBeNull();
+        expect(await answering(httpJiraApi, 200, { linked: false }).api.connection()).toBeNull();
         expect(
-            await answering(200, {
+            await answering(httpJiraApi, 200, {
                 ...CONNECTION,
                 refusal: 'missing_scope',
                 missingScopes: ['read:jira-user'],
@@ -72,27 +67,29 @@ describe("l'API de Jira", () => {
             refusal: 'missing_scope',
             missingScopes: ['read:jira-user'],
         });
-        await expect(answering(200, { site: 'https://jira' }).api.connection()).rejects.toThrow();
+        await expect(answering(httpJiraApi, 200, { site: 'https://jira' }).api.connection()).rejects.toThrow();
     });
 
     it('dit ce que la vérification a donné, et le périmètre qui manque', async () => {
         expect(
-            await answering(200, {
+            await answering(httpJiraApi, 200, {
                 status: 'missing_scope',
                 account: null,
                 missingScopes: ['read:jira-user'],
             }).api.check(),
         ).toEqual({ status: 'missing_scope', account: null, missingScopes: ['read:jira-user'] });
-        expect(await answering(200, { status: 'connected', account: 'Camille Martin' }).api.check()).toEqual({
+        expect(
+            await answering(httpJiraApi, 200, { status: 'connected', account: 'Camille Martin' }).api.check(),
+        ).toEqual({
             status: 'connected',
             account: 'Camille Martin',
             missingScopes: [],
         });
-        await expect(answering(200, { status: 'autre chose' }).api.check()).rejects.toThrow();
+        await expect(answering(httpJiraApi, 200, { status: 'autre chose' }).api.check()).rejects.toThrow();
     });
 
     it('cherche un ticket par son identifiant, codé dans l’adresse', async () => {
-        const { api, sent } = answering(200, {
+        const { api, sent } = answering(httpJiraApi, 200, {
             status: 'found',
             ticket: { title: 'Export CSV', type: 'Story', color: 'vert' },
             refusal: null,
@@ -106,20 +103,26 @@ describe("l'API de Jira", () => {
         expect(sent.map(request)).toEqual(['POST /api/tickets/SHOP-482/lookup {}']);
 
         // Sans l'état du jeton, rien n'en est dit.
-        expect(await answering(200, { status: 'not_found', ticket: null }).api.lookup('SHOP-999')).toEqual({
-            status: 'not_found',
-        });
+        expect(await answering(httpJiraApi, 200, { status: 'not_found', ticket: null }).api.lookup('SHOP-999')).toEqual(
+            {
+                status: 'not_found',
+            },
+        );
         for (const status of ['not_found', 'refused', 'missing_scope', 'unreachable'] as const) {
-            expect(await answering(200, { status, ticket: null, refusal: 'refused' }).api.lookup('SHOP-482')).toEqual({
+            expect(
+                await answering(httpJiraApi, 200, { status, ticket: null, refusal: 'refused' }).api.lookup('SHOP-482'),
+            ).toEqual({
                 status,
                 refusal: 'refused',
             });
         }
-        await expect(answering(200, { status: 'found', ticket: null }).api.lookup('SHOP-482')).rejects.toThrow();
+        await expect(
+            answering(httpJiraApi, 200, { status: 'found', ticket: null }).api.lookup('SHOP-482'),
+        ).rejects.toThrow();
     });
 
     it('fait relire les titres, et rend ce que Jira reproche au jeton', async () => {
-        const { api, sent } = answering(200, {
+        const { api, sent } = answering(httpJiraApi, 200, {
             tickets: { 'SHOP-482': { title: 'Export CSV', type: 'Story', color: 'vert' } },
             refusal: 'refused',
         });
@@ -133,8 +136,9 @@ describe("l'API de Jira", () => {
 });
 
 describe('les tickets décrits par une réponse', () => {
-    it('lisent une liste vide comme PHP la rend, et laissent de côté ce qui n’en a pas la forme', () => {
-        expect(readTickets([])).toEqual({});
+    it('se lisent dans un objet, même vide, et laissent de côté ce qui n’en a pas la forme', () => {
+        expect(readTickets({})).toEqual({});
+        expect(() => readTickets([])).toThrow(TypeError);
         expect(
             readTickets({
                 'SHOP-482': { title: 'Export CSV', type: 'Story', color: 'vert' },

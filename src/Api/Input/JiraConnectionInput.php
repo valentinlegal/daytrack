@@ -28,8 +28,10 @@ final readonly class JiraConnectionInput
         #[\SensitiveParameter]
         ?string $token = null,
     ) {
-        $this->site = self::trimmed($site);
-        $this->email = self::trimmed($email);
+        // Une espace insécable se tape sans la voir (Alt+Espace sur un Mac) : elle ne fait
+        // pas refuser l'adresse ni l'e-mail.
+        $this->site = EntryText::trimmed($site);
+        $this->email = EntryText::trimmed($email);
         $this->token = self::trimmed($token);
     }
 
@@ -46,7 +48,7 @@ final readonly class JiraConnectionInput
             $context->buildViolation('Indiquez votre adresse e-mail.')->atPath('email')->addViolation();
         } else {
             $context->getValidator()->inContext($context)->atPath('email')->validate($this->email, [
-                new Assert\Length(max: self::TEXT_MAX, maxMessage: 'Une adresse e-mail tient en 255 caractères.'),
+                new Assert\Length(max: self::TEXT_MAX, maxMessage: EntryText::fitsIn('Une adresse e-mail', self::TEXT_MAX)),
                 new Assert\Email(message: 'Une adresse e-mail s\'écrit comme camille.martin@exemple.fr.'),
             ]);
         }

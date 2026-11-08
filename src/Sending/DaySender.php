@@ -2,6 +2,7 @@
 
 namespace App\Sending;
 
+use App\Database\LockedTransaction;
 use App\Day\StaleDay;
 use App\Day\UserCalendar;
 use App\Entity\DaySend;
@@ -14,7 +15,6 @@ use App\Jira\WorklogWrite;
 use App\Jira\WriteOutcome;
 use App\Repository\DayRepository;
 use App\Repository\DaySendRepository;
-use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Clock\ClockInterface;
 
@@ -38,6 +38,7 @@ final readonly class DaySender
 
     public function __construct(
         private EntityManagerInterface $entityManager,
+        private LockedTransaction $transaction,
         private DayRepository $days,
         private DaySendRepository $sends,
         private JiraLink $link,
@@ -56,7 +57,7 @@ final readonly class DaySender
      * @throws AlreadySending
      * @throws NotLinked
      */
-    public function send(\DateTimeImmutable $date, int $version): Delivery
+    public function send(\DateTimeImmutable $date, int $version): void
     {
         // Repris de la v1, le compte n'est pas encore connu, et les heures à remplacer se
         // reconnaissent à lui : Jira doit le dire avant que quoi que ce soit parte.
@@ -105,25 +106,27 @@ final readonly class DaySender
                     $worklogs,
                     $delivery->outcomes,
                     $delivery->failure,
-                    // Un ticket retiré que Jira, relu, n'a plus ne se retirera pas deux fois.
+                    // Un ticket retiré que Jira, relu, n'a plus ne se retirera pas deux fois. Celui
+                    // qu'il ne trouve plus se relira au prochain essai : c'est l'envoi complet qui
+                    // le dira.
                     array_values(array_diff([...$before, ...$delivery->written], $delivery->retired($worklogs))),
                     [] !== $delivery->written,
                     $delivery->inJira,
+                    $delivery->vanished,
                     $now,
                 );
-            } elseif ([] === $worklogs) {
+            } elseif ([] === $worklogs && [] === $delivery->vanished) {
                 // Une journée vidée, et Jira vidé avec elle : il n'y a plus rien à en dire.
                 $this->entityManager->remove($send);
             } else {
-                $send->succeed($worklogs, $delivery->retired($worklogs), $now);
+                // Une journée vidée dont Jira ne trouve plus un ticket garde de quoi le dire.
+                $send->succeed($worklogs, $delivery->retired($worklogs), $delivery->vanished, $now);
             }
         });
 
         // La journée a pu changer pendant l'envoi, dans un autre onglet : ce qui suit la
         // relit dans la base, pas dans la mémoire de cette requête.
         $this->entityManager->clear();
-
-        return $delivery;
     }
 
     /**
@@ -139,14 +142,7 @@ final readonly class DaySender
             throw new NotLinked();
         }
 
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            // La première instruction est une écriture, qui ne change rien : elle
-            // verrouille la base jusqu'à la fin de la transaction, comme un geste de la grille.
-            $connection->executeStatement('UPDATE day SET version = version WHERE date = :date', ['date' => $date], ['date' => Types::DATE_IMMUTABLE]);
-
+        return $this->transaction->run($this->days, function () use ($date, $version, $jira): array {
             $day = $this->days->findWithSlots($date);
             if (null === $day) {
                 throw 0 === $version ? new NothingToSend() : new StaleDay();
@@ -181,18 +177,9 @@ final readonly class DaySender
             $this->entityManager->refresh($send);
             $before = $send->touched;
             $send->begin(Worklog::ticketsOf($worklogs), $now, $interrupted);
-            $this->entityManager->flush();
-            $connection->commit();
 
             return [$send, $worklogs, $before];
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        });
     }
 
     /**
@@ -236,6 +223,8 @@ final readonly class DaySender
 
         /** @var array<string, ?TicketFailure> $outcomes */
         $outcomes = [];
+        /** @var list<string> $vanished */
+        $vanished = [];
         /** @var list<WorklogWrite> $writes */
         $writes = [];
         /** @var list<string> $owners le ticket de chaque écriture */
@@ -244,14 +233,20 @@ final readonly class DaySender
         foreach (array_keys($wanted) as $ticket) {
             $found = $read[$ticket] ?? JiraFailure::Unreachable;
 
+            if (JiraFailure::NotFound === $found && [] === $wanted[$ticket]) {
+                // Retiré de la journée, et Jira ne le trouve plus : supprimé, ou ce compte ne le
+                // voit plus — Jira répond de même aux deux. Il ne retient pas la journée : rien
+                // ne le ferait revenir. Mais ses heures sont peut-être restées, et l'écran le dit.
+                $outcomes[$ticket] = null;
+                $vanished[] = $ticket;
+                continue;
+            }
+
             if ($found instanceof JiraFailure) {
-                // Un ticket retiré de la journée et que Jira ne connaît plus n'a plus d'heures
-                // à retirer. Illisible, un ticket déjà écrit ne se dit pas absent de Jira.
-                $outcomes[$ticket] = match (true) {
-                    JiraFailure::NotFound === $found => [] === $wanted[$ticket] ? null : TicketFailure::NotFound,
-                    \in_array($ticket, $before, true) => self::unverifiedFailure($send, $ticket, $worklogs),
-                    default => TicketFailure::Unreachable,
-                };
+                // Illisible, un ticket déjà écrit ne se dit pas absent de Jira.
+                $outcomes[$ticket] = JiraFailure::NotFound !== $found && \in_array($ticket, $before, true)
+                    ? self::unverifiedFailure($send, $ticket, $worklogs)
+                    : TicketFailure::fromJira($found);
                 continue;
             }
 
@@ -323,8 +318,7 @@ final readonly class DaySender
                     isset($accepted[$ticket]) => TicketFailure::Unverified,
                     isset($unknown[$ticket]) => TicketFailure::Unanswered,
                     null !== $reason => $reason,
-                    $found->isTokenRefusal() => TicketFailure::TokenRefused,
-                    default => self::failureOf($found),
+                    default => TicketFailure::fromJira($found),
                 };
 
                 // La première lecture de cet envoi les a vues : Jira les garde.
@@ -377,7 +371,7 @@ final readonly class DaySender
             $this->record($send, $refusal);
         }
 
-        return new Delivery($ordered, $refusal, array_map('strval', array_keys($written)), $inJira);
+        return new Delivery($ordered, $refusal, array_map('strval', array_keys($written)), $inJira, $vanished);
     }
 
     /**
@@ -395,7 +389,7 @@ final readonly class DaySender
             return $delivery;
         }
 
-        $reason = true === $delivery->failure?->isTokenRefusal() ? TicketFailure::TokenRefused : TicketFailure::Unreachable;
+        $reason = TicketFailure::fromJira($delivery->failure ?? JiraFailure::Unreachable);
         $current = Worklog::ticketsOf($worklogs);
         $removed = array_values(array_diff($before, $current));
         // La v1 ne gardait pas ce qu'elle avait envoyé : ces heures-là ne se connaissent pas.
@@ -476,11 +470,6 @@ final readonly class DaySender
         }
     }
 
-    private static function failureOf(JiraFailure $failure): TicketFailure
-    {
-        return JiraFailure::NotFound === $failure ? TicketFailure::NotFound : TicketFailure::Unreachable;
-    }
-
     /**
      * Garde ce que l'envoi a donné, d'un seul tenant, sur l'envoi tel qu'il est en base.
      *
@@ -488,27 +477,12 @@ final readonly class DaySender
      */
     private function finish(DaySend $send, \Closure $record): void
     {
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            $connection->executeStatement('UPDATE day_send SET sending_since = sending_since WHERE id = :id', ['id' => $send->id], ['id' => 'uuid']);
-
+        $this->transaction->run($this->sends, function () use ($send, $record): void {
             $current = $this->sends->find($send->id);
             if (null !== $current) {
                 $this->entityManager->refresh($current);
                 $record($current);
-                $this->entityManager->flush();
             }
-
-            $connection->commit();
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        });
     }
 }

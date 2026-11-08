@@ -11,7 +11,7 @@ use App\Repository\JiraConnectionRepository;
 use App\Sending\SendView;
 use App\Sending\Worklog;
 use App\Settings\UserSettings;
-use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\ClockInterface;
 
 /**
  * Lit une journée sans jamais rien écrire : un jour sans ligne se lit vide, en
@@ -34,11 +34,13 @@ final readonly class DayReader
     public function view(\DateTimeImmutable $date): DayView
     {
         $day = $this->days->findWithSlots($date);
+        if (null !== $day) {
+            return $this->viewOf($day);
+        }
+
         $habitual = $this->settings->habitualObjective();
 
-        return null !== $day
-            ? $this->build($day->date, $day->version, $day->objectiveFollowing($habitual), $habitual, $day->isDeclaredOff(), $day->grid(), $this->sends->forDate($date, $this->connections->current()))
-            : $this->build($date, 0, $habitual, $habitual, false, Grid::empty(), null);
+        return $this->build($date, 0, $habitual, $habitual, false, Grid::empty(), null);
     }
 
     public function viewOf(Day $day): DayView

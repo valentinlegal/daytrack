@@ -350,6 +350,32 @@ final class FakeJiraTest extends TestCase
         self::assertSame([], $this->myWorklogs('ECART-1'));
     }
 
+    public function testUnTicketDisparuSeRelitUneDerniereFoisApresUneEcriturePuisDevientIntrouvable(): void
+    {
+        $key = Catalog::VANISHING.'-1';
+        self::assertSame([], $this->myWorklogs($key), 'Avant toute écriture, il se lit comme un autre.');
+        self::assertSame(201, $this->addWorklog($key, 900)->getStatusCode());
+
+        self::assertCount(1, $this->myWorklogs($key), 'La relecture qui suit l\'écriture le trouve encore.');
+
+        // Puis le compte ne le voit plus : ni ses heures, ni lui, ni par la recherche, et
+        // aucune écriture ne passe. Jira répond comme pour un ticket supprimé.
+        self::assertSame(404, $this->get('/rest/api/3/issue/'.$key.'/worklog')->getStatusCode());
+        self::assertSame(404, $this->get('/rest/api/3/issue/'.$key)->getStatusCode());
+        self::assertSame(404, $this->addWorklog($key, 900)->getStatusCode());
+        self::assertSame(400, $this->get('/rest/api/3/search/jql?jql=key%20%3D%20'.$key)->getStatusCode());
+        self::assertSame(200, $this->get('/rest/api/3/issue/'.Catalog::VANISHING.'-2')->getStatusCode(), 'Les autres tickets du projet restent visibles.');
+
+        $kept = array_filter(
+            self::listAt($this->jira->handle(new FakeJiraRequest('GET', '/_simulation'))->body, 'worklogs'),
+            static fn (array $worklog): bool => $key === $worklog['issueKey'],
+        );
+        self::assertCount(1, $kept, 'Ses heures sont toujours dans Jira.');
+
+        self::assertSame(204, $this->jira->handle(new FakeJiraRequest('POST', '/_simulation/reinitialiser'))->status);
+        self::assertSame(200, $this->get('/rest/api/3/issue/'.$key)->getStatusCode(), 'La remise à zéro le rend visible.');
+    }
+
     public function testUnTicketLentFaitDepasserLeDelaiMaisEnregistreQuandMeme(): void
     {
         $response = $this->client->request('POST', '/rest/api/3/issue/LENT-1/worklog', [

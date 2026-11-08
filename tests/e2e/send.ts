@@ -1,15 +1,12 @@
 import type { APIRequestContext, Locator, Page, Route } from '@playwright/test';
 
-import { clearDay, writeDay } from './day';
+import { clearDay, SAME_ORIGIN, writeDay } from './day';
 
 /**
  * L'envoi sur Jira, vu des parcours. Il part du serveur de l'application vers le Jira
  * simulé (dev/jira/), jamais vers un vrai Jira (global-setup.ts) ; un parcours relit ce
  * que ce Jira a reçu, et défait ses envois en partant.
  */
-
-/** Ce que le navigateur joint à une requête partie de la page de DayTrack. */
-const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' };
 
 /** Le Jira simulé, tel que l'application le joint, dans le réseau du conteneur des parcours. */
 const SIMULATED_JIRA = 'https://jira/_simulation';
@@ -54,12 +51,14 @@ export async function receivedWorklogs(request: APIRequestContext, date: string)
 /**
  * Vide la journée, et la renvoie si elle a été envoyée : le Jira simulé n'en garde plus
  * rien, et l'envoi enregistré disparaît avec lui. Un essai raté reste en mémoire même la
- * journée vidée, et reviendrait avec la même journée au parcours suivant : un envoi
- * complet, puis le renvoi de la journée vidée, l'effacent.
+ * journée vidée, et reviendrait avec la même journée au parcours suivant ; une journée
+ * vidée dont Jira ne trouvait plus un ticket reste envoyée, pour le redire. Un envoi
+ * complet, puis le renvoi de la journée vidée, effacent l'un et l'autre.
  */
 export async function clearSentDay(request: APIRequestContext, date: string): Promise<void> {
     await clearDay(request, date);
-    if ((await sendOf(request, date)).send.attemptedAt !== null) {
+    const cleared = (await sendOf(request, date)).send;
+    if (cleared.attemptedAt !== null || cleared.state === 'sent') {
         await writeDay(request, date, [{ start: '07:00', end: '07:15', ticket: 'ESSAI-1' }]);
         await sendDay(request, date);
         await clearDay(request, date);

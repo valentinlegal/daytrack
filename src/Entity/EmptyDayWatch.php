@@ -2,6 +2,7 @@
 
 namespace App\Entity;
 
+use App\Day\UserCalendar;
 use App\Repository\EmptyDayWatchRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
@@ -36,14 +37,14 @@ class EmptyDayWatch
     public function __construct(\DateTimeImmutable $since)
     {
         $this->id = Uuid::v7();
-        $this->since = $since->setTimezone(new \DateTimeZone('UTC'));
+        $this->since = UserCalendar::universal($since);
     }
 
     /** Repoussé jusqu'à cet instant, s'il vient après : il ne recule jamais. */
     public function notBefore(\DateTimeImmutable $instant): void
     {
         if ($instant > $this->since) {
-            $this->since = $instant->setTimezone(new \DateTimeZone('UTC'));
+            $this->since = UserCalendar::universal($instant);
         }
     }
 }

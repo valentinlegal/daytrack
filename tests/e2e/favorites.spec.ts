@@ -1,9 +1,18 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
 
-import { clearDay, type Entry, startTimeAt, weekday, writeDay } from './day';
-import { clickSlot, doubleClickSlot, expectGridMatchesBase, message, savedDay, slotPoint } from './editing';
-import { expect, refusedWith, test } from './fixtures';
+import { type Entry, SAME_ORIGIN, startTimeAt, weekdaysFrom, writeDay } from './day';
+import {
+    clickSlot,
+    doubleClickSlot,
+    expectGridMatchesBase,
+    message,
+    savedDay,
+    selectedSlots,
+    slotPoint,
+    slots,
+    tokenColor,
+} from './editing';
+import { expect, expectAccessible, refusedWith, test } from './fixtures';
 
 /**
  * La liste des favoris, contre la vraie base : un clic copie, glisser pose sur un
@@ -17,8 +26,6 @@ import { expect, refusedWith, test } from './fixtures';
 test.use({ favorites: 'base' });
 test.describe.configure({ mode: 'serial' });
 
-const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' };
-
 interface SavedFavorite {
     readonly id: string;
     readonly ticket: string;
@@ -30,9 +37,7 @@ interface SavedFavorite {
  * des mois que les autres parcours ne prennent pas : ils tournent en même temps, sur la
  * même base. Un samedi serait fermé à la saisie.
  */
-function day(index: number): string {
-    return weekday('2024-07-01', index);
-}
+const workday = weekdaysFrom('2024-07-01');
 
 async function savedFavorites(request: APIRequestContext): Promise<SavedFavorite[]> {
     const response = await request.get('/api/favorites');
@@ -104,23 +109,6 @@ function cardBody(page: Page, ticket: string): Locator {
     return card(page, ticket).locator(':scope > span');
 }
 
-/** La valeur qu'une couleur de tokens.css prend dans la page. */
-async function tokenColor(page: Page, token: `--${string}`): Promise<string> {
-    return page.evaluate((name) => {
-        const probe = document.createElement('div');
-        probe.style.backgroundColor = `var(${name})`;
-        document.body.append(probe);
-        const color = getComputedStyle(probe).backgroundColor;
-        probe.remove();
-
-        return color;
-    }, token);
-}
-
-function selectedSlots(page: Page): Locator {
-    return page.getByRole('listbox', { name: 'Créneaux de la journée' }).getByRole('option', { selected: true });
-}
-
 /** Un point de la colonne des heures, à la hauteur de ce créneau : à gauche de la colonne des blocs. */
 async function hoursPoint(page: Page, time: string): Promise<{ x: number; y: number }> {
     const lane = await page.getByRole('listbox', { name: 'Créneaux de la journée' }).boundingBox();
@@ -162,7 +150,7 @@ test.afterEach(async ({ request }) => {
 test.describe('ajouter', () => {
     test('un favori s’ajoute par son identifiant, en tête de liste, une seule fois', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1');
-        await open(page, day(0));
+        await open(page, workday(0));
 
         await addButton(page).click();
         const field = form(page).getByLabel('Nouveau favori');
@@ -184,6 +172,66 @@ test.describe('ajouter', () => {
         await expect(message(page)).toHaveCount(0);
     });
 
+    test('une Entrée tenue n’ajoute qu’une fois et ne rouvre rien, et un favori cliqué garde le curseur', async ({
+        page,
+        request,
+    }) => {
+        await addFavorites(request, 'ESSAI-1');
+        await open(page, workday(40));
+
+        await addButton(page).click();
+        await form(page).getByLabel('Nouveau favori').fill('ESSAI-2');
+        // Une touche tenue : le premier appui, puis ses répétitions, sur le + qui a repris le curseur.
+        await page.keyboard.down('Enter');
+        await expect.poll(() => ours(request)).toEqual(['ESSAI-2', 'ESSAI-1']);
+        await expect(addButton(page)).toBeFocused();
+        await page.keyboard.down('Enter');
+        await page.keyboard.down('Enter');
+        await page.keyboard.up('Enter');
+        await expect(form(page)).toHaveCount(0);
+        await expect(addButton(page)).toBeFocused();
+
+        // Un clic sur un favori enregistre l'ajout, comme un clic à côté, et copie le favori, qui
+        // prend le curseur et le garde une fois l'ajout enregistré.
+        await addButton(page).click();
+        await form(page).getByLabel('Nouveau favori').fill('ESSAI-3');
+        await card(page, 'ESSAI-1').click();
+        await expect(message(page)).toContainText('ESSAI-1 copié');
+        await expect.poll(() => ours(request)).toEqual(['ESSAI-3', 'ESSAI-2', 'ESSAI-1']);
+        await expect(form(page)).toHaveCount(0);
+        await expect(card(page, 'ESSAI-1')).toBeFocused();
+    });
+
+    test('pendant que l’ajout part, Échap est retenu, et le curseur posé sur la grille y reste', async ({
+        page,
+        request,
+    }) => {
+        await open(page, workday(39));
+
+        await addButton(page).click();
+        const field = form(page).getByLabel('Nouveau favori');
+        await field.fill('ESSAI-2');
+        await page.route('**/api/favorites', async (route) => {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            await route.fallback();
+        });
+        await field.press('Enter');
+        await expect(form(page)).toHaveAttribute('aria-busy', 'true');
+        // Le clic sur la grille attend l'ajout en route, et la grille prend le curseur.
+        await clickSlot(page, '10:00');
+        await expect(selectedSlots(page)).toHaveCount(1);
+        await page.keyboard.press('Escape');
+        await expect(form(page)).toBeVisible();
+        await expect(selectedSlots(page)).toHaveCount(1);
+
+        await expect(form(page)).toHaveCount(0);
+        await expect.poll(() => ours(request)).toEqual(['ESSAI-2']);
+        await expect(slots(page)).toBeFocused();
+        await expect(selectedSlots(page)).toHaveCount(1);
+        await page.keyboard.press('Escape');
+        await expect(selectedSlots(page)).toHaveCount(0);
+    });
+
     test.describe(() => {
         test.use({ expectedErrors: [refusedWith(422)] });
 
@@ -192,7 +240,7 @@ test.describe('ajouter', () => {
             request,
         }) => {
             await addFavorites(request, 'ESSAI-1');
-            await open(page, day(1));
+            await open(page, workday(1));
 
             await addButton(page).click();
             const field = form(page).getByLabel('Nouveau favori');
@@ -218,7 +266,7 @@ test.describe('ajouter', () => {
             request,
         }) => {
             await addFavorites(request, 'ESSAI-1');
-            await open(page, day(25));
+            await open(page, workday(25));
             await page.route('**/api/favorites**', (route) =>
                 route.request().method() === 'GET' ? route.fallback() : route.abort('failed'),
             );
@@ -245,7 +293,7 @@ test.describe('ajouter', () => {
         page,
         request,
     }) => {
-        await open(page, day(2));
+        await open(page, workday(2));
         const add = addButton(page);
 
         await add.click();
@@ -262,8 +310,121 @@ test.describe('ajouter', () => {
         expect(await ours(request)).toEqual([]);
     });
 
+    test.describe(() => {
+        // Jira ne connaît pas les tickets qu'on ne lui a pas décrits : SHOP-999 est introuvable.
+        test.use({ jira: { state: 'connected', unknown: 'not_found' } });
+
+        /** Le formulaire d'ajout, refusé : SHOP-999 est introuvable, le message sous le champ. */
+        async function refusedForm(page: Page): Promise<Locator> {
+            await addButton(page).click();
+            const field = form(page).getByLabel('Nouveau favori');
+            await field.fill('SHOP-999');
+            await expect(field).toHaveAttribute('aria-invalid', 'true');
+            await field.press('Enter');
+            await expect(field).toHaveAccessibleDescription("Ticket introuvable dans Jira. Vérifiez l'identifiant.");
+
+            return field;
+        }
+
+        test('Échap ferme le formulaire d’où que soit le curseur, avant la sélection de la grille', async ({
+            page,
+            request,
+        }) => {
+            await addFavorites(request, 'ESSAI-1');
+            await open(page, workday(35));
+
+            await refusedForm(page);
+            // Le clic sur la grille est un clic à côté, refusé : le formulaire reste ouvert, et
+            // la grille prend le curseur et sa sélection.
+            await clickSlot(page, '10:00');
+            await expect(form(page)).toBeVisible();
+            await expect(slots(page)).toBeFocused();
+            await expect(selectedSlots(page)).toHaveCount(1);
+
+            // Échap ferme le formulaire, et rien d'autre : la sélection et le curseur restent.
+            await page.keyboard.press('Escape');
+            await expect(form(page)).toHaveCount(0);
+            await expect(slots(page)).toBeFocused();
+            await expect(selectedSlots(page)).toHaveCount(1);
+            // Le suivant vide la sélection de la grille.
+            await page.keyboard.press('Escape');
+            await expect(selectedSlots(page)).toHaveCount(0);
+
+            // Le curseur posé sur un favori : Échap ferme le formulaire, le curseur reste sur lui.
+            // Le favori montre son infobulle en prenant le curseur : comme devant une fenêtre de
+            // ticket, Échap la ferme d'abord.
+            await refusedForm(page);
+            await card(page, 'ESSAI-1').focus();
+            await expect(page.getByRole('tooltip')).toHaveCount(1);
+            await page.keyboard.press('Escape');
+            await expect(page.getByRole('tooltip')).toHaveCount(0);
+            await expect(form(page)).toBeVisible();
+            await page.keyboard.press('Escape');
+            await expect(form(page)).toHaveCount(0);
+            await expect(card(page, 'ESSAI-1')).toBeFocused();
+
+            // Un clic sur le favori le copie, et Échap ferme encore le formulaire.
+            await refusedForm(page);
+            await card(page, 'ESSAI-1').click();
+            await expect(message(page)).toContainText('ESSAI-1 copié');
+            await expect(form(page)).toBeVisible();
+            await page.mouse.move(0, 0);
+            await expect(page.getByRole('tooltip')).toHaveCount(0);
+            await page.keyboard.press('Escape');
+            await expect(form(page)).toHaveCount(0);
+            await expect(card(page, 'ESSAI-1')).toBeFocused();
+            expect(await ours(request)).toEqual(['ESSAI-1']);
+        });
+
+        test('Échap abandonne d’abord le glisser d’un favori, puis ferme le formulaire refusé', async ({
+            page,
+            request,
+        }) => {
+            const date = workday(36);
+            await addFavorites(request, 'ESSAI-1');
+            await open(page, date);
+
+            const field = await refusedForm(page);
+            await lift(page, card(page, 'ESSAI-1'), await slotPoint(page, '11:00'));
+            await expect(page.locator('.favorite-drag')).toBeVisible();
+            await page.keyboard.press('Escape');
+            await expect(page.locator('.favorite-drag')).toHaveCount(0);
+            await page.mouse.up();
+            await expect(form(page)).toBeVisible();
+            await expect(field).toHaveValue('SHOP-999');
+
+            await page.keyboard.press('Escape');
+            await expect(form(page)).toHaveCount(0);
+            expect(await ours(request)).toEqual(['ESSAI-1']);
+            expect(await savedDay(request, date)).toEqual([]);
+        });
+    });
+
+    test.describe(() => {
+        // Jira met une seconde et demie à répondre, et ne connaît pas SHOP-999.
+        test.use({ jira: { state: 'connected', unknown: 'not_found', lookupDelay: 1500 } });
+
+        test('Entrée pendant que Jira cherche attend sa réponse, et n’ajoute pas un ticket introuvable', async ({
+            page,
+            request,
+        }) => {
+            await open(page, workday(38));
+
+            await addButton(page).click();
+            const field = form(page).getByLabel('Nouveau favori');
+            await field.fill('SHOP-999');
+            await field.press('Enter');
+            await expect(form(page)).toHaveAttribute('aria-busy', 'true');
+            await expect(field).toHaveAccessibleDescription("Ticket introuvable dans Jira. Vérifiez l'identifiant.");
+            await expect(form(page)).toHaveAttribute('aria-busy', 'false');
+            await expect(field).toHaveValue('SHOP-999');
+            await expect(field).toBeFocused();
+            expect((await savedFavorites(request)).map((favorite) => favorite.ticket)).not.toContain('SHOP-999');
+        });
+    });
+
     test('un clic à côté enregistre ce qui a été tapé, et ferme un formulaire vide', async ({ page, request }) => {
-        await open(page, day(3));
+        await open(page, workday(3));
         const add = addButton(page);
 
         await add.click();
@@ -286,7 +447,7 @@ test.describe('ajouter', () => {
 test.describe('renommer', () => {
     test('un double-clic renomme, et un nom vidé rend le titre', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1');
-        await open(page, day(4));
+        await open(page, workday(4));
 
         await card(page, 'ESSAI-1').dblclick();
         const field = form(page, 'Renommer le favori ESSAI-1').getByLabel('Nom');
@@ -310,7 +471,7 @@ test.describe('renommer', () => {
 
 test.describe('poser sur la grille', () => {
     test('un clic copie le favori, et Ctrl+V le colle sur la sélection', async ({ page, request }) => {
-        const date = day(5);
+        const date = workday(5);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date);
 
@@ -327,14 +488,13 @@ test.describe('poser sur la grille', () => {
             .poll(() => savedDay(request, date))
             .toEqual([{ start: '10:00', end: '10:45', kind: 'work', ticket: 'ESSAI-1', comment: null }]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('glisser un favori sur un créneau vide le pose sur ce quart d’heure, et Ctrl+Z l’enlève', async ({
         page,
         request,
     }) => {
-        const date = day(6);
+        const date = workday(6);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date);
 
@@ -356,11 +516,10 @@ test.describe('poser sur la grille', () => {
 
         await page.keyboard.press('ControlOrMeta+Z');
         await expect.poll(() => savedDay(request, date)).toEqual([]);
-        await clearDay(request, date);
     });
 
     test('glisser un favori sur un bloc ne change que le quart d’heure visé', async ({ page, request }) => {
-        const date = day(7);
+        const date = workday(7);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date, [{ start: '10:00', end: '11:00', ticket: 'SHOP-482', comment: 'Mapping' }]);
 
@@ -381,14 +540,13 @@ test.describe('poser sur la grille', () => {
             .poll(() => savedDay(request, date))
             .toEqual([{ start: '10:00', end: '11:00', kind: 'work', ticket: 'SHOP-482', comment: 'Mapping' }]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('un favori lâché hors de la grille et de la liste, ou après Échap, ne fait rien', async ({
         page,
         request,
     }) => {
-        const date = day(8);
+        const date = workday(8);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date);
 
@@ -406,13 +564,18 @@ test.describe('poser sur la grille', () => {
         );
         expect(await savedDay(request, date)).toEqual([]);
         await expect(message(page)).toHaveCount(0);
+
+        // Relâchés loin de la carte, ces glissers n'avalent pas son activation au clavier.
+        await card(page, 'ESSAI-1').focus();
+        await page.keyboard.press('Enter');
+        await expect(message(page)).toContainText('ESSAI-1 copié');
     });
 
     test('sous 1280 px, un favori lâché sur le récapitulatif ouvert ne tombe pas sous lui', async ({
         page,
         request,
     }) => {
-        const date = day(20);
+        const date = workday(20);
         await addFavorites(request, 'ESSAI-1');
         await page.addInitScript(() => {
             localStorage.setItem('daytrack.recap-open', 'true');
@@ -436,7 +599,7 @@ test.describe('poser sur la grille', () => {
     });
 
     test('déposé pendant qu’une fenêtre de ticket est ouverte, il l’enregistre d’abord', async ({ page, request }) => {
-        const date = day(21);
+        const date = workday(21);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date);
 
@@ -452,14 +615,13 @@ test.describe('poser sur la grille', () => {
                 { start: '11:00', end: '11:15', kind: 'work', ticket: 'ESSAI-1', comment: null },
             ]);
         await expect(page.getByRole('dialog')).toHaveCount(0);
-        await clearDay(request, date);
     });
 
     test.describe(() => {
         test.use({ expectedErrors: [refusedWith(422)] });
 
         test('une fenêtre de ticket refusée reste ouverte, et le favori n’est pas posé', async ({ page, request }) => {
-            const date = day(22);
+            const date = workday(22);
             await addFavorites(request, 'ESSAI-1');
             await open(page, date);
 
@@ -477,12 +639,50 @@ test.describe('poser sur la grille', () => {
             expect(await savedDay(request, date)).toEqual([]);
         });
     });
+
+    test.describe(() => {
+        // Jira ne connaît pas les tickets qu'on ne lui a pas décrits : SHOP-999 est introuvable.
+        test.use({ jira: { state: 'connected', unknown: 'not_found' } });
+
+        test('Échap pendant le glisser n’abandonne que le glisser : la fenêtre restée ouverte garde sa saisie', async ({
+            page,
+            request,
+        }) => {
+            const date = workday(34);
+            await addFavorites(request, 'ESSAI-1');
+            await open(page, date);
+
+            await doubleClickSlot(page, '09:00');
+            const window = page.getByRole('dialog', { name: 'Nouveau ticket' });
+            const ticket = window.getByLabel('Ticket');
+            await ticket.fill('SHOP-999');
+            await expect(ticket).toHaveAttribute('aria-invalid', 'true');
+            await window.getByLabel('Commentaire').fill('Tapé avant');
+            // L'appui sur le favori est un clic à côté : introuvable, le ticket garde la fenêtre ouverte.
+            await lift(page, card(page, 'ESSAI-1'), await slotPoint(page, '11:00'));
+            await expect(page.locator('.favorite-drag')).toBeVisible();
+            await page.keyboard.press('Escape');
+            await expect(page.locator('.favorite-drag')).toHaveCount(0);
+            await expect(window).toBeVisible();
+            await page.mouse.up();
+
+            // Le relâcher ne pose rien, et la fenêtre garde tout ce qui y était tapé.
+            await expect(window).toBeVisible();
+            await expect(ticket).toHaveValue('SHOP-999');
+            await expect(window.getByLabel('Commentaire')).toHaveValue('Tapé avant');
+            await expect(page.getByRole('listbox', { name: 'Créneaux de la journée' })).toHaveAttribute(
+                'aria-busy',
+                'false',
+            );
+            expect(await savedDay(request, date)).toEqual([]);
+        });
+    });
 });
 
 test.describe('ranger', () => {
     test('glisser un favori dans la liste change l’ordre', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2', 'ESSAI-3');
-        await open(page, day(9));
+        await open(page, workday(9));
 
         const below = await card(page, 'ESSAI-3').boundingBox();
         if (below === null) {
@@ -497,9 +697,37 @@ test.describe('ranger', () => {
         await expect.poll(() => shownOurs(page)).toEqual(['ESSAI-2', 'ESSAI-3', 'ESSAI-1']);
     });
 
+    test('un favori glissé puis relâché sur sa propre carte ne se copie pas, et garde sa place', async ({
+        page,
+        request,
+    }) => {
+        const date = workday(41);
+        await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
+        await open(page, date);
+
+        // Parti jusque sur la grille, il revient sur sa carte avant d'être lâché.
+        const home = await center(card(page, 'ESSAI-1'));
+        await lift(page, card(page, 'ESSAI-1'), await slotPoint(page, '11:00'));
+        await expect(page.locator('.favorite-drag')).toBeVisible();
+        await page.mouse.move(home.x, home.y, { steps: 8 });
+        await page.mouse.up();
+        await expect(page.locator('.favorite-drag')).toHaveCount(0);
+
+        await expect.poll(() => ours(request)).toEqual(['ESSAI-1', 'ESSAI-2']);
+        await expect.poll(() => shownOurs(page)).toEqual(['ESSAI-1', 'ESSAI-2']);
+        await expect(message(page)).toHaveCount(0);
+
+        // Rien n'a été copié : Ctrl+V sur un créneau n'y colle rien.
+        await clickSlot(page, '11:00');
+        await page.keyboard.press('ControlOrMeta+V');
+        await expect(slots(page)).toHaveAttribute('aria-busy', 'false');
+        expect(await savedDay(request, date)).toEqual([]);
+        await expect(message(page)).toHaveCount(0);
+    });
+
     test('au clavier, Alt+flèche déplace le favori et le curseur le suit', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2', 'ESSAI-3');
-        await open(page, day(10));
+        await open(page, workday(10));
 
         await card(page, 'ESSAI-1').focus();
         await page.keyboard.press('Alt+ArrowDown');
@@ -518,7 +746,7 @@ test.describe('ranger', () => {
         request,
     }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2', 'ESSAI-3');
-        await open(page, day(11));
+        await open(page, workday(11));
         const menu = page.getByRole('menu', { name: 'Actions sur le favori ESSAI-2' });
 
         await card(page, 'ESSAI-2').click({ button: 'right' });
@@ -540,7 +768,7 @@ test.describe('ranger', () => {
     });
 
     test('Ctrl+Z, le message du retrait affiché, remet le favori sans toucher la grille', async ({ page, request }) => {
-        const date = day(23);
+        const date = workday(23);
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
         await open(page, date, [{ start: '15:00', end: '15:15', ticket: 'OPS-12' }]);
 
@@ -555,7 +783,6 @@ test.describe('ranger', () => {
             { start: '15:00', end: '15:15', kind: 'work', ticket: 'OPS-12', comment: null },
         ]);
         await expect(card(page, 'ESSAI-1')).toBeFocused();
-        await clearDay(request, date);
     });
 
     test('Suppr tenu ne retire qu’un favori, et la croix du message rend le curseur à la liste', async ({
@@ -563,7 +790,7 @@ test.describe('ranger', () => {
         request,
     }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2', 'ESSAI-3');
-        await open(page, day(24));
+        await open(page, workday(24));
 
         await card(page, 'ESSAI-1').focus();
         // Une touche tenue : le premier appui, puis ses répétitions.
@@ -586,7 +813,7 @@ test.describe('ranger', () => {
         request,
     }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2', 'ESSAI-3');
-        await open(page, day(26));
+        await open(page, workday(26));
         const menu = page.getByRole('menu');
 
         await card(page, 'ESSAI-1').click({ button: 'right' });
@@ -616,7 +843,7 @@ test.describe('ranger', () => {
         await page.addInitScript(() => {
             Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
         });
-        await open(page, day(27));
+        await open(page, workday(27));
 
         await card(page, 'ESSAI-2').click({ button: 'right' });
         const menu = page.getByRole('menu', { name: 'Actions sur le favori ESSAI-2' });
@@ -631,9 +858,46 @@ test.describe('ranger', () => {
         await expect.poll(() => ours(request)).toEqual(['ESSAI-2']);
     });
 
+    test('F2 et Suppr ne répondent qu’enfoncés seuls, comme dans le menu et dans la grille', async ({
+        page,
+        request,
+    }) => {
+        await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
+        await open(page, workday(37));
+        const rename = form(page, 'Renommer le favori ESSAI-1');
+
+        await card(page, 'ESSAI-1').focus();
+        for (const modified of ['ControlOrMeta+F2', 'Shift+F2', 'Alt+F2']) {
+            await page.keyboard.press(modified);
+        }
+        await expect(rename).toHaveCount(0);
+        await page.keyboard.press('F2');
+        await expect(rename.getByLabel('Nom')).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(rename).toHaveCount(0);
+        await expect(card(page, 'ESSAI-1')).toBeFocused();
+
+        for (const modified of ['ControlOrMeta+Delete', 'Shift+Delete', 'ControlOrMeta+Backspace', 'Alt+Backspace']) {
+            await page.keyboard.press(modified);
+        }
+        await expect(message(page)).toHaveCount(0);
+        expect(await ours(request)).toEqual(['ESSAI-1', 'ESSAI-2']);
+
+        // La touche Menu ouvre le menu sous la carte, comme Maj+F10.
+        await page.keyboard.press('ContextMenu');
+        const menu = page.getByRole('menu', { name: 'Actions sur le favori ESSAI-1' });
+        await expect(menu.getByRole('menuitem', { name: 'Renommer…' })).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(card(page, 'ESSAI-1')).toBeFocused();
+
+        await page.keyboard.press('Delete');
+        await expect.poll(() => ours(request)).toEqual(['ESSAI-2']);
+        await expect(message(page)).toContainText('ESSAI-1 retiré des favoris');
+    });
+
     test('au clavier, le menu s’ouvre par Maj+F10, et Suppr retire le favori', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
-        await open(page, day(12));
+        await open(page, workday(12));
 
         await card(page, 'ESSAI-1').focus();
         await page.keyboard.press('Shift+F10');
@@ -656,7 +920,7 @@ test.describe('le survol et le curseur', () => {
         request,
     }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
-        await open(page, day(28));
+        await open(page, workday(28));
         const raised = await tokenColor(page, '--bg-raise');
         const pressed = await tokenColor(page, '--bg-press');
         const shadow = (ticket: string) => cardBody(page, ticket).evaluate((node) => getComputedStyle(node).boxShadow);
@@ -710,7 +974,7 @@ test.describe('le survol et le curseur', () => {
 
 test.describe('depuis la grille', () => {
     test('glisser un bloc sur la liste en fait un favori, là où on le lâche', async ({ page, request }) => {
-        const date = day(13);
+        const date = workday(13);
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
         await open(page, date, [{ start: '09:00', end: '10:00', ticket: 'ESSAI-5', comment: 'Revue' }]);
 
@@ -735,14 +999,13 @@ test.describe('depuis la grille', () => {
         expect(await savedDay(request, date)).toEqual([
             { start: '09:00', end: '10:00', kind: 'work', ticket: 'ESSAI-5', comment: 'Revue' },
         ]);
-        await clearDay(request, date);
     });
 
     test('un bloc se soulève dès qu’il quitte la colonne des blocs, et y revenir reprend la sélection', async ({
         page,
         request,
     }) => {
-        const date = day(29);
+        const date = workday(29);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date, [{ start: '09:00', end: '10:00', ticket: 'ESSAI-5', comment: 'Revue' }]);
         const lifted = page.locator('.favorite-drag');
@@ -781,11 +1044,10 @@ test.describe('depuis la grille', () => {
         expect(await savedDay(request, date)).toEqual([
             { start: '09:00', end: '10:00', kind: 'work', ticket: 'ESSAI-5', comment: 'Revue' },
         ]);
-        await clearDay(request, date);
     });
 
     test('Échap lâche un bloc soulevé sans rien poser, même relâché sur la liste', async ({ page, request }) => {
-        const date = day(33);
+        const date = workday(33);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date, [{ start: '09:00', end: '10:00', ticket: 'ESSAI-5' }]);
         const lifted = page.locator('.favorite-drag');
@@ -809,14 +1071,13 @@ test.describe('depuis la grille', () => {
         expect(await ours(request)).toEqual(['ESSAI-1']);
         await expect(selectedSlots(page)).toHaveText(['09:15, ESSAI-5']);
         await expect(page.getByRole('dialog')).toHaveCount(0);
-        await clearDay(request, date);
     });
 
     test('un bloc ajouté le dit, et Annuler comme Ctrl+Z le retirent sans toucher la grille', async ({
         page,
         request,
     }) => {
-        const date = day(30);
+        const date = workday(30);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date, [{ start: '09:00', end: '10:00', ticket: 'ESSAI-5' }]);
         const dropOnList = async () => {
@@ -842,14 +1103,13 @@ test.describe('depuis la grille', () => {
         expect(await savedDay(request, date)).toEqual([
             { start: '09:00', end: '10:00', kind: 'work', ticket: 'ESSAI-5', comment: null },
         ]);
-        await clearDay(request, date);
     });
 
     test('le menu de la grille ajoute en tête de liste le ticket de la sélection, s’il n’y en a qu’un', async ({
         page,
         request,
     }) => {
-        const date = day(31);
+        const date = workday(31);
         await addFavorites(request, 'ESSAI-1');
         await open(page, date, [
             { start: '09:00', end: '10:00', ticket: 'ESSAI-5' },
@@ -877,11 +1137,10 @@ test.describe('depuis la grille', () => {
         await expect.poll(() => ours(request)).toEqual(['ESSAI-5', 'ESSAI-1']);
         await expect(page.getByRole('listbox', { name: 'Créneaux de la journée' })).toBeFocused();
         expect(await savedDay(request, date)).toHaveLength(3);
-        await clearDay(request, date);
     });
 
     test('un ticket déjà en favori grise « Ajouter aux favoris »', async ({ page, request }) => {
-        const date = day(32);
+        const date = workday(32);
         await addFavorites(request, 'ESSAI-5');
         await open(page, date, [{ start: '09:00', end: '10:00', ticket: 'ESSAI-5' }]);
 
@@ -891,11 +1150,10 @@ test.describe('depuis la grille', () => {
         await expect(add).toHaveAttribute('aria-disabled', 'true');
         await page.keyboard.press('Escape');
         expect(await ours(request)).toEqual(['ESSAI-5']);
-        await clearDay(request, date);
     });
 
     test('un bloc dont le ticket est déjà en favori y déplace ce favori, sans message', async ({ page, request }) => {
-        const date = day(14);
+        const date = workday(14);
         await addFavorites(request, 'ESSAI-5', 'ESSAI-1', 'ESSAI-2');
         await open(page, date, [{ start: '09:00', end: '10:00', ticket: 'ESSAI-5' }]);
         const lifted = page.locator('.favorite-drag');
@@ -933,7 +1191,6 @@ test.describe('depuis la grille', () => {
         expect(await savedDay(request, date)).toEqual([
             { start: '09:00', end: '10:00', kind: 'work', ticket: 'ESSAI-5', comment: null },
         ]);
-        await clearDay(request, date);
     });
 });
 
@@ -946,11 +1203,11 @@ test.describe('un autre onglet', () => {
         request,
     }) => {
         await addFavorites(request, 'ESSAI-1', 'ESSAI-2', 'ESSAI-3');
-        await open(page, day(15));
+        await open(page, workday(15));
 
         // Un autre onglet retire ESSAI-3 ; celui-ci le montre encore.
         const other = await context.newPage();
-        await other.goto(`/${day(15)}`);
+        await other.goto(`/${workday(15)}`);
         await card(other, 'ESSAI-3').click({ button: 'right' });
         await other.getByRole('menu').getByRole('menuitem', { name: 'Retirer des favoris' }).click();
         await expect.poll(() => ours(request)).toEqual(['ESSAI-1', 'ESSAI-2']);
@@ -963,13 +1220,33 @@ test.describe('un autre onglet', () => {
         await expect.poll(() => shownOurs(page)).toEqual(['ESSAI-1', 'ESSAI-2']);
         expect(await ours(request)).toEqual(['ESSAI-1', 'ESSAI-2']);
     });
+
+    for (const [where, comeBack] of [
+        // Deux fenêtres côte à côte : celle-ci ne s'est jamais cachée, elle reprend la main.
+        ['dans la fenêtre', () => window.dispatchEvent(new Event('focus'))],
+        ['sur l’onglet', () => document.dispatchEvent(new Event('visibilitychange'))],
+    ] as const) {
+        test(`la liste se relit au retour ${where}, qu’un autre a pu changer`, async ({ page, request }) => {
+            await addFavorites(request, 'ESSAI-1', 'ESSAI-2');
+            await open(page, workday(15));
+            await expect.poll(() => shownOurs(page)).toEqual(['ESSAI-1', 'ESSAI-2']);
+
+            // Ailleurs, on en ajoute un ; ici, rien ne bouge avant le retour.
+            await addFavorites(request, 'ESSAI-3');
+            await expect.poll(() => ours(request)).toEqual(['ESSAI-3', 'ESSAI-1', 'ESSAI-2']);
+            expect(await shownOurs(page)).toEqual(['ESSAI-1', 'ESSAI-2']);
+
+            await page.evaluate(comeBack);
+            await expect.poll(() => shownOurs(page)).toEqual(['ESSAI-3', 'ESSAI-1', 'ESSAI-2']);
+        });
+    }
 });
 
 test.describe('la colonne', () => {
     test('se règle de 224 à 360 px par son bord, s’en souvient, et revient à 256 px au double-clic', async ({
         page,
     }) => {
-        await open(page, day(16));
+        await open(page, workday(16));
         const width = async () => (await column(page).boundingBox())?.width;
         const logo = async () =>
             (
@@ -1009,7 +1286,7 @@ test.describe('la colonne', () => {
 
     test('à 224 px, le pied du renommage tient dans son cadre', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1');
-        await open(page, day(19));
+        await open(page, workday(19));
         await page.setViewportSize({ width: 1024, height: 720 });
 
         await card(page, 'ESSAI-1').dblclick();
@@ -1027,7 +1304,7 @@ test.describe('la colonne', () => {
         await page.addInitScript(() => {
             localStorage.setItem('daytrack.side-width', '340');
         });
-        await open(page, day(17));
+        await open(page, workday(17));
         expect((await column(page).boundingBox())?.width).toBe(340);
 
         await page.setViewportSize({ width: 1024, height: 720 });
@@ -1037,21 +1314,17 @@ test.describe('la colonne', () => {
 
     test('le formulaire et le menu ouverts passent le contrôle d’accessibilité', async ({ page, request }) => {
         await addFavorites(request, 'ESSAI-1');
-        await open(page, day(18));
+        await open(page, workday(18));
         await page.clock.resume();
-        const axe = () =>
-            new AxeBuilder({ page })
-                .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                .analyze();
 
         await addButton(page).click();
-        expect((await axe()).violations).toEqual([]);
+        await expectAccessible(page);
         await page.keyboard.press('Escape');
 
         await card(page, 'ESSAI-1').click({ button: 'right' });
         await expect(page.getByRole('menu')).toBeVisible();
         // L'infobulle du +, que le curseur rendu par Échap a ouverte, finit de s'effacer.
         await expect(page.getByRole('tooltip')).toHaveCount(0);
-        expect((await axe()).violations).toEqual([]);
+        await expectAccessible(page);
     });
 });

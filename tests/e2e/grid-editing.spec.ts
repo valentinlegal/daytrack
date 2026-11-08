@@ -1,7 +1,9 @@
 import type { Locator, Page } from '@playwright/test';
 
-import { clearDay, type Entry, freezeTime, startTimeAt, writeDay } from './day';
+import { daysFrom, type Entry, freezeTime, startTimeAt, writeDay } from './day';
 import {
+    blocks,
+    clickOutside,
     clickSlot,
     doubleClickSlot,
     dragSlots,
@@ -10,8 +12,10 @@ import {
     menu,
     message,
     NEAR_LEFT,
+    openDay,
     rightClickSlot,
     savedDay,
+    selectedSlots,
     slot,
     slotPoint,
     slots,
@@ -30,11 +34,7 @@ import { expect, refusedWith, test, VIEWPORTS } from './fixtures';
  * dimanche est fermé à la saisie : un parcours qui saisit sur une journée vide, ou qui en
  * lit l'objectif, prend un jour de semaine.
  */
-function day(index: number): string {
-    const date = new Date(Date.UTC(2025, 8, 8 + index));
-
-    return `${String(date.getUTCFullYear())}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
-}
+const day = daysFrom('2025-09-08');
 
 const MORNING: Entry[] = [
     { start: '09:15', end: '09:30', ticket: 'OPS-12', comment: 'Daily' },
@@ -42,15 +42,6 @@ const MORNING: Entry[] = [
     { start: '11:15', end: '11:45', ticket: 'SHOP-519', comment: 'Reproduction' },
     { start: '12:30', end: '13:30' },
 ];
-
-async function open(page: Page, date: string) {
-    await page.goto(`/${date}`);
-    await expect(page.getByRole('group', { name: 'Chiffres du jour' })).toBeVisible();
-}
-
-function blocks(page: Page) {
-    return page.getByRole('list', { name: 'Saisies du jour' }).getByRole('listitem');
-}
 
 /** Le commentaire de Modifier la sélection, où l'on écrit le nouveau. */
 function selectionComment(page: Page): Locator {
@@ -70,7 +61,7 @@ test.describe('la fenêtre Nouveau ticket, refusée', () => {
     test('garde la fenêtre et la saisie sur un refus, le message sous son champ', async ({ page, request }) => {
         const date = day(3);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '10:00');
         const window = ticketWindow(page);
@@ -94,7 +85,6 @@ test.describe('la fenêtre Nouveau ticket, refusée', () => {
         await expect(window).toBeHidden();
         await expect(blocks(page)).toHaveText([/SHOP-482.*Revue/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('garde la sélection qu’elle remplace quand elle prend pour elle le clic dans les favoris', async ({
@@ -103,7 +93,7 @@ test.describe('la fenêtre Nouveau ticket, refusée', () => {
     }) => {
         const date = day(32);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const selected = slots(page).getByRole('option', { selected: true });
 
         // Une lettre tapée sur un bloc ouvre Nouveau ticket sur la sélection exacte.
@@ -127,7 +117,6 @@ test.describe('la fenêtre Nouveau ticket, refusée', () => {
         await expect(window).toHaveCount(0);
         await expect(selected).toHaveCount(3);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -135,12 +124,14 @@ test.describe('la fenêtre Nouveau ticket', () => {
     test('s’ouvre au double-clic sur un créneau vide et enregistre à Entrée', async ({ page, request }) => {
         const date = day(0);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '15:15');
         const window = ticketWindow(page);
         await expect(window).toBeVisible();
         await expect(window).toContainText('Lundi 8 septembre de 15:15 à 15:30');
+        // Le lecteur d'écran lit le sous-titre à l'ouverture, après le titre.
+        await expect(window).toHaveAccessibleDescription('Lundi 8 septembre de 15:15 à 15:30');
         await expect(window.getByLabel('Ticket')).toBeFocused();
 
         await window.getByLabel('Ticket').fill('shop-501');
@@ -153,7 +144,6 @@ test.describe('la fenêtre Nouveau ticket', () => {
         // L'ajout d'un seul bloc se voit dans la grille : pas de message.
         await expect(message(page)).toHaveCount(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('s’ouvre après un glisser à une lettre, à Entrée ou au menu, pour toute la plage', async ({
@@ -162,7 +152,7 @@ test.describe('la fenêtre Nouveau ticket', () => {
     }) => {
         const date = day(1);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const window = ticketWindow(page);
 
         // Une lettre : Nouveau ticket sur la plage, la lettre déjà écrite dans le champ.
@@ -193,6 +183,10 @@ test.describe('la fenêtre Nouveau ticket', () => {
         await page.getByRole('menuitem', { name: 'Nouveau ticket…' }).click();
         await expect(window).toContainText('de 16:00 à 16:30');
         await page.keyboard.press('Escape');
+        // La fenêtre fermée rend le curseur à la grille un instant plus tard, et la fait défiler
+        // jusqu'à lui : un glisser parti avant se mesurerait sur une grille qui bouge encore.
+        await expect(window).toHaveCount(0);
+        await expect(slots(page)).toBeFocused();
 
         // Sur une partie d'un bloc, la lettre remplace la plage exacte, et le dit.
         await dragSlots(page, '09:30', '09:45');
@@ -212,7 +206,6 @@ test.describe('la fenêtre Nouveau ticket', () => {
             { start: '15:00', end: '15:45', ticket: 'OPS-13', comment: null },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('enregistre au clic à côté, et ferme sans rien écrire à la croix, à Échap et à Annuler', async ({
@@ -221,7 +214,7 @@ test.describe('la fenêtre Nouveau ticket', () => {
     }) => {
         const date = day(2);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         for (const close of ['Fermer', 'Escape', 'Annuler'] as const) {
             await doubleClickSlot(page, '10:00');
@@ -257,13 +250,12 @@ test.describe('la fenêtre Nouveau ticket', () => {
         await page.keyboard.press('Escape');
 
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('pose une pause, qui ne compte pas dans le temps travaillé', async ({ page, request }) => {
         const date = day(4);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await dragSlots(page, '12:30', '13:15');
         await page.keyboard.press('Enter');
@@ -271,13 +263,12 @@ test.describe('la fenêtre Nouveau ticket', () => {
         await expect(blocks(page)).toHaveText([/Pause.*1h00/]);
         await expect(page.getByRole('group', { name: 'Chiffres du jour' })).toContainText('0h00');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('n’écrit qu’une fois sur une Entrée répétée ou un double clic', async ({ page, request }) => {
         const date = day(7);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
         const writes: string[] = [];
         page.on('request', (sent) => {
             if (sent.method() === 'PATCH') {
@@ -308,13 +299,12 @@ test.describe('la fenêtre Nouveau ticket', () => {
         await expect(blocks(page)).toHaveCount(2);
         expect(writes).toHaveLength(2);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('saisit aux bornes de la journée, 07:00 et 19:45', async ({ page, request }) => {
         const date = day(8);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         for (const [time, ticket] of [
             ['07:00', 'OPS-1'],
@@ -330,22 +320,17 @@ test.describe('la fenêtre Nouveau ticket', () => {
             { start: '19:45', end: '20:00', ticket: 'OPS-2' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
 test.describe('un glisser sur la grille', () => {
-    function selected(page: Page): Locator {
-        return slots(page).getByRole('option', { selected: true });
-    }
-
     test('ne fait que sélectionner, sur des créneaux vides comme sur des blocs, copié ou non', async ({
         page,
         request,
     }) => {
         const date = day(91);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const writes: string[] = [];
         page.on('request', (sent) => {
             if (sent.method() === 'PATCH') {
@@ -355,26 +340,25 @@ test.describe('un glisser sur la grille', () => {
 
         // Sur des créneaux vides, rien de copié.
         await dragSlots(page, '14:00', '14:45');
-        await expect(selected(page)).toHaveText([/^14:00/, /^14:15/, /^14:30/, /^14:45/]);
+        await expect(selectedSlots(page)).toHaveText([/^14:00/, /^14:15/, /^14:30/, /^14:45/]);
         await expect(page.getByRole('dialog')).toHaveCount(0);
         await expect(slots(page)).toBeFocused();
 
         // Sur des blocs.
         await dragSlots(page, '09:30', '10:00');
-        await expect(selected(page)).toHaveText([/^09:30/, /^09:45/, /^10:00/]);
+        await expect(selectedSlots(page)).toHaveText([/^09:30/, /^09:45/, /^10:00/]);
         await expect(page.getByRole('dialog')).toHaveCount(0);
 
         // Sur des créneaux vides, un ticket copié.
         await clickSlot(page, '11:15');
         await page.keyboard.press('ControlOrMeta+C');
         await dragSlots(page, '16:00', '16:30');
-        await expect(selected(page)).toHaveText([/^16:00/, /^16:15/, /^16:30/]);
+        await expect(selectedSlots(page)).toHaveText([/^16:00/, /^16:15/, /^16:30/]);
         await expect(page.getByRole('dialog')).toHaveCount(0);
 
         expect(writes).toHaveLength(0);
         expect(await savedDay(request, date)).toMatchObject(MORNING);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('colle sur la plage un créneau copié la veille, et Ctrl/⌘+Z la vide d’un coup', async ({ page, request }) => {
@@ -382,7 +366,7 @@ test.describe('un glisser sur la grille', () => {
         const date = day(93);
         await writeDay(request, before, [{ start: '09:00', end: '10:00', ticket: 'SHOP-482', comment: 'Revue' }]);
         await writeDay(request, date, []);
-        await open(page, before);
+        await openDay(page, before);
 
         // Un clic sur un bloc copie un seul créneau, qui remplit toute la plage.
         await clickSlot(page, '09:15');
@@ -397,7 +381,7 @@ test.describe('un glisser sur la grille', () => {
         await expect(blocks(page)).toHaveText([/De 15:00 à 15:45.*SHOP-482.*Revue.*0h45/]);
         // Sur des créneaux vides, le collage ajoute : il se voit, sans message.
         await expect(message(page)).toHaveCount(0);
-        await expect(selected(page)).toHaveText([/^15:00/, /^15:15/, /^15:30/]);
+        await expect(selectedSlots(page)).toHaveText([/^15:00/, /^15:15/, /^15:30/]);
         await expect
             .poll(() => savedDay(request, date))
             .toMatchObject([{ start: '15:00', end: '15:45', ticket: 'SHOP-482', comment: 'Revue' }]);
@@ -412,8 +396,6 @@ test.describe('un glisser sur la grille', () => {
         expect(await savedDay(request, before)).toMatchObject([
             { start: '09:00', end: '10:00', ticket: 'SHOP-482', comment: 'Revue' },
         ]);
-        await clearDay(request, before);
-        await clearDay(request, date);
     });
 
     test('colle en entier un groupe du matin sur un glisser de l’après-midi, et dit ce qu’il remplace', async ({
@@ -422,7 +404,7 @@ test.describe('un glisser sur la grille', () => {
     }) => {
         const date = day(94);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         // Un groupe sélectionné en glissant, collé sur une plage plus courte : il se colle en
         // entier à partir de son premier créneau, et la sélection devient ce qui a été collé.
@@ -436,7 +418,7 @@ test.describe('un glisser sur la grille', () => {
             /De 14:15 à 14:45/,
         ]);
         await expect(message(page)).toHaveCount(0);
-        await expect(selected(page)).toHaveText([/^14:00/, /^14:15/, /^14:30/]);
+        await expect(selectedSlots(page)).toHaveText([/^14:00/, /^14:15/, /^14:30/]);
         await expectGridMatchesBase(page, request, date);
 
         // Collé par-dessus un bloc, il le dit, et Ctrl/⌘+Z le rend.
@@ -448,7 +430,6 @@ test.describe('un glisser sur la grille', () => {
         await page.keyboard.press('ControlOrMeta+Z');
         await expect(blocks(page).filter({ hasText: 'SHOP-519' })).toHaveText([/De 11:15 à 11:45/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -456,11 +437,12 @@ test.describe('la fenêtre Modifier le ticket', () => {
     test('s’ouvre sur le bloc entier, l’entoure, et modifie tous ses quarts d’heure', async ({ page, request }) => {
         const date = day(10);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '10:30');
         const window = ticketWindow(page, 'Modifier le ticket');
         await expect(window).toContainText('Jeudi 18 septembre de 09:30 à 11:15');
+        await expect(window).toHaveAccessibleDescription('Jeudi 18 septembre de 09:30 à 11:15');
         await expect(window.getByLabel('Ticket')).toHaveValue('SHOP-482');
         await expect(window.getByLabel('Commentaire')).toHaveValue('Mapping des colonnes');
         await expect(blocks(page).filter({ hasText: 'SHOP-482' })).toHaveClass(/edit-ring/);
@@ -470,13 +452,12 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await expect(blocks(page).filter({ hasText: 'SHOP-482' })).toHaveText([/De 09:30 à 11:15.*Tests.*1h45/]);
         await expect(message(page)).toHaveCount(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('supprime un bloc, le dit, et l’annulation le rend', async ({ page, request }) => {
         const date = day(11);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '11:30');
         await ticketWindow(page, 'Modifier le ticket').getByRole('button', { name: 'Supprimer' }).click();
@@ -484,17 +465,30 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await expect(message(page)).toHaveText(/SHOP-519 supprimé/);
         await expectGridMatchesBase(page, request, date);
 
+        // Le message a vu la fenêtre ouverte : son « Annuler » n'en enregistre pas une seconde
+        // fois ce qu'elle montrait, il défait la suppression, et c'est tout.
+        const writes: string[] = [];
+        page.on('request', (sent) => {
+            if (sent.method() === 'PATCH') {
+                writes.push(sent.url());
+            }
+        });
         await message(page).getByRole('button', { name: 'Annuler' }).click();
+        await expect(page.getByRole('dialog')).toHaveCount(0);
         await expect(blocks(page).filter({ hasText: 'SHOP-519' })).toHaveText([/De 11:15 à 11:45/]);
         await expect(message(page)).toHaveCount(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
+        expect(await savedDay(request, date)).toContainEqual(
+            expect.objectContaining({ start: '11:15', end: '11:45', ticket: 'SHOP-519' }),
+        );
+        await expect(page.getByRole('dialog')).toHaveCount(0);
+        expect(writes).toHaveLength(1);
     });
 
     test('supprime un bloc qu’on vide', async ({ page, request }) => {
         const date = day(12);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '09:15');
         const window = ticketWindow(page, 'Modifier le ticket');
@@ -504,13 +498,12 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await expect(blocks(page).filter({ hasText: 'OPS-12' })).toHaveCount(0);
         await expect(message(page)).toHaveText(/OPS-12 supprimé/);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('convertit en pause, et ouvre une pause comme une pause', async ({ page, request }) => {
         const date = day(13);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '11:15');
         await ticketWindow(page, 'Modifier le ticket').getByRole('button', { name: 'Convertir en pause' }).click();
@@ -525,13 +518,12 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await pause.getByLabel('Ticket').press('Enter');
         await expect(blocks(page).filter({ hasText: 'OPS-21' })).toHaveText([/De 12:30 à 13:30/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('porte la corbeille et la tasse en icônes seules, sur une ligne', async ({ page, request }) => {
         const date = day(66);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '10:00');
         const window = ticketWindow(page, 'Modifier le ticket');
@@ -547,9 +539,8 @@ test.describe('la fenêtre Modifier le ticket', () => {
             const icon = window.getByRole('button', { name });
             await expect(icon).toHaveText('');
             await expect(icon).not.toHaveAttribute('title');
-            await glideTo(page, icon);
             // L'infobulle d'avant s'efface en fondu pendant que la suivante paraît.
-            await expect(page.getByRole('tooltip').filter({ hasText: name })).toBeVisible();
+            await glideTo(page, icon, page.getByRole('tooltip').filter({ hasText: name }));
         }
         await page.mouse.move(0, 0);
         const footer = (await window.getByRole('button').all()).slice(1);
@@ -557,17 +548,17 @@ test.describe('la fenêtre Modifier le ticket', () => {
         expect(new Set(tops).size).toBe(1);
 
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 
     test('grise « Enregistrer » d’une pause tant qu’aucun ticket n’y est tapé', async ({ page, request }) => {
         const date = day(67);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '13:00');
         const pause = ticketWindow(page, 'Modifier la pause');
         const save = pause.getByRole('button', { name: 'Enregistrer' });
+        await expect(pause).toHaveAccessibleDescription('Vendredi 14 novembre de 12:30 à 13:30');
         expect(await buttonNames(pause)).toEqual(['Fermer', 'Supprimer', 'Annuler', 'Enregistrer']);
         await expect(save).toHaveAttribute('aria-disabled', 'true');
 
@@ -594,7 +585,6 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await save.click();
         await expect(blocks(page).filter({ hasText: 'OPS-21' })).toHaveText([/De 12:30 à 13:30/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -605,7 +595,7 @@ test.describe('le champ Ticket', () => {
     }) => {
         const date = day(37);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '10:00');
         const ticket = ticketWindow(page).getByLabel('Ticket');
@@ -626,13 +616,12 @@ test.describe('le champ Ticket', () => {
         await ticket.press('Enter');
         await expect(blocks(page)).toHaveText([/SHOP-519/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('dit une forme refusée en quittant le champ, jamais pendant la frappe', async ({ page, request }) => {
         const date = day(38);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '10:00');
         const window = ticketWindow(page);
@@ -666,7 +655,6 @@ test.describe('le champ Ticket', () => {
         await window.getByRole('button', { name: 'Annuler' }).click();
         await expect(window).toHaveCount(0);
         expect(await savedDay(request, date)).toEqual([]);
-        await clearDay(request, date);
     });
 });
 
@@ -677,7 +665,7 @@ test.describe('le champ Commentaire', () => {
     }) => {
         const date = day(70);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '10:00');
         const window = ticketWindow(page);
@@ -708,7 +696,6 @@ test.describe('le champ Commentaire', () => {
         await expect(window).toBeHidden();
         await expect(blocks(page)).toHaveText([/SHOP-482.*Revue de code/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -716,7 +703,7 @@ test.describe('la sélection, le menu et les raccourcis', () => {
     test('se compose à la souris : clic, Maj+clic, Ctrl/⌘+clic', async ({ page, request }) => {
         const date = day(20);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         // Un clic sur un bloc ne sélectionne que le quart d'heure cliqué.
         await clickSlot(page, '10:00');
@@ -732,13 +719,43 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(slots(page)).not.toHaveAttribute('aria-activedescendant');
         await clickSlot(page, '14:15', ['ControlOrMeta']);
         await expect(slots(page)).toHaveAttribute('aria-activedescendant', 'creneau-1415');
-        await clearDay(request, date);
+    });
+
+    test('au clavier, le créneau se montre avec la marge de la grille, jusqu’à 07:00 et 19:45', async ({
+        page,
+        request,
+    }) => {
+        const date = day(56);
+        await writeDay(request, date, []);
+        await page.setViewportSize({ width: 1024, height: 720 });
+        await openDay(page, date);
+        const scroller = page.getByRole('region', { name: 'Grille de la journée' });
+        const hidden = () =>
+            scroller.evaluate((element) => ({
+                above: element.scrollTop,
+                below: element.scrollHeight - element.clientHeight - element.scrollTop,
+            }));
+
+        // En haut, la grille remonte jusqu'au bout : l'heure de 07:00 se lit entière sous la barre.
+        await clickSlot(page, '08:00');
+        for (let step = 0; step < 4; step += 1) {
+            await page.keyboard.press('ArrowUp');
+        }
+        await expect(slots(page)).toHaveAttribute('aria-activedescendant', 'creneau-0700');
+        await expect.poll(async () => (await hidden()).above).toBe(0);
+
+        // En bas, la marge sous 19:45 se montre aussi, au trait du bas près.
+        for (let step = 0; step < 51; step += 1) {
+            await page.keyboard.press('ArrowDown');
+        }
+        await expect(slots(page)).toHaveAttribute('aria-activedescendant', 'creneau-1945');
+        await expect.poll(async () => (await hidden()).below).toBeLessThanOrEqual(1);
     });
 
     test('se parcourt au clavier et ouvre Nouveau ticket sur une plage', async ({ page, request }) => {
         const date = day(21);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         // La grille s'ouvre sur 08:00 : le clavier y commence.
         await slots(page).focus();
@@ -765,13 +782,12 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(slots(page).getByRole('option', { selected: true })).toHaveCount(0);
         expect(start).toMatch(/^creneau-08/);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('copie, colle et dit ce qui a été remplacé', async ({ page, request }) => {
         const date = day(22);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '09:15');
         await clickSlot(page, '09:45', ['Shift']);
@@ -794,13 +810,12 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await page.keyboard.press('ControlOrMeta+Z');
         await expect(blocks(page).filter({ hasText: 'SHOP-519' })).toHaveText([/De 11:15 à 11:45/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('ne colle rien qui dépasserait 20:00, et le dit', async ({ page, request }) => {
         const date = day(23);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '09:30');
         await clickSlot(page, '10:00', ['Shift']);
@@ -811,13 +826,12 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(message(page)).toHaveText(/Rien n'est collé, le groupe dépasserait 20:00\./);
         await expect(message(page).getByRole('button', { name: 'Annuler' })).toHaveCount(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('efface, annule et rétablit', async ({ page, request }) => {
         const date = day(24);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '11:00');
         await clickSlot(page, '11:30', ['Shift']);
@@ -841,13 +855,12 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await page.keyboard.press('Delete');
         await expect(message(page)).toHaveText(/OPS-12 effacé/);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('propose au menu ce qui sert, grise le reste, et s’ouvre au clavier', async ({ page, request }) => {
         const date = day(25);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '13:30');
         await clickSlot(page, '15:00', ['Shift']);
@@ -911,7 +924,6 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(slot(page, '09:30')).toHaveText('09:30, SHOP-482, Mapping des colonnes');
         await expect(slots(page)).toBeFocused();
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('menu ouvert, le raccourci écrit en face d’un choix le fait, et le menu se ferme', async ({
@@ -920,7 +932,7 @@ test.describe('la sélection, le menu et les raccourcis', () => {
     }) => {
         const date = day(87);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const menu = page.getByRole('menu', { name: 'Actions sur la sélection' });
 
         // Ctrl/⌘+C copie, puis Ctrl/⌘+V colle, chacun menu ouvert.
@@ -946,7 +958,45 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(menu).toBeVisible();
         await page.keyboard.press('Escape');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
+    });
+
+    test('F2 et Suppr ne répondent qu’enfoncés seuls, comme dans le menu et dans les favoris', async ({
+        page,
+        request,
+    }) => {
+        const date = day(116);
+        await writeDay(request, date, MORNING);
+        await openDay(page, date);
+        const window = ticketWindow(page, 'Modifier la sélection');
+
+        await clickSlot(page, '09:30');
+        for (const modified of ['ControlOrMeta+F2', 'Shift+F2', 'Alt+F2']) {
+            await page.keyboard.press(modified);
+        }
+        await expect(window).toHaveCount(0);
+        await expect(message(page)).toHaveCount(0);
+        await page.keyboard.press('F2');
+        await expect(window).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(window).toHaveCount(0);
+        await expect(slots(page)).toBeFocused();
+
+        for (const modified of ['ControlOrMeta+Delete', 'Shift+Delete', 'ControlOrMeta+Backspace', 'Alt+Backspace']) {
+            await page.keyboard.press(modified);
+        }
+        await expect(slot(page, '09:30')).toHaveText('09:30, SHOP-482, Mapping des colonnes');
+        await page.keyboard.press('Delete');
+        await expect(message(page)).toHaveText(/SHOP-482 effacé/);
+        await expect(slot(page, '09:30')).toHaveText('09:30, vide');
+
+        // La touche Menu ouvre le menu sur le créneau, comme Maj+F10.
+        await page.mouse.move(0, 0);
+        await page.keyboard.press('ContextMenu');
+        const menu = page.getByRole('menu', { name: 'Actions sur la sélection' });
+        await expect(menu).toContainText('1 créneau, 0h15');
+        await page.keyboard.press('Escape');
+        await expect(menu).toHaveCount(0);
+        await expectGridMatchesBase(page, request, date);
     });
 
     test('sur Mac, le menu écrit ⌘C et ⌫', async ({ page, request }) => {
@@ -955,7 +1005,7 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await page.addInitScript(() => {
             Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
         });
-        await open(page, date);
+        await openDay(page, date);
 
         await rightClickSlot(page, '09:15');
         const menu = page.getByRole('menu', { name: 'Actions sur la sélection' });
@@ -966,13 +1016,12 @@ test.describe('la sélection, le menu et les raccourcis', () => {
             'Delete Backspace',
         );
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 
     test('coupe au clavier et au menu, puis colle ailleurs', async ({ page, request }) => {
         const date = day(27);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '11:15');
         await clickSlot(page, '11:30', ['Shift']);
@@ -994,7 +1043,6 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(slot(page, '16:00')).toHaveText('16:00, OPS-12, Daily');
         await expect(slot(page, '16:30')).toHaveText('16:30, SHOP-482, Mapping des colonnes');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('s’efface à Échap d’où que soit le curseur, et au clic dans les favoris ou le récapitulatif', async ({
@@ -1004,7 +1052,7 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         const date = day(29);
         await writeDay(request, date, MORNING);
         await page.setViewportSize({ width: 1440, height: 900 });
-        await open(page, date);
+        await openDay(page, date);
         const selected = slots(page).getByRole('option', { selected: true });
         const favorites = page.getByRole('complementary', { name: 'Favoris et calendrier' });
         const recap = page.getByRole('complementary', { name: 'Récapitulatif' });
@@ -1066,7 +1114,6 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(page.getByRole('list', { name: 'Saisies du jour' })).not.toContainText('OPS-7');
 
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('ferme à Échap le récapitulatif posé sur la grille avant de s’effacer, puis repart du créneau quitté', async ({
@@ -1076,7 +1123,7 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         const date = day(31);
         await writeDay(request, date, MORNING);
         await page.setViewportSize({ width: 1024, height: 720 });
-        await open(page, date);
+        await openDay(page, date);
         const selected = slots(page).getByRole('option', { selected: true });
         const recap = page.locator('#recap');
 
@@ -1097,7 +1144,6 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await page.keyboard.press('ArrowDown');
         await expect(selected).toHaveText(['10:15, SHOP-482, Mapping des colonnes']);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('ne s’entoure pas après Échap sur une sélection faite à la souris, mais au clavier si', async ({
@@ -1106,7 +1152,7 @@ test.describe('la sélection, le menu et les raccourcis', () => {
     }) => {
         const date = day(33);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const selected = slots(page).getByRole('option', { selected: true });
         const outline = () => slots(page).evaluate((element) => getComputedStyle(element).outlineStyle);
         const cleared = async (ring: 'none' | 'solid') => {
@@ -1170,7 +1216,6 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await expect(selected).toHaveText(['10:15, SHOP-482, Mapping des colonnes']);
         await cleared('solid');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('ne prend au premier Maj+clic ou Ctrl/⌘+clic que le créneau cliqué', async ({ page, request }) => {
@@ -1181,17 +1226,16 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         // Le clic donne le curseur à la grille sans qu'elle en pose un de son côté, en haut
         // de la vue, comme le ferait une arrivée au clavier.
         for (const modifier of ['Shift', 'ControlOrMeta'] as const) {
-            await open(page, date);
+            await openDay(page, date);
             await clickSlot(page, '10:00', [modifier]);
             await expect(selected).toHaveText(['10:00, SHOP-482, Mapping des colonnes']);
         }
-        await clearDay(request, date);
     });
 
     test('garde un anneau sur la grille au clavier, même sans sélection', async ({ page, request }) => {
         const date = day(28);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await slots(page).focus();
         await page.keyboard.press('ArrowDown');
@@ -1201,13 +1245,12 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         await page.keyboard.press('Escape');
         await expect(slots(page)).not.toHaveAttribute('aria-activedescendant');
         expect(await outline()).toBe('solid');
-        await clearDay(request, date);
     });
 
     test('convertit en pause une plage vide par le menu', async ({ page, request }) => {
         const date = day(14);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '12:00');
         await clickSlot(page, '12:45', ['Shift']);
@@ -1217,7 +1260,6 @@ test.describe('la sélection, le menu et les raccourcis', () => {
         // Rien n'a disparu : pas de message.
         await expect(message(page)).toHaveCount(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -1237,7 +1279,7 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
     }) => {
         const date = day(71);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '10:00');
         await clickSlot(page, '10:15', ['Shift']);
@@ -1291,7 +1333,6 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
         await message(page).getByRole('button', { name: 'Annuler' }).click();
         await expect(slot(page, '11:30')).toHaveText('11:30, SHOP-519, Reproduction');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('une lettre tapée ouvre Nouveau ticket sur la sélection, la touche écrite dans le champ', async ({
@@ -1300,7 +1341,7 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
     }) => {
         const date = day(72);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const writes: string[] = [];
         page.on('request', (sent) => {
             if (sent.method() === 'PATCH') {
@@ -1349,13 +1390,12 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
 
         expect(writes).toHaveLength(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('n’écrit qu’une fois sur une Entrée répétée', async ({ page, request }) => {
         const date = day(73);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const writes: string[] = [];
         page.on('request', (sent) => {
             if (sent.method() === 'PATCH') {
@@ -1374,7 +1414,6 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
         await expect(page.getByRole('dialog')).toHaveCount(0);
         expect(writes).toHaveLength(1);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('remplace aux bornes de la journée, 07:00 et 19:45, la fenêtre où il y a la place', async ({
@@ -1386,7 +1425,7 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
             { start: '07:00', end: '07:30', ticket: 'OPS-1' },
             { start: '19:30', end: '20:00', ticket: 'OPS-2' },
         ]);
-        await open(page, date);
+        await openDay(page, date);
 
         // À 07:00, pas de place au-dessus : la fenêtre passe dessous.
         await clickSlot(page, '07:00');
@@ -1414,7 +1453,6 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
             { start: '19:45', end: '20:00', ticket: 'SHOP-2' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('remplace une sélection en plusieurs morceaux, ticket et pause, et l’annule d’un coup', async ({
@@ -1423,7 +1461,7 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
     }) => {
         const date = day(75);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '09:45');
         await clickSlot(page, '12:45', ['ControlOrMeta']);
@@ -1431,6 +1469,7 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
         await page.getByRole('menuitem', { name: 'Nouveau ticket…' }).click();
         const window = ticketWindow(page);
         await expect(window).toContainText(/, 2 créneaux, 0h30/);
+        await expect(window).toHaveAccessibleDescription(/, 2 créneaux, 0h30$/);
         await expect(note(window)).toHaveText('Remplace SHOP-482 et la pause sur ces 30 minutes.');
         await expect(page.locator('.bg-sel-fill')).toHaveCount(2);
         await window.getByLabel('Ticket').fill('OPS-5');
@@ -1444,13 +1483,12 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
         await expect(slot(page, '09:45')).toHaveText('09:45, SHOP-482, Mapping des colonnes');
         await expect(slot(page, '12:45')).toHaveText('12:45, pause');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('« Pause » convertit la sélection, et le dit', async ({ page, request }) => {
         const date = day(76);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '11:15');
         await page.keyboard.type('O');
@@ -1459,7 +1497,6 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
         await expect(slot(page, '11:15')).toHaveText('11:15, pause');
         await expect(slot(page, '11:30')).toHaveText('11:30, SHOP-519, Reproduction');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -1474,7 +1511,7 @@ test.describe('modifier la sélection', () => {
     }) => {
         const date = day(9);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '10:00');
         await clickSlot(page, '10:15', ['Shift']);
@@ -1487,6 +1524,7 @@ test.describe('modifier la sélection', () => {
 
         const window = ticketWindow(page, 'Modifier la sélection');
         await expect(window).toContainText('Mercredi 17 septembre de 10:00 à 10:30');
+        await expect(window).toHaveAccessibleDescription('Mercredi 17 septembre de 10:00 à 10:30');
         // Le curseur va au champ Ticket, comme à la création et au double-clic, et la phrase
         // sous les champs le décrit.
         const ticket = window.getByLabel('Ticket');
@@ -1537,7 +1575,6 @@ test.describe('modifier la sélection', () => {
         await message(page).getByRole('button', { name: 'Annuler' }).click();
         await expect(slot(page, '10:45')).toHaveText('10:45, SHOP-482, Mapping des colonnes');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('à F2, s’ouvre au milieu de la colonne ; ailleurs que sur un ticket et un commentaire, dit pourquoi rien ne s’ouvre', async ({
@@ -1549,7 +1586,7 @@ test.describe('modifier la sélection', () => {
             ...MORNING,
             { start: '14:00', end: '14:30', ticket: 'SHOP-482', comment: 'Tests' },
         ]);
-        await open(page, date);
+        await openDay(page, date);
         const writes: string[] = [];
         page.on('request', (sent) => {
             if (sent.method() === 'PATCH') {
@@ -1627,7 +1664,6 @@ test.describe('modifier la sélection', () => {
 
         expect(writes).toHaveLength(0);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('n’enregistre rien quand rien n’a changé, et une seule fois sur une Entrée répétée', async ({
@@ -1636,7 +1672,7 @@ test.describe('modifier la sélection', () => {
     }) => {
         const date = day(16);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         const writes: string[] = [];
         page.on('request', (sent) => {
             if (sent.method() === 'PATCH') {
@@ -1659,7 +1695,7 @@ test.describe('modifier la sélection', () => {
         await expect(slots(page)).toBeFocused();
         await page.keyboard.press('F2');
         await window.getByLabel('Commentaire').fill('  Mapping   des colonnes ');
-        await page.mouse.click(5, 5);
+        await clickOutside(page);
         await expect(window).toHaveCount(0);
         await expect(message(page)).toHaveCount(0);
         expect(writes).toHaveLength(0);
@@ -1676,7 +1712,6 @@ test.describe('modifier la sélection', () => {
         await expect(page.getByRole('dialog')).toHaveCount(0);
         expect(writes).toHaveLength(1);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('efface ou convertit la sélection seule, remplace par un autre ticket, et le dit', async ({
@@ -1685,15 +1720,14 @@ test.describe('modifier la sélection', () => {
     }) => {
         const date = day(17);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         // La corbeille, nommée « Effacer » comme dans le menu.
         await clickSlot(page, '10:00');
         await page.keyboard.press('F2');
         const window = ticketWindow(page, 'Modifier la sélection');
         const trash = window.getByRole('button', { name: 'Effacer' });
-        await glideTo(page, trash);
-        await expect(page.getByRole('tooltip').filter({ hasText: 'Effacer' })).toBeVisible();
+        await glideTo(page, trash, page.getByRole('tooltip').filter({ hasText: 'Effacer' }));
         await trash.click();
         await expect(message(page)).toHaveText(/^SHOP-482 effacé/);
         await expect(slot(page, '10:00')).toHaveText('10:00, vide');
@@ -1734,7 +1768,6 @@ test.describe('modifier la sélection', () => {
             { start: '12:30', end: '13:30', kind: 'pause' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('sur un bloc entier, fait ce que ferait Modifier le ticket, sans phrase ni message', async ({
@@ -1743,7 +1776,7 @@ test.describe('modifier la sélection', () => {
     }) => {
         const date = day(18);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '11:15');
         await clickSlot(page, '11:30', ['Shift']);
@@ -1770,13 +1803,12 @@ test.describe('modifier la sélection', () => {
         await expect(window).toContainText(/, 2 créneaux, 0h30/);
         await expect(note(window)).toHaveCount(0);
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 
     test('modifie une sélection en plusieurs morceaux d’un coup, et l’annule d’un coup', async ({ page, request }) => {
         const date = day(39);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '09:45');
         await clickSlot(page, '10:45', ['ControlOrMeta']);
@@ -1798,7 +1830,6 @@ test.describe('modifier la sélection', () => {
         await expect(blocks(page)).toHaveCount(4);
         await expect(slot(page, '09:45')).toHaveText('09:45, SHOP-482, Mapping des colonnes');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('modifie aux bornes de la journée, 07:00 et 19:45, la fenêtre où il y a la place', async ({
@@ -1810,7 +1841,7 @@ test.describe('modifier la sélection', () => {
             { start: '07:00', end: '07:30', ticket: 'OPS-1', comment: 'Matin' },
             { start: '19:30', end: '20:00', ticket: 'OPS-2', comment: 'Soir' },
         ]);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '07:00');
         await page.keyboard.press('F2');
@@ -1837,7 +1868,6 @@ test.describe('modifier la sélection', () => {
             { start: '19:45', end: '20:00', ticket: 'OPS-2', comment: 'Tard' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -1845,7 +1875,7 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
     test('un glisser ou un double-clic enregistrent d’abord la fenêtre ouverte', async ({ page, request }) => {
         const date = day(85);
         await writeDay(request, date, [{ start: '09:30', end: '10:30', ticket: 'SHOP-482', comment: 'Mapping' }]);
-        await open(page, date);
+        await openDay(page, date);
 
         // Le glisser est un clic à côté : la fenêtre s'enregistre, et il sélectionne sa plage
         // sans en ouvrir d'autre.
@@ -1873,7 +1903,6 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
             { start: '12:00', end: '12:15', ticket: 'OPS-7', comment: 'Tapé avant' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('une lettre tapée après un glisser, la fenêtre d’avant encore en route, écrit le ticket entier', async ({
@@ -1882,7 +1911,7 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
     }) => {
         const date = day(98);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
         // Jira tarde : la fenêtre ouverte attend sa réponse pour s'enregistrer, et celle que
         // la première lettre demande attend qu'elle ait fini.
         await page.route('**/api/tickets/**', async (route) => {
@@ -1911,7 +1940,6 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
         ]);
         await page.unrouteAll({ behavior: 'ignoreErrors' });
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('Échap pendant un glisser n’abandonne que le glisser : la fenêtre ouverte garde sa saisie', async ({
@@ -1920,7 +1948,7 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
     }) => {
         const date = day(99);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '12:00');
         const window = ticketWindow(page);
@@ -1948,13 +1976,12 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
             { start: '12:00', end: '12:15', ticket: 'OPS-7', comment: 'Tapé avant' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('le message d’un geste s’en va quand une fenêtre ou le menu s’ouvre', async ({ page, request }) => {
         const date = day(86);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '11:15');
         await page.keyboard.press('Delete');
@@ -1974,7 +2001,6 @@ test.describe('une fenêtre ouverte, un autre geste sur la grille', () => {
         // Ctrl/⌘+Z défait toujours le dernier geste.
         await page.keyboard.press('ControlOrMeta+Z');
         await expect(slot(page, '09:15')).toHaveText('09:15, OPS-12, Daily');
-        await clearDay(request, date);
     });
 });
 
@@ -1984,7 +2010,7 @@ test.describe('le message d’annulation', () => {
         await writeDay(request, date, MORNING);
         // L'heure ne passe qu'à la main : celle qui s'écoulerait entre deux lignes compterait dans les 8 secondes.
         await freezeTime(page, day(31), '10:00');
-        await open(page, date);
+        await openDay(page, date);
 
         await clickSlot(page, '09:15');
         await page.keyboard.press('Delete');
@@ -2011,7 +2037,6 @@ test.describe('le message d’annulation', () => {
         await expect(message(page)).toHaveCount(0);
         await page.keyboard.press('ControlOrMeta+Z');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -2021,7 +2046,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     test('n’écrit rien, le dit, et remet la grille à jour', async ({ page, request }) => {
         const date = day(35);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         await writeDay(request, date, [{ start: '09:15', end: '09:30', ticket: 'OPS-99', comment: 'Ailleurs' }]);
 
         await clickSlot(page, '11:15');
@@ -2029,7 +2054,6 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await expect(message(page)).toHaveText("La journée a changé entre-temps. Rien n'a été modifié.");
         await expect(blocks(page)).toHaveText([/OPS-99/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('ne colle rien sur un glisser, le dit, puis colle en disant ce qu’il remplace désormais', async ({
@@ -2038,7 +2062,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     }) => {
         const date = day(95);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         await clickSlot(page, '11:15');
         await page.keyboard.press('ControlOrMeta+C');
         // Un autre onglet pose OPS-99 au milieu de la plage.
@@ -2059,13 +2083,12 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await expect(blocks(page).filter({ hasText: 'OPS-99' })).toHaveCount(0);
         await expect(blocks(page).filter({ hasText: 'SHOP-519' })).toHaveText([/De 11:15 à 11:45/, /De 14:00 à 15:00/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('garde la fenêtre ouverte et ce qui a été tapé', async ({ page, request }) => {
         const date = day(36);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         await doubleClickSlot(page, '15:00');
         await ticketWindow(page).getByLabel('Ticket').fill('OPS-7');
         await writeDay(request, date, []);
@@ -2081,7 +2104,6 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await expect(ticketWindow(page)).toHaveCount(0);
         await expect(blocks(page)).toHaveText([/OPS-7/]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('garde Nouveau ticket ouvert sur la sélection, et dit ce qu’elle remplace désormais', async ({
@@ -2090,7 +2112,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     }) => {
         const date = day(77);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         await clickSlot(page, '10:00');
         await clickSlot(page, '10:15', ['Shift']);
         await page.keyboard.type('OPS-12');
@@ -2109,7 +2131,6 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await expect(message(page)).toHaveText(/^OPS-99 remplacé de 10:00 à 10:15/);
         expect(await savedDay(request, date)).toMatchObject([{ start: '10:00', end: '10:30', ticket: 'OPS-12' }]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('suit dans Modifier le ticket le bloc tel qu’il est désormais, sans écraser l’autre onglet', async ({
@@ -2118,7 +2139,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     }) => {
         const date = day(82);
         await writeDay(request, date, [{ start: '09:30', end: '11:15', ticket: 'SHOP-482', comment: 'Mapping' }]);
-        await open(page, date);
+        await openDay(page, date);
         await doubleClickSlot(page, '10:00');
         const window = ticketWindow(page, 'Modifier le ticket');
         await expect(window).toContainText('de 09:30 à 11:15');
@@ -2141,7 +2162,6 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
             { start: '10:30', end: '11:15', ticket: 'OPS-1', comment: 'Autre onglet' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('change Modifier le ticket en Nouveau ticket quand le bloc a été remplacé ailleurs, et le dit', async ({
@@ -2150,7 +2170,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     }) => {
         const date = day(83);
         await writeDay(request, date, [{ start: '09:30', end: '10:30', ticket: 'SHOP-482', comment: 'Mapping' }]);
-        await open(page, date);
+        await openDay(page, date);
         await doubleClickSlot(page, '10:00');
         await ticketWindow(page, 'Modifier le ticket').getByLabel('Commentaire').fill('Mapping revu');
         await writeDay(request, date, [{ start: '09:30', end: '10:30', ticket: 'OPS-1', comment: 'Autre onglet' }]);
@@ -2167,7 +2187,6 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await page.keyboard.press('ControlOrMeta+Z');
         await expect(slot(page, '09:30')).toHaveText('09:30, OPS-1, Autre onglet');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('passe Modifier la sélection en Nouveau ticket quand la sélection a changé ailleurs, et le dit', async ({
@@ -2176,7 +2195,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     }) => {
         const date = day(49);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         await clickSlot(page, '10:00');
         await clickSlot(page, '10:15', ['Shift']);
         await page.keyboard.press('F2');
@@ -2204,7 +2223,6 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
             { start: '10:30', end: '11:15', ticket: 'SHOP-482', comment: 'Mapping des colonnes' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('garde Modifier la sélection quand seul le bloc a changé ailleurs, sans plus rien dire de lui', async ({
@@ -2213,7 +2231,7 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
     }) => {
         const date = day(53);
         await writeDay(request, date, MORNING);
-        await open(page, date);
+        await openDay(page, date);
         await clickSlot(page, '10:00');
         await clickSlot(page, '10:15', ['Shift']);
         await page.keyboard.press('F2');
@@ -2237,13 +2255,12 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
             { start: '10:00', end: '10:30', ticket: 'SHOP-482', comment: 'Point client' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 
     test('garde la sélection sur la fenêtre refusée, et Entrée l’enregistre de nouveau', async ({ page, request }) => {
         const date = day(84);
         await writeDay(request, date, [{ start: '09:30', end: '10:00', ticket: 'SHOP-482' }]);
-        await open(page, date);
+        await openDay(page, date);
         await doubleClickSlot(page, '15:00');
         const window = ticketWindow(page);
         await window.getByLabel('Ticket').fill('OPS-7');
@@ -2263,16 +2280,15 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
             { start: '15:00', end: '15:15', ticket: 'OPS-7', comment: 'Tapé avant' },
         ]);
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
 test.describe('la fin prévue', () => {
     test('compte le créneau en cours comme travaillé, saisi ou non, sauf en pause', async ({ page, request }) => {
-        const date = day(100);
+        const date = day(115);
         await writeDay(request, date, [{ start: '09:00', end: '14:00', ticket: 'SHOP-482' }]);
         await startTimeAt(page, date, '15:20');
-        await open(page, date);
+        await openDay(page, date);
         const figures = page.getByRole('group', { name: 'Chiffres du jour' });
         // 2h30 à faire depuis 15:15, le début du créneau de la ligne « maintenant ».
         await expect(figures).toContainText('Reste 2h30');
@@ -2293,7 +2309,6 @@ test.describe('la fin prévue', () => {
         await expect(figures).toContainText('Reste 2h15');
         await expect(figures).toContainText('Fin prévue à 17:45');
         await expectGridMatchesBase(page, request, date);
-        await clearDay(request, date);
     });
 });
 
@@ -2306,11 +2321,12 @@ test.describe('l’objectif du jour', () => {
         const date = day(44);
         await writeDay(request, date, [{ start: '09:00', end: '14:00', ticket: 'SHOP-482' }]);
         await startTimeAt(page, date, '15:20');
-        await open(page, date);
+        await openDay(page, date);
 
         await objectiveButton(page).click();
         const window = page.getByRole('dialog', { name: 'Objectif du jour' });
         await expect(objectiveButton(page)).toHaveAttribute('aria-expanded', 'true');
+        await expect(window).toHaveAccessibleDescription('Mercredi 22 octobre');
         // 2h30 à faire depuis 15:15, le début du créneau en cours.
         await expect(window).toContainText('Fin prévue à 17:45. Les autres jours gardent votre objectif habituel.');
         // À l'objectif habituel, rien à remettre.
@@ -2331,13 +2347,12 @@ test.describe('l’objectif du jour', () => {
         await expect(objectiveButton(page)).toBeFocused();
         await expect(page.getByRole('group', { name: 'Chiffres du jour' })).toContainText('Fin prévue à 16:15');
         expect(((await (await request.get(`/api/days/${date}`)).json()) as { objective: number }).objective).toBe(360);
-        await clearDay(request, date);
     });
 
     test('se tape, et refuse sous le champ ce qui n’est pas un objectif', async ({ page, request }) => {
         const date = day(45);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await objectiveButton(page).click();
         const window = page.getByRole('dialog', { name: 'Objectif du jour' });
@@ -2359,13 +2374,12 @@ test.describe('l’objectif du jour', () => {
         await field.press('Enter');
         await expect(window).toHaveCount(0);
         await expect(objectiveButton(page)).toHaveAccessibleName('Objectif du jour, 7h45. Modifier');
-        await clearDay(request, date);
     });
 
     test('revient à l’objectif habituel, et reste entre 0h00 et 13h00', async ({ page, request }) => {
         const date = day(42);
         await writeDay(request, date, [], 15);
-        await open(page, date);
+        await openDay(page, date);
 
         await objectiveButton(page).click();
         const window = page.getByRole('dialog', { name: 'Objectif du jour' });
@@ -2393,13 +2407,12 @@ test.describe('l’objectif du jour', () => {
         await window.getByLabel('Durée à travailler').press('Enter');
         await expect(window).toHaveCount(0);
         await expect(objectiveButton(page)).toHaveAccessibleName('Objectif du jour, 7h30. Modifier');
-        await clearDay(request, date);
     });
 
     test('enregistre au clic à côté, abandonne à Échap', async ({ page, request }) => {
         const date = day(43);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await objectiveButton(page).click();
         const window = page.getByRole('dialog', { name: 'Objectif du jour' });
@@ -2413,7 +2426,6 @@ test.describe('l’objectif du jour', () => {
         await clickSlot(page, '15:00');
         await expect(window).toHaveCount(0);
         await expect(objectiveButton(page)).toHaveAccessibleName('Objectif du jour, 6h00. Modifier');
-        await clearDay(request, date);
     });
 });
 
@@ -2422,7 +2434,7 @@ test.describe('changer de jour, une fenêtre ouverte', () => {
         const date = day(51);
         await writeDay(request, date, []);
         await writeDay(request, day(52), []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '09:00');
         await ticketWindow(page).getByLabel('Ticket').fill('SHOP-482');
@@ -2431,13 +2443,12 @@ test.describe('changer de jour, une fenêtre ouverte', () => {
         await expect(page).toHaveURL(new RegExp(`/${day(52)}$`));
         expect(await savedDay(request, date)).toMatchObject([{ start: '09:00', end: '09:15', ticket: 'SHOP-482' }]);
         expect(await savedDay(request, day(52))).toEqual([]);
-        await clearDay(request, date);
     });
 
     test('enregistre l’objectif, puis change de jour', async ({ page, request }) => {
         const date = day(57);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await page.getByRole('button', { name: /^Objectif du jour/ }).click();
         await page.getByRole('dialog', { name: 'Objectif du jour' }).getByLabel('Durée à travailler').fill('6h');
@@ -2445,7 +2456,6 @@ test.describe('changer de jour, une fenêtre ouverte', () => {
 
         await expect(page).toHaveURL(new RegExp(`/${day(58)}$`));
         expect(((await (await request.get(`/api/days/${date}`)).json()) as { objective: number }).objective).toBe(360);
-        await clearDay(request, date);
     });
 });
 
@@ -2455,7 +2465,7 @@ test.describe('changer de jour, une fenêtre refusée', () => {
     test('reste sur le jour, la fenêtre ouverte avec son message', async ({ page, request }) => {
         const date = day(59);
         await writeDay(request, date, []);
-        await open(page, date);
+        await openDay(page, date);
 
         await doubleClickSlot(page, '09:00');
         await ticketWindow(page).getByLabel('Ticket').fill('pas un ticket');
@@ -2466,14 +2476,13 @@ test.describe('changer de jour, une fenêtre refusée', () => {
         );
         await expect(page).toHaveURL(new RegExp(`/${date}$`));
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 });
 
 test('le message rend le curseur à la grille après Annuler ou sa croix, au clavier', async ({ page, request }) => {
     const date = day(60);
     await writeDay(request, date, MORNING);
-    await open(page, date);
+    await openDay(page, date);
 
     for (const button of ['Annuler', 'Fermer le message']) {
         await clickSlot(page, '09:15');
@@ -2487,14 +2496,13 @@ test('le message rend le curseur à la grille après Annuler ou sa croix, au cla
         await expect(slots(page)).toHaveAttribute('aria-busy', 'false');
     }
     await expectGridMatchesBase(page, request, date);
-    await clearDay(request, date);
 });
 
 test('le pied d’une fenêtre reste dedans, même avec des libellés plus larges', async ({ page, request }) => {
     const date = day(61);
     await writeDay(request, date, MORNING);
     await page.setViewportSize({ width: 1024, height: 720 });
-    await open(page, date);
+    await openDay(page, date);
     // Une police plus large que celle du conteneur, comme celle d'un Mac.
     await page.addStyleTag({ content: '[role="dialog"] button { letter-spacing: 0.12em; }' });
 
@@ -2507,7 +2515,6 @@ test('le pied d’une fenêtre reste dedans, même avec des libellés plus large
         expect(box !== null && box.x + box.width <= 1024).toBe(true);
     }
     await page.keyboard.press('Escape');
-    await clearDay(request, date);
 });
 
 test.describe('les flèches du navigateur, une fenêtre ouverte', () => {
@@ -2520,7 +2527,7 @@ test.describe('les flèches du navigateur, une fenêtre ouverte', () => {
         const [first, second] = [day(62), day(63)];
         await writeDay(request, first, []);
         await writeDay(request, second, []);
-        await open(page, first);
+        await openDay(page, first);
         await page.getByRole('button', { name: 'Jour suivant' }).click();
         await expect(page).toHaveURL(new RegExp(`/${second}$`));
 
@@ -2537,7 +2544,44 @@ test.describe('les flèches du navigateur, une fenêtre ouverte', () => {
         await expect(page).toHaveURL(new RegExp(`/${first}$`));
         await expect(ticketWindow(page)).toHaveCount(0);
         expect(await savedDay(request, second)).toMatchObject([{ start: '09:00', ticket: 'SHOP-482' }]);
-        await clearDay(request, second);
+    });
+
+    test('revenues sur le jour affiché pendant que la fenêtre s’enregistre, c’est la dernière qui compte', async ({
+        page,
+        request,
+    }) => {
+        // Le lundi 15 et le mardi 16 juin 2020 : des jours qu'aucun autre fichier de parcours ne prend.
+        const [first, second] = ['2020-06-15', '2020-06-16'];
+        await writeDay(request, first, []);
+        await writeDay(request, second, []);
+        await openDay(page, first);
+        await page.getByRole('button', { name: 'Jour suivant' }).click();
+        await expect(page).toHaveURL(new RegExp(`/${second}$`));
+
+        // L'enregistrement de la fenêtre attend qu'on le relâche.
+        let release: () => void = () => undefined;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        await page.route(`**/api/days/${second}/**`, async (route) => {
+            if (route.request().method() !== 'GET') {
+                await held;
+            }
+            await route.fallback();
+        });
+        await doubleClickSlot(page, '09:00');
+        await ticketWindow(page).getByLabel('Ticket').fill('SHOP-482');
+        await page.goBack();
+        await expect(page).toHaveURL(new RegExp(`/${first}$`));
+        await page.goForward();
+        await expect(page).toHaveURL(new RegExp(`/${second}$`));
+
+        release();
+        await expect.poll(() => savedDay(request, second)).toMatchObject([{ start: '09:00', ticket: 'SHOP-482' }]);
+        await expect(ticketWindow(page)).toHaveCount(0);
+        await expect(page).toHaveURL(new RegExp(`/${second}$`));
+        await expect(page.getByRole('heading', { level: 1 })).toContainText('16 juin');
+        await expect(blocks(page)).toHaveCount(1);
     });
 
     test('vers un jour ouvert par son adresse, enregistrent la fenêtre et demandent avant de quitter la page', async ({
@@ -2548,8 +2592,8 @@ test.describe('les flèches du navigateur, une fenêtre ouverte', () => {
         await writeDay(request, first, []);
         await writeDay(request, second, []);
         // Deux pages : Précédent quitte celle du second jour.
-        await open(page, first);
-        await open(page, second);
+        await openDay(page, first);
+        await openDay(page, second);
         const back = () =>
             page.evaluate(() => {
                 history.back();
@@ -2595,7 +2639,6 @@ test.describe('les flèches du navigateur, une fenêtre ouverte', () => {
         await expect(ticketWindow(page)).toBeVisible();
         await page.goBack();
         await expect(page).toHaveURL(new RegExp(`/${first}$`));
-        await clearDay(request, second);
     });
 });
 
@@ -2612,12 +2655,12 @@ test.describe('la place de Nouveau ticket', () => {
         const date = day(80);
         await writeDay(request, date, []);
         await page.setViewportSize({ width: 1024, height: 720 });
-        await open(page, date);
+        await openDay(page, date);
 
         // Une plage de deux heures, la grille telle qu'elle s'ouvre : accrochée par son haut.
-        await dragSlots(page, '09:30', '11:15');
+        await dragSlots(page, '09:00', '10:45');
         await page.keyboard.press('Enter');
-        await expect(ticketWindow(page)).toContainText('de 09:30 à 11:30');
+        await expect(ticketWindow(page)).toContainText('de 09:00 à 11:00');
         await expectInGrid(page);
         await page.keyboard.press('Escape');
 
@@ -2633,14 +2676,13 @@ test.describe('la place de Nouveau ticket', () => {
             await expectInGrid(page);
             await page.keyboard.press('Escape');
         }
-        await clearDay(request, date);
     });
 
     test('passe sous le créneau plutôt que sur la barre du haut', async ({ page, request }) => {
         const date = day(81);
         await writeDay(request, date, []);
         await page.setViewportSize({ width: 1440, height: 900 });
-        await open(page, date);
+        await openDay(page, date);
 
         // 11:00 à 380 px du haut : la fenêtre tiendrait au-dessus, mais sur la barre, et
         // dessous, dans la grille.
@@ -2655,7 +2697,6 @@ test.describe('la place de Nouveau ticket', () => {
         await expectInGrid(page);
         expect((await ticketWindow(page).boundingBox())?.y ?? 0).toBeGreaterThan(y);
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 });
 
@@ -2721,7 +2762,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
             const date = day(100 + v);
             await writeDay(request, date, BLOCK);
             await page.setViewportSize(viewport);
-            await open(page, date);
+            await openDay(page, date);
             await showMorning(page);
 
             // Contre le bord gauche, au milieu, près du bord droit : Nouveau ticket sur un
@@ -2757,7 +2798,6 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
             await page.keyboard.press('Escape');
 
             expect(await savedDay(request, date)).toMatchObject([{ start: '09:30', end: '11:15', ticket: 'SHOP-482' }]);
-            await clearDay(request, date);
         });
     });
 
@@ -2768,7 +2808,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         const date = day(105);
         await writeDay(request, date, BLOCK);
         await page.setViewportSize({ width: 1440, height: 900 });
-        await open(page, date);
+        await openDay(page, date);
         await showMorning(page);
 
         await clickSlot(page, '12:00');
@@ -2788,7 +2828,6 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         const column = await boxOf(lane(page));
         await expectAt(page, ticketWindow(page), column.x + column.width / 2);
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 
     test('ne passe jamais sous le récapitulatif ouvert à côté de la grille', async ({ page, request }) => {
@@ -2798,7 +2837,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
             localStorage.setItem('daytrack.recap-open', 'true');
         });
         await page.setViewportSize({ width: 1280, height: 800 });
-        await open(page, date);
+        await openDay(page, date);
         await showMorning(page);
         const recap = await boxOf(page.getByRole('complementary', { name: 'Récapitulatif' }));
 
@@ -2811,7 +2850,6 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         const box = await boxOf(edit);
         expect(Math.abs(box.x + box.width - (recap.x - 8))).toBeLessThanOrEqual(1);
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 
     test('se rouvre au clavier sous le quart d’heure double-cliqué, pas sous la fin du bloc', async ({
@@ -2821,7 +2859,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         const date = day(113);
         await writeDay(request, date, BLOCK);
         await page.setViewportSize({ width: 1440, height: 900 });
-        await open(page, date);
+        await openDay(page, date);
         await showMorning(page);
 
         await doubleClickSlot(page, '10:15');
@@ -2843,14 +2881,13 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         await expect(slots(page)).toBeFocused();
         await page.keyboard.press('ArrowDown');
         await expect(slots(page).getByRole('option', { selected: true })).toHaveText([/^10:30/]);
-        await clearDay(request, date);
     });
 
     test('garde son horizontale quand la grille défile, son quart d’heure suivi', async ({ page, request }) => {
         const date = day(107);
         await writeDay(request, date, BLOCK);
         await page.setViewportSize({ width: 1440, height: 900 });
-        await open(page, date);
+        await openDay(page, date);
         await showMorning(page);
 
         const point = await slotPoint(page, '10:45', 300);
@@ -2865,7 +2902,6 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         await expectUnder(page, edit, '10:45');
         await expectAt(page, edit, point.x);
         await page.keyboard.press('Escape');
-        await clearDay(request, date);
     });
 
     test.describe('un refus parce que la journée a changé ailleurs', () => {
@@ -2881,7 +2917,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
                 ['11:00', '09:30'],
             ] as const) {
                 await writeDay(request, date, BLOCK);
-                await open(page, date);
+                await openDay(page, date);
                 await showMorning(page);
                 const point = await slotPoint(page, time, 300);
                 await page.mouse.dblclick(point.x, point.y);
@@ -2900,7 +2936,6 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
                 await expectAt(page, edit, point.x);
                 await page.keyboard.press('Escape');
                 await expect(edit).toHaveCount(0);
-                await clearDay(request, date);
             }
         });
 
@@ -2910,7 +2945,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         }) => {
             const date = day(109);
             await writeDay(request, date, BLOCK);
-            await open(page, date);
+            await openDay(page, date);
             await showMorning(page);
             const point = await slotPoint(page, '11:00', 300);
             await page.mouse.dblclick(point.x, point.y);
@@ -2927,14 +2962,13 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
             await page.keyboard.press('Escape');
             await expect(window).toHaveCount(0);
             expect(await savedDay(request, date)).toMatchObject([{ start: '09:30', end: '11:15', ticket: 'OPS-1' }]);
-            await clearDay(request, date);
         });
 
         test('garde son côté quand elle grandit sans place dessous, sans flèche', async ({ page, request }) => {
             const date = day(114);
             await writeDay(request, date, BLOCK);
             await page.setViewportSize({ width: 1440, height: 720 });
-            await open(page, date);
+            await openDay(page, date);
             await showMorning(page);
             await doubleClickSlot(page, '11:00', 300);
             const edit = ticketWindow(page, 'Modifier le ticket');
@@ -2973,7 +3007,6 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
                 expect(Math.abs(box.y + box.height - (bottom - 8))).toBeLessThanOrEqual(1);
             }).toPass();
             await page.keyboard.press('Escape');
-            await clearDay(request, date);
         });
     });
 });
@@ -2981,7 +3014,7 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
 test('recliquer sur l’objectif enregistre, et garde une durée refusée', async ({ page, request }) => {
     const date = day(64);
     await writeDay(request, date, []);
-    await open(page, date);
+    await openDay(page, date);
     const button = page.getByRole('button', { name: /^Objectif du jour/ });
     const window = page.getByRole('dialog', { name: 'Objectif du jour' });
 
@@ -2997,14 +3030,13 @@ test('recliquer sur l’objectif enregistre, et garde une durée refusée', asyn
     await button.click();
     await expect(window).toHaveCount(0);
     await expect(button).toHaveAccessibleName('Objectif du jour, 7h45. Modifier');
-    await clearDay(request, date);
 });
 
 test('sous 1280 px, l’objectif et le menu ferment le récapitulatif posé sur la grille', async ({ page, request }) => {
     const date = day(65);
     await writeDay(request, date, MORNING);
     await page.setViewportSize({ width: 1024, height: 720 });
-    await open(page, date);
+    await openDay(page, date);
     const recap = page.getByRole('complementary', { name: 'Récapitulatif' });
 
     // Sous 1280 px, il s'ouvre fermé : on l'ouvre.
@@ -3020,14 +3052,13 @@ test('sous 1280 px, l’objectif et le menu ferment le récapitulatif posé sur 
     await expect(page.getByRole('menu')).toBeVisible();
     await expect(recap).toHaveAttribute('data-state', 'closed');
     await page.keyboard.press('Escape');
-    await clearDay(request, date);
 });
 
 test('sous 1280 px, une fenêtre de ticket ferme le récapitulatif posé sur la grille', async ({ page, request }) => {
     const date = day(50);
     await writeDay(request, date, MORNING);
     await page.setViewportSize({ width: 1024, height: 720 });
-    await open(page, date);
+    await openDay(page, date);
     const recap = page.getByRole('complementary', { name: 'Récapitulatif' });
     await page.getByRole('button', { name: 'Afficher le récapitulatif' }).click();
     await expect(recap).toHaveAttribute('data-state', 'open');
@@ -3036,5 +3067,4 @@ test('sous 1280 px, une fenêtre de ticket ferme le récapitulatif posé sur la 
     await expect(ticketWindow(page)).toBeVisible();
     await expect(recap).toHaveAttribute('data-state', 'closed');
     await page.keyboard.press('Escape');
-    await clearDay(request, date);
 });

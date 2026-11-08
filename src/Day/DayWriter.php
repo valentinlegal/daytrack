@@ -2,6 +2,7 @@
 
 namespace App\Day;
 
+use App\Database\LockedTransaction;
 use App\Entity\Day;
 use App\Repository\DayRepository;
 use App\Settings\UserSettings;
@@ -17,6 +18,7 @@ final readonly class DayWriter
 {
     public function __construct(
         private EntityManagerInterface $entityManager,
+        private LockedTransaction $transaction,
         private DayRepository $days,
         private UserSettings $settings,
     ) {
@@ -72,15 +74,9 @@ final readonly class DayWriter
      */
     private function write(\DateTimeImmutable $date, int $version, bool $creates, \Closure $gesture): ?Day
     {
-        // Pas de wrapInTransaction() : il ferme le gestionnaire d'entités au premier
-        // refus, et la réponse à un onglet en retard doit encore lire la journée.
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            // La première instruction est une écriture : elle verrouille la base
-            // jusqu'à la fin de la transaction. Deux écritures simultanées passent
-            // l'une après l'autre, et la seconde voit la version de la première.
+        return $this->transaction->run($this->days, function () use ($date, $version, $creates, $gesture): ?Day {
+            // Sous le verrou, deux écritures simultanées passent l'une après l'autre, et
+            // la seconde voit la version de la première.
             $claimed = $this->days->claim($date, $version);
 
             $day = $this->days->findWithSlots($date);
@@ -98,8 +94,7 @@ final readonly class DayWriter
             } elseif (0 !== $version) {
                 throw new StaleDay();
             } elseif (!$creates) {
-                $connection->rollBack();
-
+                // Rien n'a changé : il n'y a rien à écrire.
                 return null;
             } else {
                 // Lu sous le verrou : un objectif habituel changé dans un autre onglet
@@ -109,18 +104,8 @@ final readonly class DayWriter
             }
 
             $gesture($day);
-            $this->entityManager->flush();
-            $connection->commit();
 
             return $day;
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            // Ce que la mémoire tient ne correspond plus à la base : on l'oublie.
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        });
     }
 }

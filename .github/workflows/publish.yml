@@ -1,8 +1,10 @@
 name: Publication
 
+# Lancé à la demande, sur le tag d'une version, une fois son code poussé : un seul
+# déclencheur, donc une seule construction par lancement. Il se relance de la même façon :
+# « Run workflow », puis le tag de la version.
 on:
-  push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,8 +13,8 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  # Rien ne se construit si les tests échouent : la version reste alors sans image, et
-  # personne ne la reçoit.
+  # Rien ne se publie si les tests échouent : les images se construisent en même temps
+  # qu'eux, mais sans nom, et personne ne tire une image sans nom.
   tests:
     name: Tests
     runs-on: ubuntu-24.04
@@ -21,6 +23,20 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Lancé sur une branche ou sur une version plus ancienne que la dernière, il déplacerait
+      # « latest » vers ce qui n'est pas la dernière version.
+      - name: La dernière version
+        run: |
+          version="${GITHUB_REF#refs/tags/v}"
+          if [ "$GITHUB_REF_TYPE" != tag ] || ! grep -q -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$version"; then
+              echo "::error::Se lance sur le tag d'une version, comme v2.0.1, pas sur « $GITHUB_REF_NAME »."
+              exit 1
+          fi
+          highest="$(git ls-remote --tags --refs origin 'v*' | sed -e 's|.*refs/tags/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+          if [ "$highest" != "$version" ]; then
+              echo "::error::La dernière version est la $highest : la $version ne se republie pas par-dessus."
+              exit 1
+          fi
       - run: bin/setup
       - name: Tests du serveur
         run: docker compose exec -T app php bin/phpunit
@@ -28,10 +44,10 @@ jobs:
         run: docker compose run --rm node npm test
 
   # Une construction par architecture, chacune sur sa machine : l'émulation prendrait
-  # dix fois plus de temps.
+  # dix fois plus de temps. Elles ne partent que par leur empreinte : seule la publication
+  # les nomme.
   image-amd64:
     name: Image amd64
-    needs: tests
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -62,7 +78,6 @@ jobs:
 
   image-arm64:
     name: Image arm64
-    needs: tests
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -92,11 +107,11 @@ jobs:
           cache-to: type=gha,scope=arm64,mode=max
 
   # Le numéro entier (« 2.5.0 ») est ce que lit l'avis de nouvelle version, et « latest »
-  # ce que suit le docker-compose.yml : tout paraît ici, en une fois, une fois les deux
-  # architectures prêtes.
+  # ce que suit le docker-compose.yml : tout paraît ici, en une fois, une fois les tests
+  # passés et les deux architectures prêtes.
   publication:
     name: Publier
-    needs: [image-amd64, image-arm64]
+    needs: [tests, image-amd64, image-arm64]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

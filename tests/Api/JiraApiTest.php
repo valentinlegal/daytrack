@@ -3,7 +3,6 @@
 namespace App\Tests\Api;
 
 use App\Dev\Jira\Catalog;
-use App\Jira\TokenCipher;
 use App\Tests\Support\DayApi;
 use App\Tests\Support\JiraApi;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -53,6 +52,22 @@ final class JiraApiTest extends WebTestCase
         self::assertSame(Catalog::API_TOKEN, $this->cipher()->decrypt($row['encrypted_token']));
     }
 
+    public function testUneEspaceInsecableEnFinDAdresseOuDEMailNeFaitPasRefuser(): void
+    {
+        // Alt+Espace sur un Mac : elle se tape sans se voir.
+        $typed = ['site' => "https://jira\u{00A0}", 'email' => "\u{00A0}".Catalog::ACCOUNT_EMAIL."\u{00A0}", 'token' => Catalog::API_TOKEN];
+
+        [$status, $body] = $this->send('POST', '/api/jira/test', $typed);
+        self::assertSame(200, $status);
+        self::assertSame(['account' => Catalog::ACCOUNT_NAME], $body);
+
+        [$status, $body] = $this->send('PUT', '/api/jira', $typed);
+        self::assertSame(200, $status);
+        self::assertSame('https://jira', self::at($body, 'site'));
+        self::assertSame(Catalog::ACCOUNT_EMAIL, self::at($body, 'email'));
+        self::assertSame(Catalog::API_TOKEN, $this->cipher()->decrypt($this->connectionRow()['encrypted_token']), 'Le jeton, lui, est gardé tel qu\'il a été collé.');
+    }
+
     public function testUnJetonAPerimetresSeRelieParLaPasserelle(): void
     {
         [$status] = $this->jiraForm('PUT', '/api/jira', 'https://jira', Catalog::SCOPED_TOKEN);
@@ -98,6 +113,7 @@ final class JiraApiTest extends WebTestCase
         yield 'deux mots pour adresse' => [['site' => 'mon jira'] + $valid + ['token' => Catalog::API_TOKEN], 'site', 'Une adresse de Jira s\'écrit comme https://exemple.atlassian.net.'];
         yield 'aucun e-mail' => [['email' => null] + $valid + ['token' => Catalog::API_TOKEN], 'email', 'Indiquez votre adresse e-mail.'];
         yield 'un e-mail sans arobase' => [['email' => 'dev.daytrack.test'] + $valid + ['token' => Catalog::API_TOKEN], 'email', 'Une adresse e-mail s\'écrit comme camille.martin@exemple.fr.'];
+        yield 'un e-mail trop long' => [['email' => 'camille.martin@'.str_repeat(str_repeat('a', 59).'.', 4).'fr'] + $valid + ['token' => Catalog::API_TOKEN], 'email', 'Une adresse e-mail tient en 255 caractères.'];
         yield 'un jeton coupé par une espace' => [$valid + ['token' => 'jeton de developpement'], 'token', 'Un jeton d\'API tient sur une ligne, sans espace.'];
     }
 
@@ -369,10 +385,5 @@ final class JiraApiTest extends WebTestCase
         self::assertIsString($row['encrypted_token']);
 
         return ['api' => $row['api'], 'account_id' => $row['account_id'], 'encrypted_token' => $row['encrypted_token']];
-    }
-
-    private function cipher(): TokenCipher
-    {
-        return static::getContainer()->get(TokenCipher::class);
     }
 }

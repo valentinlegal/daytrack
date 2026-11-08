@@ -2,6 +2,7 @@
 
 namespace App\Entity;
 
+use App\Api\Input\EntryText;
 use App\Day\SlotContent;
 use App\Day\SlotKind;
 use Doctrine\DBAL\Types\Types;
@@ -19,6 +20,8 @@ use Symfony\Component\Uid\Uuid;
 #[ORM\UniqueConstraint(name: 'slot_quarter', columns: ['day_id', 'start'])]
 class Slot
 {
+    public const int COMMENT_MAX = 500;
+
     #[ORM\Id]
     #[ORM\Column(type: UuidType::NAME)]
     public private(set) Uuid $id;
@@ -34,10 +37,10 @@ class Slot
     #[ORM\Column(length: 5, enumType: SlotKind::class)]
     public private(set) SlotKind $kind;
 
-    #[ORM\Column(length: 50, nullable: true)]
+    #[ORM\Column(length: EntryText::TICKET_MAX, nullable: true)]
     public private(set) ?string $ticket;
 
-    #[ORM\Column(length: 500, nullable: true)]
+    #[ORM\Column(length: self::COMMENT_MAX, nullable: true)]
     public private(set) ?string $comment;
 
     public function __construct(Day $day, int $start, SlotContent $content)

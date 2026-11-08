@@ -11,8 +11,24 @@ import {
     THEME_STORAGE_KEY,
     type ThemePreference,
 } from '../../assets/theme';
+import { blockedStorage, memoryStorage } from './grid/support';
 
 const preferences: ThemePreference[] = ['light', 'dark', 'system'];
+
+/** La page, quand le navigateur refuse d'ouvrir son stockage. */
+function windowWithoutStorage(): typeof window {
+    return new Proxy(window, {
+        get(target, property) {
+            if (property === 'localStorage') {
+                return blockedStorage();
+            }
+
+            const value: unknown = Reflect.get(target, property, target);
+
+            return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        },
+    });
+}
 
 describe('resolveTheme', () => {
     it('suit le système seulement quand on le lui demande', () => {
@@ -38,11 +54,7 @@ describe('readPreference', () => {
     });
 
     it('rend « Système » quand le navigateur refuse le stockage', () => {
-        const preference = readPreference({
-            getItem: () => {
-                throw new DOMException('Accès refusé', 'SecurityError');
-            },
-        });
+        const preference = readPreference(memoryStorage({ refuse: true }));
 
         expect(preference).toBe('system');
     });
@@ -107,17 +119,7 @@ describe('followTheme', () => {
 
     it('suit le système quand le navigateur bloque l’accès au stockage', () => {
         stubSystem(fakeSystem(true).query);
-        const blocked = new Proxy(window, {
-            get(target, property) {
-                if (property === 'localStorage') {
-                    throw new DOMException('Accès refusé', 'SecurityError');
-                }
-
-                const value: unknown = Reflect.get(target, property, target);
-
-                return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-            },
-        });
+        const blocked = windowWithoutStorage();
 
         const stop = followTheme(document.documentElement, blocked);
 
@@ -147,17 +149,7 @@ describe('followTheme', () => {
     it('pose le choix pour la page quand le navigateur refuse de le retenir', () => {
         const system = fakeSystem(false);
         stubSystem(system.query);
-        const blocked = new Proxy(window, {
-            get(target, property) {
-                if (property === 'localStorage') {
-                    throw new DOMException('Accès refusé', 'SecurityError');
-                }
-
-                const value: unknown = Reflect.get(target, property, target);
-
-                return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-            },
-        });
+        const blocked = windowWithoutStorage();
         const stop = followTheme(document.documentElement, blocked);
 
         choosePreference(blocked, 'dark');

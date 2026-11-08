@@ -232,9 +232,8 @@ final readonly class FakeJira
 
         if (1 === preg_match('#^issue/([A-Z][A-Z0-9]*-[1-9]\d*)(/worklog(?:/(\d+))?)?$#', $route, $matches)) {
             $key = $matches[1];
-            $issue = Catalog::issue($key);
 
-            if (null === $issue) {
+            if (!$this->exists($key)) {
                 return FakeJiraResponse::error(404, ['Issue does not exist or you do not have permission to see it.']);
             }
 
@@ -251,6 +250,14 @@ final readonly class FakeJira
         }
 
         return FakeJiraResponse::error(404, ['Cette adresse n\'existe pas dans le Jira simulé.']);
+    }
+
+    /** Un ticket que Jira connaît, et que ce compte voit encore : pas un ticket de DISPARU qui a disparu. */
+    private function exists(string $key): bool
+    {
+        return null !== Catalog::issue($key)
+            && (Catalog::VANISHING !== Catalog::failingProject($key)
+                || !$this->store->update(static fn (State $state): bool => isset($state->vanished[$key])));
     }
 
     /**
@@ -306,7 +313,7 @@ final readonly class FakeJira
         }
 
         $keys = '' !== $matches[1] ? [$matches[1]] : self::split($matches[2]);
-        $known = array_values(array_filter($keys, static fn (string $key): bool => null !== Catalog::issue($key)));
+        $known = array_values(array_filter($keys, $this->exists(...)));
 
         if ([] === $known) {
             return FakeJiraResponse::error(400, [\sprintf("An issue with key '%s' does not exist for field 'key'.", $keys[0] ?? '')]);
@@ -347,6 +354,17 @@ final readonly class FakeJira
 
         if ($silent) {
             return FakeJiraResponse::error(500, ['Internal server error']);
+        }
+
+        // Disparu : écrit depuis sa dernière lecture, il se relit une dernière fois, puis Jira
+        // ne le trouve plus.
+        if (Catalog::VANISHING === Catalog::failingProject($key)) {
+            $this->store->update(static function (State $state) use ($key): void {
+                if (isset($state->vanishing[$key])) {
+                    unset($state->vanishing[$key]);
+                    $state->vanished[$key] = 1;
+                }
+            });
         }
 
         $worklogs = $this->store->update(static function (State $state) use ($key, $after, $before): array {
@@ -418,6 +436,10 @@ final readonly class FakeJira
                 $state->mute[$key] = 1;
             }
 
+            if (Catalog::VANISHING === $project) {
+                $state->vanishing[$key] = 1;
+            }
+
             if (Catalog::DEAF === $project) {
                 return FakeJiraResponse::error(503, ['Service temporarily unavailable']);
             }
@@ -486,6 +508,10 @@ final readonly class FakeJira
             array_splice($state->worklogs, $index, 1, [$new]);
             self::adjustEstimate($state, $key, $old->timeSpentSeconds - $new->timeSpentSeconds, $query);
 
+            if (Catalog::VANISHING === $project) {
+                $state->vanishing[$key] = 1;
+            }
+
             return new FakeJiraResponse(200, $new->toJira(), self::delayOf($project));
         });
     }
@@ -526,6 +552,10 @@ final readonly class FakeJira
 
             array_splice($state->worklogs, $index, 1);
             self::adjustEstimate($state, $key, $worklog->timeSpentSeconds, $query);
+
+            if (Catalog::VANISHING === $project) {
+                $state->vanishing[$key] = 1;
+            }
 
             return new FakeJiraResponse(204, null, self::delayOf($project));
         });

@@ -59,9 +59,10 @@
   --h-ctl: 32px;      /* boutons de la barre */
   --h-ctl-sm: 28px;   /* boutons des fenêtres et des listes */
   --h-field: 34px;    /* champs de saisie */
-  --h-row: 24px;      /* un quart d'heure dans la grille */
-  --h-line: calc(var(--h-row) - var(--s-half)); /* une ligne d'un bloc de deux lignes : avec son écart, elle tient dans son quart d'heure */
+  --h-row: 28px;      /* un quart d'heure dans la grille */
+  --h-line: calc(var(--h-row) - var(--s-1)); /* la première ligne d'un bloc de deux lignes : le bloc commence --s-half sous son quart d'heure (un pixel d'air, un de bord), elle y est centrée, et --s-half plus bas la ligne suivante tombe sur le quart d'heure suivant */
   --h-foot: 48px;     /* pied de la colonne de gauche */
+  --h-pill: 24px;     /* pastilles : chiffre du calendrier, Nouvelle version ; la ligne de plus d'une zone de texte */
 
   /* Largeurs */
   --w-side: 256px;    /* colonne de gauche et zone du logo */

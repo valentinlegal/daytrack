@@ -11,18 +11,21 @@ import {
     useSyncExternalStore,
 } from 'react';
 
+import { openMenuAt } from '../components/keyboardMenu';
 import { tokenPixels } from '../components/tokenPixels';
 import type { Favorite } from '../favorites/favorites';
 import type { FavoriteList, FavoriteOutcome, FavoritesSnapshot, Removed } from '../favorites/favoriteList';
-import { hasTicketShape, typedTicket } from '../grid/entry';
-import { TICKET_NOT_FOUND } from '../jira/lookupMessages';
 import { NO_CHECK, type TicketCheck } from '../jira/useTicketLookup';
-import * as Quarter from '../grid/quarter';
-import { TICKET_SHAPE_REFUSAL } from './messages';
-import { shortcutAria, shortcutLabel } from './shortcuts';
+import { firstRefusal, UNSAVED } from '../serverApi';
+import { useReturns } from '../useReturns';
+import { pointedQuarter } from './columnMeasure';
+import { favoriteMessage, notice } from './messages';
+import { startPointerDrag } from './pointerDrag';
 import { setPointerLength } from './pointerLength';
-import { rewrite } from './rewrite';
-import { type BlockDropTarget, type GridEditing, quarterAt } from './useGridEditing';
+import { FAVORITE_SHORTCUTS, shortcutOf } from './shortcuts';
+import { ignoreHeldEnter } from './TicketField';
+import { shapeRefusal, TicketSave } from './ticketSave';
+import type { BlockDropTarget, GridEditing } from './useGridEditing';
 
 /** Le formulaire en tête de liste, ou à la place d'un favori qu'on renomme. */
 export interface FavoriteForm {
@@ -80,9 +83,11 @@ export interface Favorites {
     readonly formCheckRef: RefObject<TicketCheck>;
     readonly openAdd: () => void;
     readonly openRename: (favorite: Favorite) => void;
-    readonly setDraft: (field: HTMLInputElement) => void;
+    /** Ce qui est tapé : le ticket d'un ajout, récrit par son champ (TicketField), ou le nom d'un favori. */
+    readonly setDraft: (draft: string) => void;
     /** On quitte le champ d'un ajout : sa forme se juge, comme dans la fenêtre Nouveau ticket. */
     readonly checkDraft: () => void;
+    /** Enregistre, comme Entrée. */
     readonly submit: () => void;
     /**
      * Enregistre le formulaire ouvert avant un geste qui ouvre autre chose, comme sur un clic
@@ -91,6 +96,11 @@ export interface Favorites {
      */
     readonly leave: () => Promise<boolean>;
     readonly cancel: () => void;
+    /**
+     * Échap, d'où que soit le curseur, ferme le formulaire ouvert sans rien enregistrer —
+     * sauf le temps d'un enregistrement, qui le retient. Faux s'il n'y en a pas.
+     */
+    readonly escape: () => boolean;
     readonly copy: (favorite: Favorite) => void;
     readonly move: (favorite: Favorite, delta: -1 | 1) => void;
     readonly remove: (favorite: Favorite) => void;
@@ -120,6 +130,7 @@ export function useFavorites({
     list,
     editing,
     laneRef,
+    scrollerRef,
     blockDropRef,
     beforeFormRef,
 }: {
@@ -127,6 +138,8 @@ export function useFavorites({
     editing: GridEditing;
     /** La colonne des blocs : un favori qu'on glisse y vise un quart d'heure. */
     laneRef: RefObject<HTMLElement | null>;
+    /** La zone qui fait défiler la grille : un favori n'y tombe que sur ce qu'elle montre. */
+    scrollerRef: RefObject<HTMLElement | null>;
     /** Ce que la grille appelle quand un bloc glissé en sort : la liste le prend. */
     blockDropRef: RefObject<BlockDropTarget | null>;
     /**
@@ -149,13 +162,16 @@ export function useFavorites({
     const counterRef = useRef(0);
     /** Où est le pointeur, et où il tient la carte qui le suit. */
     const pointerRef = useRef({ x: 0, y: 0, grabX: 0, grabY: 0 });
-    /** Un glisser vient de finir sur une carte : le clic qui suit n'est pas un clic. */
+    /**
+     * Un glisser vient de finir, posé ou abandonné : relâché sur une carte, le clic qui suit
+     * n'est pas un clic.
+     */
     const draggedRef = useRef(false);
     const stopRef = useRef<(() => void) | null>(null);
     /** Le favori à qui rendre le curseur une fois la liste redessinée, ou le + de l'en-tête (ADD_BUTTON). */
     const focusRef = useRef<string | null>(null);
-    /** L'enregistrement du formulaire en route, que les autres gestes attendent. */
-    const pendingRef = useRef<Promise<boolean> | null>(null);
+    /** L'enregistrement du formulaire : un seul à la fois, que les autres gestes attendent. */
+    const [save] = useState(() => new TicketSave());
     const formCheckRef = useRef(NO_CHECK);
     const mac = editing.mac;
     const favorites = snapshot.favorites ?? [];
@@ -170,20 +186,12 @@ export function useFavorites({
         setForm(null);
     }
 
+    // La liste se relit au retour sur la page, sur l'onglet ou dans la fenêtre : un autre a
+    // pu la changer.
+    const returns = useReturns();
     useEffect(() => {
         void list.load();
-        // Un onglet qu'on retrouve relit la liste : un autre a pu la changer.
-        const onVisible = () => {
-            if (document.visibilityState === 'visible') {
-                void list.load();
-            }
-        };
-        document.addEventListener('visibilitychange', onVisible);
-
-        return () => {
-            document.removeEventListener('visibilitychange', onVisible);
-        };
-    }, [list]);
+    }, [list, returns]);
 
     useEffect(
         () => () => {
@@ -224,11 +232,11 @@ export function useFavorites({
      */
     const report = (outcome: FavoriteOutcome, stale?: string) => {
         if (outcome.kind === 'stale' && stale !== undefined) {
-            editing.notify({ content: stale });
+            editing.notify(notice(stale));
         } else if (outcome.kind === 'failed') {
-            editing.notify({ content: FAILED });
+            editing.notify(notice(UNSAVED));
         } else if (outcome.kind === 'invalid') {
-            editing.notify({ content: outcome.violations[0]?.message ?? FAILED });
+            editing.notify(notice(firstRefusal(outcome.violations)));
         }
     };
 
@@ -305,72 +313,68 @@ export function useFavorites({
     /**
      * Enregistre le formulaire ; la promesse dit s'il s'est fermé. Un refus, ou un serveur
      * muet, le garde ouvert avec son message sous le champ, et rien de tapé ne se perd.
+     *
+     * Un ajout passe par le chemin commun des champs Ticket (ticketSave.ts), comme la
+     * fenêtre de ticket : un ticket manquant, mal formé ou que Jira ne connaît pas ne part
+     * pas — le serveur laisse passer un ticket qu'une saisie porte déjà, il ne le refuserait
+     * pas tout seul —, et l'ajout attend la réponse de Jira quand il cherche encore.
      */
     const submit = (): Promise<boolean> => {
         const shown = form;
         if (shown === null) {
             return Promise.resolve(true);
         }
-        if (pendingRef.current !== null) {
-            return pendingRef.current;
-        }
         const renamed = shown.favorite;
-        if (renamed === null && shown.draft.trim() === '') {
-            setForm({ ...shown, error: 'Indiquez un ticket.', refused: next() });
+        const refuse = (error: string) => {
+            setForm((open) => (open?.key === shown.key ? { ...open, sending: false, error, refused: next() } : open));
+        };
 
-            return Promise.resolve(false);
-        }
-        if (renamed === null && !hasTicketShape(shown.draft)) {
-            setForm({ ...shown, error: TICKET_SHAPE_REFUSAL, refused: next() });
+        return save.run({
+            check: renamed === null ? formCheckRef.current : null,
+            sending: shown.sending,
+            refusal: renamed !== null ? null : shown.draft.trim() === '' ? MISSING_TICKET : shapeRefusal(shown.draft),
+            refuse,
+            start: () => {
+                setForm({ ...shown, sending: true, error: null, refused: 0 });
 
-            return Promise.resolve(false);
-        }
-        // Le refus affiché vaut pour tous les gestes, et le serveur laisse passer un ticket
-        // qu'une saisie porte déjà : il ne se refuserait pas tout seul.
-        if (renamed === null && formCheckRef.current.refused) {
-            setForm({ ...shown, error: TICKET_NOT_FOUND, refused: next() });
+                return () => (renamed === null ? list.add(shown.draft) : list.rename(renamed.id, shown.draft));
+            },
+            settle: (outcome: FavoriteOutcome) => {
+                if (outcome.kind === 'invalid' || outcome.kind === 'failed') {
+                    refuse(outcome.kind === 'failed' ? UNSAVED : firstRefusal(outcome.violations));
 
-            return Promise.resolve(false);
-        }
-        setForm({ ...shown, sending: true, error: null, refused: 0 });
-        const known = renamed === null ? formCheckRef.current.known() : undefined;
-        const sent = (known ?? Promise.resolve(true)).then((exists): Promise<FavoriteOutcome> => {
-            if (!exists) {
-                return Promise.resolve({
-                    kind: 'invalid',
-                    violations: [{ field: 'ticket', message: TICKET_NOT_FOUND }],
-                });
-            }
+                    return false;
+                }
+                const focused = formHasFocus();
+                close(shown);
+                if (focused) {
+                    keepFocus(renamed?.id ?? null);
+                }
+                report(outcome, RENAME_STALE);
 
-            return renamed === null ? list.add(shown.draft) : list.rename(renamed.id, shown.draft);
+                return true;
+            },
         });
-
-        const pending = sent.then((outcome) => {
-            pendingRef.current = null;
-            if (outcome.kind === 'invalid' || outcome.kind === 'failed') {
-                const error = outcome.kind === 'failed' ? FAILED : (outcome.violations[0]?.message ?? FAILED);
-                setForm((open) =>
-                    open?.key === shown.key ? { ...open, sending: false, error, refused: next() } : open,
-                );
-
-                return false;
-            }
-            close(shown);
-            keepFocus(renamed?.id ?? null);
-            report(outcome, RENAME_STALE);
-
-            return true;
-        });
-        pendingRef.current = pending;
-
-        return pending;
     };
 
-    const cancel = () => {
-        if (form !== null && !form.sending) {
-            close(form);
-            keepFocus(form.favorite?.id ?? null);
+    /**
+     * « Annuler », ou Échap : le formulaire se ferme sans rien enregistrer. Le curseur qui y
+     * était revient au favori renommé, ou au + de l'en-tête ; posé ailleurs, il y reste
+     * (formHasFocus).
+     */
+    const cancel = (): boolean => {
+        if (form === null) {
+            return false;
         }
+        if (!form.sending) {
+            const focused = formHasFocus();
+            close(form);
+            if (focused) {
+                keepFocus(form.favorite?.id ?? null);
+            }
+        }
+
+        return true;
     };
 
     /**
@@ -378,7 +382,7 @@ export function useFavorites({
      * Un ajout encore vide n'a rien à enregistrer : le formulaire se ferme.
      */
     const leaveForm = (): Promise<boolean> => {
-        if (form !== null && form.favorite === null && form.draft.trim() === '' && pendingRef.current === null) {
+        if (form !== null && form.favorite === null && form.draft.trim() === '' && save.current === null) {
             close(form);
 
             return Promise.resolve(true);
@@ -461,23 +465,11 @@ export function useFavorites({
 
                 return;
             }
-            editing.notify({
-                content: (
-                    <>
-                        <b className="font-mono font-semibold whitespace-nowrap">{added.ticket}</b> ajouté aux favoris
-                    </>
-                ),
-                action: {
-                    label: 'Annuler',
-                    title: `Annuler (${shortcutLabel('Z', mac)})`,
-                    keyShortcuts: shortcutAria('Z', mac),
-                    onAction: () => {
-                        editing.notify(null);
-                        void list.remove(added.id).then(({ outcome: removal }) => {
-                            report(removal);
-                        });
-                    },
-                },
+            editing.notify(favoriteMessage(added.ticket, 'added'), () => {
+                editing.notify(null);
+                void list.remove(added.id).then(({ outcome: removal }) => {
+                    report(removal);
+                });
             });
         });
     };
@@ -488,36 +480,26 @@ export function useFavorites({
      * message rend revient à la liste, et suit le favori remis.
      */
     const announceRemoved = (removed: Removed) => {
-        editing.notify({
-            content: (
-                <>
-                    <b className="font-mono font-semibold whitespace-nowrap">{removed.favorite.ticket}</b> retiré des
-                    favoris
-                </>
-            ),
-            action: {
-                label: 'Annuler',
-                title: `Annuler (${shortcutLabel('Z', mac)})`,
-                keyShortcuts: shortcutAria('Z', mac),
-                onAction: () => {
-                    editing.notify(null);
-                    void list.restore(removed).then((outcome) => {
-                        const back = list
-                            .current()
-                            .favorites?.find((favorite) => favorite.ticket === removed.favorite.ticket);
-                        keepFocus(back?.id ?? null);
-                        report(outcome);
-                    });
-                },
+        editing.notify(
+            favoriteMessage(removed.favorite.ticket, 'removed'),
+            () => {
+                editing.notify(null);
+                void list.restore(removed).then((outcome) => {
+                    const back = list
+                        .current()
+                        .favorites?.find((favorite) => favorite.ticket === removed.favorite.ticket);
+                    keepFocus(back?.id ?? null);
+                    report(outcome);
+                });
             },
-            returnFocus: () => {
+            () => {
                 addButtonRef.current?.focus();
             },
-        });
+        );
     };
 
-    // Le glisser d'un favori : il suit le pointeur jusqu'au relâcher. Ses écouteurs se
-    // posent à l'appui, pas au rendu d'après : un geste rapide relâcherait avant eux.
+    // Le glisser d'un favori : il suit le pointeur jusqu'au relâcher, comme un glisser sur la
+    // grille (pointerDrag.ts).
 
     /** Où tomberait ce qu'on glisse, le pointeur ici. */
     const targetAt = (clientX: number, clientY: number, exclude: string | null) => {
@@ -526,7 +508,7 @@ export function useFavorites({
             return { index: indexAt(listRef.current, clientY, exclude), quarter: null };
         }
         const lane = laneRef.current;
-        const frame = lane?.closest('[role="region"]')?.getBoundingClientRect();
+        const frame = scrollerRef.current?.getBoundingClientRect();
         const rect = lane?.getBoundingClientRect();
         // La grille, si rien n'est posé sur elle à cet endroit : sous 1280 px, le
         // récapitulatif ouvert la couvre, et un favori lâché dessus n'y tombe pas.
@@ -539,7 +521,7 @@ export function useFavorites({
             lane?.contains(document.elementFromPoint(clientX, clientY)) === true
         ) {
             // Fermée à la saisie, la grille ne prend rien : le favori lâché n'y tombe pas.
-            return { index: null, quarter: editing.closed ? null : quarterAt(lane, clientY) };
+            return { index: null, quarter: editing.closed ? null : pointedQuarter(lane, clientY) };
         }
 
         return { index: null, quarter: null };
@@ -573,70 +555,37 @@ export function useFavorites({
 
     const startDrag = (favorite: Favorite, card: DOMRect, startX: number, startY: number) => {
         stopRef.current?.();
-        const threshold = tokenPixels(DRAG_THRESHOLD);
-        let started = false;
-        let frame = 0;
         const pointer = pointerRef.current;
         pointer.grabX = startX - card.left;
         pointer.grabY = startY - card.top;
-
-        const onMove = (event: globalThis.MouseEvent) => {
-            pointer.x = event.clientX;
-            pointer.y = event.clientY;
-            if (!started) {
-                if (Math.hypot(event.clientX - startX, event.clientY - startY) < threshold) {
-                    return;
-                }
-                started = true;
+        stopRef.current = startPointerDrag({
+            start: { x: startX, y: startY },
+            threshold: tokenPixels(DRAG_THRESHOLD),
+            lane: () => laneRef.current,
+            scroller: () => scrollerRef.current,
+            onStart: () => {
                 editing.notify(null);
-                frame = requestAnimationFrame(scroll);
-            }
-            placeDragCard(dragCardRef.current, pointer);
-            handlersRef.current.move(favorite, event.clientX, event.clientY);
-        };
-        const onUp = (event: globalThis.MouseEvent) => {
-            stop();
-            if (started) {
+            },
+            onMove: (x, y) => {
+                pointer.x = x;
+                pointer.y = y;
+                placeDragCard(dragCardRef.current, pointer);
+                handlersRef.current.move(favorite, x, y);
+            },
+            onEnd: (x, y) => {
+                stopRef.current = null;
                 draggedRef.current = true;
-                handlersRef.current.end(favorite, event.clientX, event.clientY);
-            }
-        };
-        const onKey = (event: globalThis.KeyboardEvent) => {
-            if (event.key === 'Escape' && started) {
-                event.preventDefault();
-                stop();
+                handlersRef.current.end(favorite, x, y);
+            },
+            // Échap n'abandonne que le glisser : une fenêtre de ticket restée ouverte, ou le
+            // formulaire d'un favori, gardent leur saisie.
+            onCancel: () => {
+                stopRef.current = null;
                 setDrag(null);
                 // Le relâcher sur la carte elle-même n'est pas un clic.
                 draggedRef.current = true;
-            }
-        };
-        // Près du bord haut ou bas de la grille, elle défile, comme pendant un glisser
-        // sur elle.
-        const scroll = () => {
-            const lane = laneRef.current;
-            const scroller = lane?.closest('[role="region"]');
-            if (scroller instanceof HTMLElement && lane !== null) {
-                const { top, bottom, left, right } = scroller.getBoundingClientRect();
-                const edge = (lane.getBoundingClientRect().height / Quarter.COUNT) * 2;
-                const { x, y } = pointer;
-                if (x >= left && x <= right && y >= top && y <= bottom && (y < top + edge || y > bottom - edge)) {
-                    scroller.scrollTop += (y < top + edge ? -edge : edge) / 8;
-                    handlersRef.current.move(favorite, x, y);
-                }
-            }
-            frame = requestAnimationFrame(scroll);
-        };
-        const stop = () => {
-            cancelAnimationFrame(frame);
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            document.removeEventListener('keydown', onKey, true);
-            stopRef.current = null;
-        };
-        stopRef.current = stop;
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-        document.addEventListener('keydown', onKey, true);
+            },
+        });
     };
 
     // Un bloc glissé de la grille : il se soulève dès qu'il quitte la colonne des blocs
@@ -717,26 +666,28 @@ export function useFavorites({
             }
         },
         openRename,
-        setDraft: (field) => {
+        setDraft: (draft) => {
             const shown = form;
             if (shown === null || shown.sending) {
                 return;
             }
-            const draft = shown.favorite === null ? rewrite(field, typedTicket) : field.value;
             setForm({ ...shown, draft, error: null, refused: 0 });
         },
         checkDraft: () => {
-            setForm((open) =>
-                open?.favorite !== null || open.sending || hasTicketShape(open.draft)
-                    ? open
-                    : { ...open, error: TICKET_SHAPE_REFUSAL, refused: 0 },
-            );
+            setForm((open) => {
+                const refusal = open?.favorite !== null || open.sending ? null : shapeRefusal(open.draft);
+
+                return open === null || refusal === null ? open : { ...open, error: refusal, refused: 0 };
+            });
         },
         submit: () => {
             void submit();
         },
         leave: leaveForm,
-        cancel,
+        cancel: () => {
+            cancel();
+        },
+        escape: cancel,
         copy,
         move,
         remove,
@@ -756,44 +707,55 @@ export function useFavorites({
             if (document.activeElement !== event.currentTarget) {
                 event.currentTarget.focus({ preventScroll: true, focusVisible: false });
             }
-            // Le second clic d'un double-clic renomme : il ne copie pas une seconde fois.
-            if (draggedRef.current || event.detail > 1) {
-                draggedRef.current = false;
-
+            // Le second clic d'un double-clic renomme : il ne copie pas une seconde fois. Entrée
+            // ou Espace sur la carte, un clic sans pointeur, copient toujours : un glisser
+            // relâché loin d'elle n'a pas laissé de clic à avaler.
+            const dragged = draggedRef.current;
+            draggedRef.current = false;
+            if ((dragged && event.detail > 0) || event.detail > 1) {
                 return;
             }
             copy(favorite);
         },
         onCardKeyDown: (event, favorite) => {
-            const key = event.key;
-            if (event.altKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
-                event.preventDefault();
-                move(favorite, key === 'ArrowUp' ? -1 : 1);
-            } else if ((event.ctrlKey || event.metaKey) && !event.altKey && key.toLowerCase() === 'v') {
-                // Un favori vient d'être copié, la sélection de la grille attend : on y colle,
-                // et le curseur va où le geste a porté. Fermée à la saisie, la grille ne prend
-                // ni le collage ni le curseur, qui reste sur le favori.
-                event.preventDefault();
-                if (!editing.closed) {
-                    editing.paste();
-                    editing.focusGrid();
+            ignoreHeldEnter(event);
+            const shortcut = shortcutOf(event.nativeEvent, FAVORITE_SHORTCUTS);
+            if (shortcut === null) {
+                return;
+            }
+            event.preventDefault();
+            switch (shortcut) {
+                case 'moveUp':
+                case 'moveDown':
+                    move(favorite, shortcut === 'moveUp' ? -1 : 1);
+                    break;
+                case 'paste':
+                    // Un favori vient d'être copié, la sélection de la grille attend : on y
+                    // colle, et le curseur va où le geste a porté. Fermée à la saisie, la grille
+                    // ne prend ni le collage ni le curseur, qui reste sur le favori.
+                    if (!editing.closed) {
+                        editing.paste();
+                        editing.focusGrid();
+                    }
+                    break;
+                case 'copy':
+                    copy(favorite);
+                    break;
+                case 'edit':
+                    openRename(favorite);
+                    break;
+                case 'delete':
+                    // Une touche tenue ne retire pas les voisins l'un après l'autre.
+                    if (!event.repeat) {
+                        remove(favorite);
+                    }
+                    break;
+                case 'menu': {
+                    // Le menu s'ouvre sous la carte, pas là où le navigateur le poserait.
+                    const card = event.currentTarget.getBoundingClientRect();
+                    openMenuAt(event.currentTarget, card.left + card.width / 2, card.bottom);
+                    break;
                 }
-            } else if ((event.ctrlKey || event.metaKey) && !event.altKey && key.toLowerCase() === 'c') {
-                event.preventDefault();
-                copy(favorite);
-            } else if (key === 'F2') {
-                event.preventDefault();
-                openRename(favorite);
-            } else if (key === 'Delete' || key === 'Backspace') {
-                event.preventDefault();
-                // Une touche tenue ne retire pas les voisins l'un après l'autre.
-                if (!event.repeat) {
-                    remove(favorite);
-                }
-            } else if (key === 'ContextMenu' || (key === 'F10' && event.shiftKey)) {
-                // Le menu s'ouvre sous la carte, pas là où le navigateur le poserait.
-                event.preventDefault();
-                openMenuUnder(event.currentTarget);
             }
         },
     };
@@ -808,7 +770,23 @@ const RENAME_STALE = 'Ce favori a été retiré entre-temps.';
 /** Un ordre qui partait d'une liste changée ailleurs : rien n'est déplacé. */
 const MOVE_STALE = "La liste a changé entre-temps. Rien n'a été déplacé.";
 
-const FAILED = "L'enregistrement n'a pas abouti. Réessayez.";
+/** Un ajout envoyé sans ticket. */
+const MISSING_TICKET = 'Indiquez un ticket.';
+
+/**
+ * Le curseur est dans le formulaire, ou s'est perdu : le formulaire qui se ferme le rend au
+ * favori renommé, ou au + de l'en-tête. Posé ailleurs — la grille, un favori cliqué —, il y
+ * reste : l'application ne déplace jamais un curseur posé.
+ */
+function formHasFocus(): boolean {
+    const focused = document.activeElement;
+
+    return (
+        focused === null ||
+        focused === document.body ||
+        document.querySelector('[data-favorite-form]')?.contains(focused) === true
+    );
+}
 
 /** La carte d'un favori dans la liste. */
 function cardOf(list: HTMLElement | null, id: string): HTMLElement | null {
@@ -839,17 +817,4 @@ function within(rect: DOMRect, x: number, y: number): boolean {
 function placeDragCard(card: HTMLElement | null, pointer: { x: number; y: number; grabX: number; grabY: number }) {
     setPointerLength(card, '--drag-x', pointer.x - pointer.grabX);
     setPointerLength(card, '--drag-y', pointer.y - pointer.grabY);
-}
-
-/** Ouvre le menu du clic droit sous une carte, comme si on l'y avait demandé à la souris. */
-function openMenuUnder(card: HTMLElement): void {
-    const rect = card.getBoundingClientRect();
-    card.dispatchEvent(
-        new globalThis.MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.bottom,
-        }),
-    );
 }

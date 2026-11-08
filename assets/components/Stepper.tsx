@@ -1,8 +1,8 @@
 import { type ComponentProps, useId } from 'react';
 
 import { Button } from './Button';
-import { FIELD_INPUT } from './Field';
-import { ErrorIcon, MinusIcon, PlusIcon } from './icons';
+import { FIELD_INPUT, FieldError } from './Field';
+import { MinusIcon, PlusIcon } from './icons';
 
 export interface StepperProps extends Omit<ComponentProps<'input'>, 'id' | 'className'> {
     label: string;
@@ -63,12 +63,7 @@ export function Stepper({
                     <PlusIcon />
                 </Button>
             </div>
-            {error !== null && (
-                <p id={errorId} className="flex items-start gap-2 text-sm leading-(--lh) text-inc">
-                    <ErrorIcon />
-                    {error}
-                </p>
-            )}
+            {error !== null && <FieldError id={errorId} error={error} />}
         </div>
     );
 }

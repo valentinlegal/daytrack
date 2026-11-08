@@ -1,6 +1,6 @@
-import type { APIRequestContext, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, Locator, Page, Request } from '@playwright/test';
 
-import { startTimeAt, weekday } from './day';
+import { startTimeAt, weekdaysFrom } from './day';
 import { expect } from './fixtures';
 
 /**
@@ -17,6 +17,17 @@ interface SavedBlock {
     readonly comment: string | null;
 }
 
+/** La grille défilée jusqu'à ce que cette heure soit en haut de la vue, ou aussi près que possible. */
+export async function scrollGridTo(page: Page, time: string) {
+    await slot(page, time).evaluate((option) => {
+        option.closest('[role="region"]')?.scrollTo({ top: 0 });
+        const region = option.closest('[role="region"]');
+        if (region !== null) {
+            region.scrollTop = option.getBoundingClientRect().top - region.getBoundingClientRect().top;
+        }
+    });
+}
+
 /** La liste des créneaux : elle porte le curseur de la grille. */
 export function slots(page: Page): Locator {
     return page.getByRole('listbox', { name: 'Créneaux de la journée' });
@@ -24,6 +35,65 @@ export function slots(page: Page): Locator {
 
 export function slot(page: Page, time: string): Locator {
     return page.locator(`#creneau-${time.replace(':', '')}`);
+}
+
+export function selectedSlots(page: Page): Locator {
+    return slots(page).getByRole('option', { selected: true });
+}
+
+/** Les blocs de la journée, de haut en bas. */
+export function blocks(page: Page): Locator {
+    return page.getByRole('list', { name: 'Saisies du jour' }).getByRole('listitem');
+}
+
+/** La colonne des blocs, que la grille fermée grise. */
+export function lane(page: Page): Locator {
+    return page.getByRole('list', { name: 'Saisies du jour' }).locator('..');
+}
+
+export function figures(page: Page): Locator {
+    return page.getByRole('group', { name: 'Chiffres du jour' });
+}
+
+/** Ouvre la journée, à l'heure qu'a le navigateur, et attend ses chiffres. */
+export async function openDay(page: Page, date: string): Promise<void> {
+    await page.goto(`/${date}`);
+    await expect(figures(page)).toBeVisible();
+}
+
+export function openAnyway(page: Page): Locator {
+    return page.getByRole('button', { name: 'Saisir quand même' });
+}
+
+/** La valeur qu'une couleur de tokens.css prend dans la page. */
+export async function tokenColor(page: Page, token: `--${string}`): Promise<string> {
+    return page.evaluate((name) => {
+        const probe = document.createElement('div');
+        probe.style.backgroundColor = `var(${name})`;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+
+        return color;
+    }, token);
+}
+
+/** Les écritures que la page envoie à partir d'ici, hors ce qu'elle demande à Jira. */
+export function recordWrites(page: Page): Request[] {
+    const writes: Request[] = [];
+    page.on('request', (sent) => {
+        const jira = /\/api\/(jira\/check|tickets\/refresh)$/.test(new URL(sent.url()).pathname);
+        if (sent.method() !== 'GET' && !jira) {
+            writes.push(sent);
+        }
+    });
+
+    return writes;
+}
+
+/** Ces écritures, chacune par sa méthode et son adresse : « PUT /api/days/2025-01-06/objective ». */
+export function describedWrites(writes: readonly Request[]): string[] {
+    return writes.map((sent) => `${sent.method()} ${new URL(sent.url()).pathname}`);
 }
 
 /**
@@ -176,15 +246,63 @@ export async function expectGridMatchesBase(page: Page, request: APIRequestConte
 }
 
 /**
- * Amène la souris sur un élément en plusieurs pas, comme une vraie : d'un bouton à son
- * voisin, l'infobulle de Radix ne passe au suivant qu'au mouvement sur lui.
+ * Amène la souris sur un élément en plusieurs pas, comme une vraie, puis l'y laisse jusqu'à
+ * ce que `shown` — ce que son survol ouvre, une infobulle — paraisse.
+ *
+ * Une main posée sur la souris la fait encore bouger d'un pixel, et il le faut : d'un bouton
+ * à son voisin, Radix croit le pointeur en chemin vers l'infobulle d'avant, et n'écoute le
+ * survol du voisin qu'au mouvement qui suit la fin de ce chemin, qu'il ne repère qu'une fois
+ * la page rendue. Le dernier pas de Playwright arrivait parfois avant ce rendu, sur un poste
+ * chargé, et l'infobulle attendait un mouvement qui ne venait plus. Le pointeur bouge donc
+ * d'un pixel à chaque image, jusqu'à ce qu'elle paraisse.
  */
-export async function glideTo(page: Page, target: Locator) {
+export async function glideTo(page: Page, target: Locator, shown: Locator) {
     const box = await target.boundingBox();
     if (box === null) {
         throw new Error('L’élément visé n’est pas à l’écran.');
     }
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 });
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y, { steps: 4 });
+    const deadline = Date.now() + 5000;
+    for (let shift = 1; !(await shown.isVisible()) && Date.now() < deadline; shift = -shift) {
+        await nextFrame(page);
+        await page.mouse.move(x + shift, y);
+    }
+    await expect(shown).toBeVisible();
+}
+
+/**
+ * Clique à côté de la fenêtre ouverte, après qu'on y a tapé : dans l'en-tête, à côté du
+ * logo, là où rien ne prend le focus.
+ *
+ * Radix n'écoute le clic à côté qu'un tour après avoir posé la fenêtre. Une main met bien
+ * plus longtemps à aller cliquer ailleurs ; Playwright, non : sur un poste chargé, son clic
+ * passait parfois avant ce tour, et la fenêtre restait ouverte. La page finit donc son tour
+ * avant le clic. Ce tour est posé au plus tard à la première frappe dans la fenêtre, qui
+ * fait rendre la page : sans frappe, rien ne garantit qu'il passe avant le nôtre. Sous une
+ * horloge figée (`freezeTime`), aucun tour ne passe : ni cette aide ni `glideTo` n'y servent.
+ */
+export async function clickOutside(page: Page) {
+    await page.evaluate(
+        () =>
+            new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+            }),
+    );
+    await page.mouse.click(5, 5);
+}
+
+/** Attend que la page ait rendu une image. */
+async function nextFrame(page: Page) {
+    await page.evaluate(
+        () =>
+            new Promise<void>((resolve) => {
+                requestAnimationFrame(() => {
+                    resolve();
+                });
+            }),
+    );
 }
 
 /**
@@ -210,12 +328,10 @@ export async function openSampleDay(page: Page, date: string) {
 /**
  * Le jour d'un parcours : le `index`-ième jour de semaine à partir du lundi 5 janvier
  * 2026, à l'écart des autres parcours — ceux de la saisie (grid-editing.spec.ts) vont
- * jusqu'en décembre, la suite tirée au hasard prend le 29. Un samedi serait fermé à la
- * saisie.
+ * jusqu'au 2 janvier, la suite tirée au hasard prend le 29 décembre. Un samedi serait fermé
+ * à la saisie.
  */
-export function editingDay(index: number): string {
-    return weekday('2026-01-05', index);
-}
+export const editingDay = weekdaysFrom('2026-01-05');
 
 export function objectiveButton(page: Page): Locator {
     return page.getByRole('button', { name: /^Objectif du jour/ });

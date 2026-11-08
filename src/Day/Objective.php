@@ -14,4 +14,10 @@ final class Objective
     public const int MIN = 0;
 
     public const int MAX = Quarter::GRID_MINUTES;
+
+    /** Un objectif tel que l'écran l'écrit : 450 se lit 7h30. */
+    public static function format(int $minutes): string
+    {
+        return \sprintf('%dh%02d', intdiv($minutes, 60), $minutes % 60);
+    }
 }

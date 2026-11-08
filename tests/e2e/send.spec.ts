@@ -1,9 +1,8 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
 
-import { type Entry, startTimeAt, weekday, writeDay } from './day';
+import { type Entry, startTimeAt, weekdaysFrom, writeDay } from './day';
 import { message } from './editing';
-import { expect, refusedWith, test } from './fixtures';
+import { expect, expectAccessible, refusedWith, test } from './fixtures';
 import { clearSentDay, receivedWorklogs, rewriteSend, sendButton, sendWindow } from './send';
 
 /**
@@ -14,9 +13,7 @@ import { clearSentDay, receivedWorklogs, rewriteSend, sendButton, sendWindow } f
  */
 
 /** Le jour d'un parcours : un jour de semaine de l'été 2023, que nul autre parcours ne prend. */
-function day(index: number): string {
-    return weekday('2023-07-03', index);
-}
+const workday = weekdaysFrom('2023-07-03');
 
 const DAY: Entry[] = [
     { start: '09:00', end: '10:30', ticket: 'SHOP-482', comment: 'Revue de code' },
@@ -24,8 +21,6 @@ const DAY: Entry[] = [
     { start: '12:00', end: '13:00' },
     { start: '13:00', end: '14:00', ticket: 'SHOP-482', comment: 'Revue de code' },
 ];
-
-const used: string[] = [];
 
 /**
  * Ouvre le jour d'un parcours, ses saisies posées, le récapitulatif ouvert. Son objectif
@@ -38,8 +33,7 @@ async function open(
     index: number,
     entries: readonly Entry[] = DAY,
 ): Promise<string> {
-    const date = day(index);
-    used.push(date);
+    const date = workday(index);
     await clearSentDay(request, date);
     await writeDay(request, date, entries, workedIn(entries));
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -64,17 +58,6 @@ async function confirmSend(page: Page): Promise<void> {
     await sendWindow(page, 'Envoyer sur Jira').getByRole('button', { name: 'Envoyer sur Jira' }).click();
 }
 
-test.afterAll(async ({ playwright }) => {
-    const request = await playwright.request.newContext({
-        baseURL: process.env.DAYTRACK_URL ?? 'https://localhost:8443',
-        ignoreHTTPSErrors: true,
-    });
-    for (const date of used) {
-        await clearSentDay(request, date);
-    }
-    await request.dispose();
-});
-
 test.describe('l’envoi sur Jira', () => {
     test('confirme, envoie, puis dit la journée envoyée, même rechargée', async ({ page, request }) => {
         const date = await open(page, request, 0);
@@ -84,17 +67,14 @@ test.describe('l’envoi sur Jira', () => {
 
         const confirm = sendWindow(page, 'Envoyer sur Jira');
         await expect(confirm).toBeVisible();
+        // Le jour, sous le titre, se lit aussi au lecteur d'écran.
+        await expect(confirm).toHaveAccessibleDescription(/^[A-Z]\S+ \d{1,2} \S+$/);
         await expect(confirm).toContainText(
             'Les heures déjà déclarées dans Jira pour ce jour seront remplacées par celles-ci.',
         );
         await expect(confirm.getByRole('listitem')).toHaveText([/SHOP-482.*2h30/, /OPS-12.*0h30/, /Total.*3h00/]);
         await expect(confirm).toContainText("La pause n'est pas envoyée.");
-        // Un tableau : les titres s'alignent, quelle que soit la longueur de l'identifiant.
-        const lefts = await confirm
-            .getByRole('listitem')
-            .locator('.truncate')
-            .evaluateAll((spans) => spans.map((span) => Math.round(span.getBoundingClientRect().left)));
-        expect(new Set(lefts.slice(0, 2)).size).toBe(1);
+        await expectTable(confirm, 'OPS-12', 'SHOP-482');
 
         await confirm.getByRole('button', { name: 'Envoyer sur Jira' }).click();
 
@@ -110,11 +90,13 @@ test.describe('l’envoi sur Jira', () => {
         await sendButton(page).click();
         const detail = sendWindow(page, 'Envoyé sur Jira');
         await expect(detail).toContainText('Ces heures sont dans Jira pour ce jour.');
+        await expect(detail).toHaveAccessibleDescription(/^[A-Z]\S+ \d{1,2} \S+ à \d{2}:\d{2}$/);
         await expect(detail.getByRole('listitem')).toHaveText([
             /Envoyé.*SHOP-482.*2h30/,
             /Envoyé.*OPS-12.*0h30/,
             /Total.*3h00/,
         ]);
+        await expectTable(detail, 'OPS-12', 'SHOP-482');
         await expect(detail).not.toContainText('Renvoyer sur Jira');
         await expect(sendButton(page)).toHaveAttribute('data-state', 'open');
         await page.keyboard.press('Escape');
@@ -186,6 +168,58 @@ test.describe('l’envoi sur Jira', () => {
         await expect(sendButton(page)).toHaveText(/^Envoyé à/);
         await expect(page.locator('.send-veil')).toHaveCount(0);
         await expect(page.getByRole('navigation', { name: 'Changer de jour' })).not.toHaveAttribute('inert', '');
+        expect(await receivedWorklogs(request, date)).toHaveLength(2);
+    });
+
+    test('les flèches du navigateur ne quittent pas la journée avant l’issue de l’envoi', async ({ page, request }) => {
+        const date = await open(page, request, 45);
+        const title = page.getByRole('heading', { level: 1 });
+        const shown = await title.textContent();
+        // Avant le jour envoyé, l'historique a un autre jour, puis les réglages.
+        await page.evaluate(
+            ([other, date]) => {
+                history.pushState(null, '', `/${other}`);
+                history.pushState(null, '', '/reglages');
+                history.pushState(null, '', `/${date}`);
+                (window as { notReloaded?: boolean }).notReloaded = true;
+            },
+            [workday(46), date] as const,
+        );
+        let release: () => void = () => undefined;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        await page.route(`**/api/days/${date}/send`, async (route) => {
+            await held;
+            await route.fallback();
+        });
+        await confirmSend(page);
+        await expect(page.locator('.send-veil')).toBeVisible();
+
+        // Vers les réglages : la page ne se recharge pas. Vers un autre jour : il ne s'ouvre pas.
+        await page.goBack();
+        await page.evaluate(
+            () =>
+                new Promise<void>((resolve) => {
+                    window.addEventListener(
+                        'popstate',
+                        () => {
+                            resolve();
+                        },
+                        { once: true },
+                    );
+                    history.go(-2);
+                }),
+        );
+        await expect(page).toHaveURL(`/${date}`);
+        await expect(title).toHaveText(shown ?? '');
+        await expect(page.locator('.send-veil')).toBeVisible();
+        expect(await page.evaluate(() => (window as { notReloaded?: boolean }).notReloaded)).toBe(true);
+
+        release();
+        await expect(sendButton(page)).toHaveText(/^Envoyé à/);
+        await expect(page.locator('.send-veil')).toHaveCount(0);
+        await expect(page).toHaveURL(`/${date}`);
         expect(await receivedWorklogs(request, date)).toHaveLength(2);
     });
 
@@ -342,6 +376,7 @@ test.describe('l’envoi sur Jira', () => {
         await expect(confirm.getByRole('listitem').filter({ hasText: 'OPS-7' })).toContainText(
             'Ses heures seront retirées de Jira.',
         );
+        await expectUnderChip(confirm, 'OPS-7', 'Ses heures seront retirées de Jira.');
         await confirm.getByRole('button', { name: 'Envoyer sur Jira' }).click();
 
         const result = sendWindow(page, 'Envoi partiel');
@@ -349,12 +384,93 @@ test.describe('l’envoi sur Jira', () => {
         await expect(result.getByRole('listitem').filter({ hasText: 'OPS-7' })).toContainText(
             'Retiré de la journée et de Jira.',
         );
+        await expectUnderChip(result, 'OPS-7', 'Retiré de la journée et de Jira.');
+        await expectUnderChip(result, 'FERME-5', 'Jira refuse les heures de ce ticket fermé.');
         await expect(
             page
                 .getByRole('complementary', { name: 'Récapitulatif' })
                 .getByRole('listitem')
                 .filter({ hasText: 'OPS-7' }),
         ).toHaveCount(0);
+    });
+
+    test('dit sous un ticket retiré que Jira ne trouve plus qu’il faut y retirer ses heures, sans bloquer la journée', async ({
+        page,
+        request,
+    }) => {
+        // Un numéro neuf à chaque passage : le Jira simulé ne montre plus un ticket de DISPARU
+        // dès qu'il a relu ses heures, et le garde caché. Neuf chiffres au plus : l'identifiant
+        // tient entier dans sa pastille.
+        const gone = `DISPARU-${String((Date.now() % 999_999_999) + 1)}`;
+        const date = await open(page, request, 43, [
+            { start: '09:00', end: '10:00', ticket: 'SHOP-482' },
+            { start: '10:00', end: '10:30', ticket: gone },
+        ]);
+        await confirmSend(page);
+        await expect(sendButton(page)).toHaveText(/^Envoyé à/);
+
+        // Le compte ne le voit plus, et on le retire de la journée.
+        await writeDay(request, date, [{ start: '09:00', end: '10:00', ticket: 'SHOP-482' }], 60);
+        await page.reload();
+        await confirmSend(page);
+
+        // La journée est envoyée ; le détail s'ouvre de lui-même, à la place des confettis.
+        await expect(sendButton(page)).toHaveText(/^Envoyé à/);
+        const detail = sendWindow(page, 'Envoyé sur Jira');
+        await expect(detail).toBeVisible();
+        const line = "Jira ne trouve plus ce ticket. S'il a encore des heures de ce jour, retirez-les dans Jira.";
+        const row = detail.getByRole('listitem').filter({ hasText: gone });
+        await expect(row).toContainText('Introuvable dans Jira');
+        await expect(row).toContainText('0h00');
+        await expect(row.getByText(line)).toBeVisible();
+        await expectUnderChip(detail, gone, line);
+        await expect(detail.getByRole('listitem')).toHaveText([
+            /Envoyé.*SHOP-482.*1h00/,
+            new RegExp(`Introuvable dans Jira.*${gone}.*0h00`),
+            /Total.*1h00/,
+        ]);
+        await page.waitForTimeout(200);
+        expect(await confettiSpan(page)).toBeNull();
+        // Ses heures sont restées dans Jira : DayTrack ne les voit plus, et l'a dit. Celles des
+        // passages d'avant aussi, sous d'autres numéros.
+        const tickets = (await receivedWorklogs(request, date)).map((worklog) => worklog.ticket);
+        expect(tickets).toContain(gone);
+        expect(tickets.filter((ticket) => !ticket.startsWith('DISPARU-'))).toEqual(['SHOP-482']);
+
+        await page.keyboard.press('Escape');
+        await expect(detail).toBeHidden();
+        await expect(sendButton(page)).toBeFocused();
+
+        await page.reload();
+        await sendButton(page).click();
+        await expect(sendWindow(page, 'Envoyé sur Jira').getByText(line)).toBeVisible();
+    });
+
+    test('redit au clic sur « Envoyé à » le ticket introuvable d’une journée vidée', async ({ page, request }) => {
+        const gone = `DISPARU-${String((Date.now() % 999_999_999) + 1)}`;
+        const date = await open(page, request, 44, [{ start: '09:00', end: '09:30', ticket: gone }]);
+        await confirmSend(page);
+        await expect(sendButton(page)).toHaveText(/^Envoyé à/);
+
+        await writeDay(request, date, [], 60);
+        await page.reload();
+        await confirmSend(page);
+
+        const detail = sendWindow(page, 'Envoyé sur Jira');
+        const line = "Jira ne trouve plus ce ticket. S'il a encore des heures de ce jour, retirez-les dans Jira.";
+        await expect(detail.getByText(line)).toBeVisible();
+        // Plus aucune heure de ce jour dans Jira : la fenêtre ne dit pas le contraire.
+        await expect(detail).not.toContainText('Ces heures sont dans Jira pour ce jour.');
+        await expect(detail.getByRole('listitem')).toHaveText([
+            new RegExp(`Introuvable dans Jira.*${gone}.*0h00`),
+            /Total.*0h00/,
+        ]);
+
+        await page.keyboard.press('Escape');
+        await page.reload();
+        await expect(sendButton(page)).toHaveText(/^Envoyé à/);
+        await sendButton(page).click();
+        await expect(sendWindow(page, 'Envoyé sur Jira').getByText(line)).toBeVisible();
     });
 
     test('dit un échec quand Jira ne répond pas, sans rien perdre de la journée', async ({ page, request }) => {
@@ -386,7 +502,7 @@ test.describe('l’envoi sur Jira', () => {
                       ...send,
                       state: 'failed',
                       sentAt: null,
-                      attemptedAt: { date: day(6), time: '18:00' },
+                      attemptedAt: { date: workday(6), time: '18:00' },
                       failure: 'refused',
                       outcomes: {},
                   }
@@ -409,7 +525,7 @@ test.describe('l’envoi sur Jira', () => {
             ...send,
             state: 'failed',
             sentAt: null,
-            attemptedAt: { date: day(12), time: '18:00' },
+            attemptedAt: { date: workday(12), time: '18:00' },
             failure: 'refused',
             outcomes: {},
         }));
@@ -447,21 +563,34 @@ test.describe('l’envoi sur Jira', () => {
         });
     });
 
-    test('lance la gerbe vers l’intérieur de l’écran, et rien quand le système demande moins de mouvement', async ({
+    test('lance la gerbe vers le haut, la fait retomber, et rien quand le système demande moins de mouvement', async ({
         page,
         request,
     }) => {
         await open(page, request, 9);
         await confirmSend(page);
         await expect(sendButton(page)).toHaveText(/^Envoyé à/);
-        expect(await confettiDrawn(page)).toBe(true);
+        const button = await sendButton(page).boundingBox();
+        expect(button).not.toBeNull();
+        const { y: top, height } = button ?? { y: 0, height: 0 };
+
+        // Elle monte : des confettis au-dessus du bouton, plus haut que ne l'agiteraient leurs
+        // seules oscillations autour de son centre…
+        await expect
+            .poll(async () => (await confettiSpan(page))?.top ?? Infinity, { timeout: 10_000, intervals: [30] })
+            .toBeLessThan(top - 4);
+        // … puis elle retombe, bien en dessous de lui.
+        await expect
+            .poll(async () => (await confettiSpan(page))?.bottom ?? -Infinity, { timeout: 10_000, intervals: [30] })
+            .toBeGreaterThan(top + height + 80);
 
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await writeDay(request, day(9), [{ start: '09:00', end: '09:30', ticket: 'OPS-7' }]);
+        await writeDay(request, workday(9), [{ start: '09:00', end: '09:30', ticket: 'OPS-7' }]);
         await page.reload();
         await confirmSend(page);
         await expect(sendButton(page)).toHaveText(/^Envoyé à/);
-        expect(await confettiDrawn(page)).toBe(false);
+        await page.waitForTimeout(150);
+        expect(await confettiSpan(page)).toBeNull();
     });
 
     test.describe('avec les marques de la base', () => {
@@ -483,31 +612,76 @@ test.describe('l’envoi sur Jira', () => {
         ]);
         await sendButton(page).click();
         await expect(sendWindow(page, 'Envoyer sur Jira')).toBeVisible();
-        expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        await expectAccessible(page);
 
         await sendWindow(page, 'Envoyer sur Jira').getByRole('button', { name: 'Envoyer sur Jira' }).click();
         await expect(sendWindow(page, 'Envoi partiel')).toBeVisible();
-        expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        await expectAccessible(page);
     });
 });
 
-/** Des confettis sur la toile, juste après l'envoi : un point non transparent. */
-async function confettiDrawn(page: Page): Promise<boolean> {
-    await page.waitForTimeout(150);
+/**
+ * La liste d'une fenêtre est un tableau : les pastilles partent du même bord, chacune à la
+ * largeur de son identifiant — jamais étirée à celle du plus long —, et les titres
+ * s'alignent quelle que soit la longueur de l'identifiant.
+ */
+async function expectTable(window: Locator, short: string, long: string): Promise<void> {
+    const chip = (ticket: string) =>
+        window
+            .getByRole('listitem')
+            .getByText(ticket, { exact: true })
+            .evaluate((node) => {
+                const box = node.getBoundingClientRect();
 
+                return { left: Math.round(box.left), width: Math.round(box.width) };
+            });
+    const [shortChip, longChip] = [await chip(short), await chip(long)];
+    expect(shortChip.left).toBe(longChip.left);
+    expect(shortChip.width).toBeLessThan(longChip.width);
+
+    const titles = await window
+        .getByRole('listitem')
+        .locator('.truncate')
+        .evaluateAll((spans) => spans.map((span) => Math.round(span.getBoundingClientRect().left)));
+    expect(new Set(titles.slice(0, 2)).size).toBe(1);
+}
+
+/** Ce qui se dit sous un ticket commence sous sa pastille, que la ligne porte une marque ou non. */
+async function expectUnderChip(window: Locator, ticket: string, line: string): Promise<void> {
+    const row = window.getByRole('listitem').filter({ hasText: ticket });
+    const left = (locator: Locator) => locator.evaluate((node) => Math.round(node.getBoundingClientRect().left));
+
+    expect(await left(row.getByText(line, { exact: true }))).toBe(await left(row.getByText(ticket, { exact: true })));
+}
+
+/**
+ * Où sont les confettis sur la toile, en pixels de la page : le plus haut et le plus bas.
+ * Aucun confetti dessiné : null.
+ */
+async function confettiSpan(page: Page): Promise<{ top: number; bottom: number } | null> {
     return page.locator('.send-confetti').evaluate((canvas: HTMLCanvasElement) => {
         const context = canvas.getContext('2d');
-        if (context === null || canvas.width === 0) {
-            return false;
+        if (context === null || canvas.width === 0 || canvas.height === 0) {
+            return null;
         }
-        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-        for (let alpha = 3; alpha < pixels.length; alpha += 4) {
-            if ((pixels[alpha] ?? 0) > 0) {
-                return true;
+        const box = canvas.getBoundingClientRect();
+        const ratio = box.height / canvas.height;
+        const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height);
+        let top = -1;
+        let bottom = -1;
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                if ((data[(y * width + x) * 4 + 3] ?? 0) > 0) {
+                    if (top < 0) {
+                        top = y;
+                    }
+                    bottom = y;
+                    break;
+                }
             }
         }
 
-        return false;
+        return top < 0 ? null : { top: box.top + top * ratio, bottom: box.top + bottom * ratio };
     });
 }
 

@@ -2,6 +2,8 @@
 
 namespace App\Repository;
 
+use App\Database\Lockable;
+use App\Database\LocksItsTable;
 use App\Entity\Settings;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\ORM\Query;
@@ -10,8 +12,10 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * @extends ServiceEntityRepository<Settings>
  */
-final class SettingsRepository extends ServiceEntityRepository
+final class SettingsRepository extends ServiceEntityRepository implements Lockable
 {
+    use LocksItsTable;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, Settings::class);
@@ -26,14 +30,5 @@ final class SettingsRepository extends ServiceEntityRepository
             ->getOneOrNullResult();
 
         return $settings instanceof Settings ? $settings : null;
-    }
-
-    /**
-     * Une écriture qui ne change rien : dans une transaction, elle prend le verrou de
-     * la base jusqu'à la fin de celle-ci (UserSettings).
-     */
-    public function lock(): void
-    {
-        $this->getEntityManager()->getConnection()->executeStatement('UPDATE settings SET single = single WHERE single = 0');
     }
 }

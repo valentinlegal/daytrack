@@ -1,11 +1,12 @@
 import { type RefObject, useEffect, useRef, useState } from 'react';
 
+import { GeneralError } from '../components/Field';
 import { Stepper } from '../components/Stepper';
 import { duration } from '../day/format';
 import { objectiveRefusal } from '../day/messages';
 import { readObjective, stepObjective } from '../grid/objective';
 import { type EditorSnapshot, type SettingsEditor, UNREAD } from './settingsEditor';
-import { RowLabel, SettingsCard, SettingsError, SettingsRow, SettingsSection } from './SettingsSection';
+import { RowLabel, SettingsCard, SettingsRow, SettingsSection } from './SettingsSection';
 
 /** Les jours de la semaine ISO, comme les boutons les écrivent et le lecteur d'écran les dit. */
 const WEEK = [
@@ -92,7 +93,9 @@ export function DaySection({
                                 })}
                             </div>
                         </SettingsRow>
-                        {snapshot.errors.days !== undefined && <SettingsError message={snapshot.errors.days} />}
+                        {snapshot.errors.days !== undefined && (
+                            <GeneralError message={snapshot.errors.days} className="pb-4" />
+                        )}
                     </>
                 )}
             </SettingsCard>
@@ -102,7 +105,7 @@ export function DaySection({
 
 /** Ce que disent les cartes quand les réglages ne se lisent pas. */
 export function Unread() {
-    return <SettingsError message={UNREAD} />;
+    return <GeneralError message={UNREAD} className="pb-4" />;
 }
 
 /**

@@ -17,10 +17,6 @@ export interface TicketInfo {
  * l'écran ne casse pas.
  */
 export function readTickets(json: unknown): Record<string, TicketInfo> {
-    // Une liste vide arrive en tableau : PHP ne distingue pas.
-    if (Array.isArray(json) && json.length === 0) {
-        return {};
-    }
     if (!isRecord(json)) {
         throw new TypeError("L'API ne décrit pas les tickets.");
     }

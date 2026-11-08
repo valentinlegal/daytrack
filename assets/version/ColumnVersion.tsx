@@ -6,6 +6,7 @@ import { ExternalLink } from '../components/ExternalLink';
 import { DownloadIcon } from '../components/icons';
 import { Popover } from '../components/Popover';
 import { tokenPixels } from '../components/tokenPixels';
+import { useReturns } from '../useReturns';
 import { httpVersionApi, notesUrl, type VersionApi } from './versionApi';
 
 const COMMANDS = 'docker compose pull\ndocker compose up -d';
@@ -13,7 +14,7 @@ const defaultApi = httpVersionApi();
 
 /**
  * Le numéro de version du pied de colonne, et le bouton « Nouvelle version » quand il y
- * en a une. Elle se cherche à l'ouverture et au retour sur l'onglet, sans rien dire quand
+ * en a une. Elle se cherche à l'ouverture et au retour sur la page, sans rien dire quand
  * le serveur ne répond pas : c'est un avis.
  */
 export function ColumnVersion({
@@ -46,19 +47,10 @@ export function ColumnVersion({
     const check = useEffectEvent(() => {
         api.available().then(onAnswer, () => undefined);
     });
+    const returns = useReturns();
     useEffect(() => {
         check();
-        const listener = () => {
-            if (document.visibilityState === 'visible') {
-                check();
-            }
-        };
-        document.addEventListener('visibilitychange', listener);
-
-        return () => {
-            document.removeEventListener('visibilitychange', listener);
-        };
-    }, []);
+    }, [returns]);
 
     return (
         <>
@@ -76,7 +68,7 @@ export function ColumnVersion({
                         aria-haspopup="dialog"
                         aria-expanded={open}
                         aria-label={`Nouvelle version disponible, ${available}`}
-                        className="inline-flex h-row flex-none cursor-pointer items-center gap-1 rounded-pill border border-line-strong bg-bg-raise px-2 text-xs font-semibold whitespace-nowrap text-ink transition-colors hover:bg-bg-hover aria-expanded:border-bg-press aria-expanded:bg-bg-press"
+                        className="inline-flex h-pill flex-none cursor-pointer items-center gap-1 rounded-pill border border-line-strong bg-bg-raise px-2 text-xs font-semibold whitespace-nowrap text-ink transition-colors hover:bg-bg-hover aria-expanded:border-bg-press aria-expanded:bg-bg-press"
                         onPointerDown={() => {
                             closedByPressRef.current = open;
                         }}

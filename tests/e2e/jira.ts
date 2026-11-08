@@ -94,7 +94,14 @@ export async function serveJira(context: BrowserContext, setup: JiraSetup): Prom
 
                 return;
             }
-            const response = await route.fetch();
+            // Une date impossible est renvoyée vers aujourd'hui : la redirection reste au
+            // navigateur, pour que l'adresse dise le jour affiché.
+            const response = await route.fetch({ maxRedirects: 0 });
+            if (response.status() >= 300 && response.status() < 400) {
+                await route.continue();
+
+                return;
+            }
             const body = (await response.text())
                 .replace(/data-jira="[^"]*"/, `data-jira="${setup.state}"`)
                 .replace(/data-jira-scopes="[^"]*"/, `data-jira-scopes="${scopes.join(' ')}"`);

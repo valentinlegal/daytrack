@@ -2,17 +2,23 @@
 
 namespace App\Repository;
 
+use App\Database\Lockable;
+use App\Database\LocksItsTable;
+use App\Day\UserCalendar;
 use App\Entity\DaySend;
 use App\Entity\JiraConnection;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Types\Types;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
  * @extends ServiceEntityRepository<DaySend>
  */
-final class DaySendRepository extends ServiceEntityRepository
+final class DaySendRepository extends ServiceEntityRepository implements Lockable
 {
+    use LocksItsTable;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, DaySend::class);
@@ -25,13 +31,10 @@ final class DaySendRepository extends ServiceEntityRepository
             return null;
         }
 
-        $send = $this->createQueryBuilder('send')
+        $send = $this->ownedBy($jira)
             ->join('send.day', 'day')
-            ->where('day.date = :date')
-            ->andWhere('send.instance = :instance AND send.accountId = :account')
+            ->andWhere('day.date = :date')
             ->setParameter('date', $date, Types::DATE_IMMUTABLE)
-            ->setParameter('instance', $jira->instance)
-            ->setParameter('account', $jira->accountId)
             ->getQuery()
             ->getOneOrNullResult();
         \assert(null === $send || $send instanceof DaySend);
@@ -51,15 +54,12 @@ final class DaySendRepository extends ServiceEntityRepository
         }
 
         /** @var list<DaySend> $sends */
-        $sends = $this->createQueryBuilder('send')
+        $sends = $this->ownedBy($jira)
             ->addSelect('day')
             ->join('send.day', 'day')
-            ->where('day.date BETWEEN :from AND :to')
-            ->andWhere('send.instance = :instance AND send.accountId = :account')
+            ->andWhere('day.date BETWEEN :from AND :to')
             ->setParameter('from', $from, Types::DATE_IMMUTABLE)
             ->setParameter('to', $to, Types::DATE_IMMUTABLE)
-            ->setParameter('instance', $jira->instance)
-            ->setParameter('account', $jira->accountId)
             ->getQuery()
             ->getResult();
 
@@ -114,8 +114,19 @@ final class DaySendRepository extends ServiceEntityRepository
     {
         return 1 === $this->getEntityManager()->getConnection()->executeStatement(
             'UPDATE day_send SET sending_since = :now WHERE id = :id AND (sending_since IS NULL OR sending_since <= :expired)',
-            ['now' => DaySend::universal($now), 'id' => $send->id, 'expired' => DaySend::universal($now->modify(DaySend::SENDING_EXPIRES))],
+            ['now' => UserCalendar::universal($now), 'id' => $send->id, 'expired' => UserCalendar::universal($now->modify(DaySend::SENDING_EXPIRES))],
             ['now' => Types::DATETIME_IMMUTABLE, 'id' => 'uuid', 'expired' => Types::DATETIME_IMMUTABLE],
         );
+    }
+
+    /** Les envois de ce Jira, sous ce compte (DaySend::ownerOf()). */
+    private function ownedBy(JiraConnection $jira): QueryBuilder
+    {
+        $query = $this->createQueryBuilder('send');
+        foreach (DaySend::ownerOf($jira) as $field => $value) {
+            $query->andWhere(\sprintf('send.%1$s = :%1$s', $field))->setParameter($field, $value);
+        }
+
+        return $query;
     }
 }

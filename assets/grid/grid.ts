@@ -160,6 +160,18 @@ export class Grid {
         return this.blocks().find((block) => block.start <= quarter && quarter < block.end) ?? null;
     }
 
+    /** Les tickets de la journée, chacun une fois, dans l'ordre de la journée. */
+    tickets(): string[] {
+        return [
+            ...new Set(this.blocks().flatMap((block) => (block.content.kind === 'work' ? [block.content.ticket] : []))),
+        ];
+    }
+
+    /** Une pause au moins dans la journée : l'envoi dit qu'elle ne part pas sur Jira. */
+    hasPause(): boolean {
+        return this.cells.some((cell) => cell?.kind === 'pause');
+    }
+
     /** Le temps travaillé, en minutes : les quarts d'heure saisis, pauses exclues. */
     workedMinutes(): number {
         return this.workedBefore(Quarter.DAY_END);
@@ -182,7 +194,7 @@ export class Grid {
 
     /** Une pause couvre cette minute. Hors de la grille, il n'y en a jamais. */
     isPauseAt(minute: number): boolean {
-        const quarter = minute - (minute % Quarter.MINUTES);
+        const quarter = Quarter.floor(minute);
 
         return Quarter.isQuarter(quarter) && this.at(quarter)?.kind === 'pause';
     }

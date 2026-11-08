@@ -1,8 +1,8 @@
 import type { FocusEvent, RefObject } from 'react';
 
 import { Field } from '../components/Field';
-import { CheckIcon, ErrorIcon } from '../components/icons';
-import type { Violation } from '../grid/daySession';
+import { CheckIcon } from '../components/icons';
+import type { Violation } from '../serverApi';
 import { TokenHelp } from './TokenHelp';
 
 export type JiraField = 'site' | 'email' | 'token';
@@ -10,9 +10,6 @@ export type JiraField = 'site' | 'email' | 'token';
 export type JiraFieldErrors = Readonly<Record<JiraField, string | null>>;
 
 export const NO_FIELD_ERRORS: JiraFieldErrors = { site: null, email: null, token: null };
-
-/** Ce que le serveur n'a rattaché à aucun champ, faute de réponse. */
-export const UNSENT = "L'enregistrement n'a pas abouti. Réessayez.";
 
 /** Les refus du serveur, sous leur champ (src/Controller/Api/JiraController.php). */
 export function fieldErrorsOf(violations: readonly Violation[]): JiraFieldErrors {
@@ -119,15 +116,5 @@ export function ConnectedText({ account }: { account: string }) {
             </span>
             Connecté à Jira en tant que {account}.
         </span>
-    );
-}
-
-/** Ce qui ne tient à aucun champ : le serveur n'a pas répondu. */
-export function GeneralError({ message }: { message: string }) {
-    return (
-        <p role="alert" className="flex items-start gap-2 text-sm leading-(--lh) text-inc">
-            <ErrorIcon />
-            {message}
-        </p>
     );
 }

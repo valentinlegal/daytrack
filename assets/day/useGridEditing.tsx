@@ -10,6 +10,7 @@ import {
     useState,
 } from 'react';
 
+import { fromKeyboard, openMenuAt } from '../components/keyboardMenu';
 import type { ToastMessage } from '../components/Toast';
 import { tokenPixels } from '../components/tokenPixels';
 import { selectionActions, type SelectionActions } from '../grid/actions';
@@ -22,7 +23,6 @@ import {
     type EntryAction,
     type EntryDraft,
     type EntryTarget,
-    hasTicketShape,
     partTarget,
     pauseEntry,
     quartersOf,
@@ -35,7 +35,7 @@ import {
     typedTicket,
 } from '../grid/entry';
 import { dropTicket } from '../grid/drop';
-import { PAUSE, work } from '../grid/grid';
+import { type Grid, PAUSE, sameCell, work } from '../grid/grid';
 import * as Quarter from '../grid/quarter';
 import {
     deselect,
@@ -48,20 +48,22 @@ import {
     selectQuarters,
     toggleQuarter,
 } from '../grid/selection';
-import { TICKET_NOT_FOUND } from '../jira/lookupMessages';
 import { NO_CHECK, type TicketCheck } from '../jira/useTicketLookup';
+import { quarterTop } from './columnGeometry';
+import { measureColumn, pointedQuarter } from './columnMeasure';
 import {
     type GridMessage,
     PART_REFUSAL,
     partNote,
     refusalMessage,
     replaceNote,
-    TICKET_SHAPE_REFUSAL,
     type UndoableGesture,
     undoMessage,
     windowRefusal,
 } from './messages';
-import { isMac, shortcutAria, shortcutLabel } from './shortcuts';
+import { startPointerDrag } from './pointerDrag';
+import { GRID_SHORTCUTS, isMac, PAGE_SHORTCUTS, shortcutKeys, shortcutLabel, shortcutOf } from './shortcuts';
+import { shapeRefusal, TicketSave } from './ticketSave';
 import { across, aimedQuarter, type Attachment, attachWindow, type Room, windowAnchor } from './windowPlacement';
 
 /** Le message d'annulation reste 8 secondes, et plus longtemps tant qu'on le tient. */
@@ -109,6 +111,9 @@ export interface WindowErrors {
 
 const NO_ERRORS: WindowErrors = { ticket: null, comment: null, general: null, focus: false };
 
+/** Ce que dit la fenêtre quand la journée a changé là où elle écrit. */
+const STALE_REFUSAL = windowRefusal({ kind: 'stale' });
+
 export interface GridEditing {
     readonly selection: Selection;
     /**
@@ -147,6 +152,7 @@ export interface GridEditing {
     readonly onLaneContextMenu: (event: MouseEvent<HTMLElement>) => void;
     readonly onListboxKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
     readonly onListboxFocus: () => void;
+    readonly onListboxBlur: () => void;
     /** Ce que le menu propose, lu à son ouverture. */
     readonly actions: () => SelectionActions;
     /** « Nouveau ticket… » : la fenêtre s'ouvre sur la sélection exacte. */
@@ -162,11 +168,11 @@ export interface GridEditing {
     /** On quitte le champ Ticket : une forme refusée se dit là, jamais pendant la frappe. */
     readonly checkTicket: () => void;
     /**
-     * Enregistre la fenêtre. `known`, quand Jira cherche encore le ticket tapé, demande sa
-     * réponse : l'enregistrement l'attend, fenêtre en envoi, et ne part pas si le ticket
-     * est introuvable.
+     * Enregistre la fenêtre, comme Entrée. `check` dit ce que Jira sait du ticket tapé : quand
+     * il le cherche encore, l'enregistrement attend sa réponse, fenêtre en envoi, et ne part
+     * pas si le ticket est introuvable (ticketSave.ts).
      */
-    readonly saveWindow: (known?: () => Promise<boolean> | undefined) => void;
+    readonly saveWindow: (check: TicketCheck) => void;
     readonly cancelWindow: () => void;
     readonly pauseWindow: () => void;
     readonly deleteWindow: () => void;
@@ -190,11 +196,15 @@ export interface GridEditing {
      */
     readonly deselect: () => boolean;
     /**
-     * Un message venu d'à côté de la grille — la liste des favoris —, au même endroit. Son
-     * « Annuler », s'il en a un, prend Ctrl/⌘+Z tant qu'il est affiché : un geste qui n'est
-     * pas de la grille ne doit pas laisser ce raccourci défaire la grille en silence.
+     * Un message venu d'à côté de la grille — la liste des favoris, l'envoi sur Jira —, au
+     * même endroit. Son « Annuler », s'il en a un, fait `undo`, et prend Ctrl/⌘+Z tant qu'il
+     * est affiché : un geste qui n'est pas de la grille ne doit pas laisser ce raccourci
+     * défaire la grille en silence.
+     *
+     * @param returnFocus où rendre le curseur quand le message part sous lui, si ce n'est pas
+     *                    à la grille
      */
-    readonly notify: (message: Omit<ToastMessage, 'key'> | null) => void;
+    readonly notify: (message: GridMessage | null, undo?: () => void, returnFocus?: () => void) => void;
     /** Un clic sur un favori : son ticket, sans commentaire, dans le presse-papier de l'onglet. */
     readonly copyTicket: (ticket: string) => void;
     /** Un favori déposé sur ce quart d'heure. */
@@ -233,6 +243,7 @@ export function useGridEditing({
     session,
     day,
     laneRef,
+    scrollerRef,
     listboxRef,
     visibleTop,
     onWindowOpen,
@@ -246,6 +257,11 @@ export function useGridEditing({
     closed?: boolean;
     /** La colonne des blocs : le pointeur s'y lit en quarts d'heure. */
     laneRef: RefObject<HTMLElement | null>;
+    /**
+     * La zone qui fait défiler la grille : un glisser la fait défiler près de ses bords, et
+     * la fenêtre de ticket reste dans ce qu'elle montre.
+     */
+    scrollerRef: RefObject<HTMLElement | null>;
     /** La liste des créneaux, qui porte le curseur de la grille. */
     listboxRef: RefObject<HTMLElement | null>;
     /** L'heure en haut de la vue : le clavier y commence quand rien n'est sélectionné. */
@@ -269,22 +285,70 @@ export function useGridEditing({
      * se ferment : ce n'est pas une arrivée au clavier, même après une touche.
      */
     const givingFocusRef = useRef(false);
+    /**
+     * La page a perdu le focus pendant que la grille l'avait — un autre onglet, une autre
+     * application : le navigateur le lui rendra au retour, et personne n'aura tapé Tab.
+     * Rendu ailleurs, ou suivi d'une frappe ou d'un appui, ce retour n'est plus à attendre.
+     */
+    const pageLeftRef = useRef(false);
+    /**
+     * Le dernier geste venait du clavier. Une fenêtre ou un menu fermés par Échap ou Entrée
+     * rendent le curseur à la grille et le montrent, s'il était dans la vue quand la grille a
+     * perdu le focus (cursorShownRef) : la grille a pu défiler pendant qu'ils étaient ouverts.
+     * Fermés d'un clic, ou sur un curseur déjà hors de vue, la grille ne bouge pas.
+     */
+    const keyboardLastRef = useRef(false);
+    const cursorShownRef = useRef(false);
+    useEffect(() => {
+        const onKey = () => {
+            keyboardLastRef.current = true;
+            pageLeftRef.current = false;
+        };
+        const onPointer = () => {
+            keyboardLastRef.current = false;
+            pageLeftRef.current = false;
+        };
+        const onFocusIn = (event: globalThis.FocusEvent) => {
+            if (event.target !== listboxRef.current) {
+                pageLeftRef.current = false;
+            }
+        };
+        window.addEventListener('keydown', onKey, true);
+        window.addEventListener('pointerdown', onPointer, true);
+        window.addEventListener('focusin', onFocusIn, true);
+
+        return () => {
+            window.removeEventListener('keydown', onKey, true);
+            window.removeEventListener('pointerdown', onPointer, true);
+            window.removeEventListener('focusin', onFocusIn, true);
+        };
+    }, [listboxRef]);
+
+    /** Le créneau du curseur, celui que la liste désigne, tel que l'écran l'affiche déjà. */
+    const cursorOption = (): HTMLElement | null => {
+        const id = listboxRef.current?.getAttribute('aria-activedescendant');
+
+        return id === null || id === undefined ? null : document.getElementById(id);
+    };
     const [ticketWindow, setTicketWindow] = useState<TicketWindow | null>(null);
     const [message, setMessage] = useState<ToastMessage | null>(null);
     const counterRef = useRef(0);
     /** Le message venu de la liste des favoris, affiché en ce moment : son « Annuler » prend Ctrl/⌘+Z. */
     const foreignKeyRef = useRef<number | null>(null);
-    /** L'enregistrement de la fenêtre en route, que d'autres gestes attendent. */
-    const pendingRef = useRef<Promise<boolean> | null>(null);
+    /** L'enregistrement de la fenêtre : un seul à la fois, que d'autres gestes attendent. */
+    const [save] = useState(() => new TicketSave());
     /**
-     * La fenêtre qui attend pour s'ouvrir que celle d'avant s'enregistre. Seule la dernière
-     * demandée s'ouvre, et ce qu'on tape sur la grille pendant l'attente s'ajoute à son champ
-     * Ticket : une lettre ne demande pas une fenêtre de plus, qui effacerait les autres.
+     * La fenêtre qui attend pour s'ouvrir que celle d'avant s'enregistre, et les gestes d'avant
+     * avec elle. Seule la dernière demandée s'ouvre, sur la journée telle qu'ils l'ont laissée,
+     * et ce qu'on tape sur la grille pendant l'attente s'ajoute à son champ Ticket : une lettre
+     * ne demande pas une fenêtre de plus, qui effacerait les autres. Un appui sur la grille y
+     * renonce : elle viserait autre chose que ce qu'il sélectionne.
      */
     const openingRef = useRef<{
         readonly session: DaySession;
-        readonly target: EntryTarget;
+        readonly aimAt: (grid: Grid) => EntryTarget | null;
         readonly aim: WindowAim;
+        readonly none: (() => void) | null;
         draft: EntryDraft | null;
     } | null>(null);
     /**
@@ -292,6 +356,26 @@ export function useGridEditing({
      * blocs : « Nouveau ticket… » s'y ouvre. Null quand il s'est ouvert au clavier.
      */
     const menuXRef = useRef<number | null>(null);
+    /**
+     * Le menu demandé d'un clic droit pendant qu'une fenêtre s'enregistre : il s'ouvre une fois
+     * qu'elle s'est fermée, sauf si un autre geste a été demandé entre-temps — un appui ou une
+     * touche sur la grille, une fenêtre, un geste qui écrit, un favori déposé. Le dernier
+     * demandé l'emporte, comme pour les fenêtres (openingRef), et un menu qui s'ouvre renonce
+     * à la fenêtre qui attendait.
+     */
+    const menuWaitRef = useRef<object | null>(null);
+    /** Le menu qu'on rejoue, une fois la fenêtre fermée, avec ce qu'en disait le clic droit. */
+    const menuReplayRef = useRef<{
+        readonly x: number | null;
+        readonly trusted: boolean;
+        readonly quarter: number | null;
+    } | null>(null);
+    /**
+     * Le créneau que vise le menu ouvert au clavier : celui où s'arrête la sélection. Il se
+     * pose au bas de ce créneau, à la frontière du suivant, et le pointeur qu'il simule ne
+     * dit pas lequel des deux il désigne.
+     */
+    const keyboardMenuRef = useRef<number | null>(null);
     /** Comment la fenêtre ouverte s'est accrochée, et à quels quarts d'heure (placeWindow). */
     const attachmentRef = useRef<{ readonly id: string; readonly attachment: Attachment } | null>(null);
     const windowCheckRef = useRef(NO_CHECK);
@@ -312,6 +396,18 @@ export function useGridEditing({
         lifted: boolean;
         readonly stop: () => void;
     } | null>(null);
+    /**
+     * Annuler ou rétablir, tels que l'écran est au dernier rendu : le message d'un geste
+     * survit aux rendus, et son « Annuler » ne doit pas voir la fenêtre qu'il y avait
+     * quand il est né.
+     */
+    const rewindRef = useRef<(direction: 'undo' | 'redo') => void>(() => undefined);
+    /**
+     * Le dernier geste parti qui peut changer la grille. Le message d'un geste ne propose
+     * « Annuler » que si aucun autre n'est parti depuis : cet « Annuler » défait le dernier
+     * geste de la file, qui serait l'autre.
+     */
+    const turnRef = useRef(0);
     const sessionRef = useRef(session);
     const mac = useMemo(() => isMac(navigator.platform), []);
 
@@ -324,6 +420,23 @@ export function useGridEditing({
         setTicketWindow(null);
         setMessage(null);
     }
+    // La journée relue sous la fenêtre de ticket ouverte — au retour sur la page, ou pendant
+    // qu'un autre onglet l'envoie — a pu changer là où elle écrit. Elle suit son bloc tel
+    // qu'il est désormais (retarget), garde ce qu'on y a tapé, et dit que la journée a
+    // changé : l'enregistrer n'écrase jamais en silence ce qu'un autre onglet a posé. Pendant
+    // qu'elle s'enregistre, c'est sa réponse qui en décide.
+    const [shownDay, setShownDay] = useState(day);
+    if (shownDay !== day) {
+        setShownDay(day);
+        const open = ticketWindow;
+        if (open !== null && !open.sending && shownSession === session && shownDay !== null && day !== null) {
+            const target = retarget(day.grid, open.target);
+            if (target !== open.target || changedUnder(shownDay.grid, day.grid, quartersOf(open.target))) {
+                setTicketWindow({ ...open, target, errors: { ...open.errors, general: STALE_REFUSAL, focus: false } });
+                setSelection(windowSelection(target, open.aim));
+            }
+        }
+    }
     useEffect(() => {
         sessionRef.current = session;
     }, [session]);
@@ -335,42 +448,79 @@ export function useGridEditing({
     const current = (from: DaySession) => sessionRef.current === from;
 
     const show = (gridMessage: GridMessage | null) => {
-        if (gridMessage === null) {
-            setMessage(null);
+        setMessage(
+            gridMessage === null
+                ? null
+                : toastOf(gridMessage, next(), mac, () => {
+                      rewindRef.current('undo');
+                  }),
+        );
+    };
+
+    /**
+     * Un geste part : le message du geste d'avant s'en va, son « Annuler » viserait celui-ci.
+     * Rend son tour, que sa réponse présente pour dire ce qu'il a fait.
+     */
+    const begin = (): number => {
+        turnRef.current += 1;
+        setMessage(null);
+
+        return turnRef.current;
+    };
+
+    /**
+     * Le message d'un geste : ce qu'il a fait disparaître, ou pourquoi il n'a rien fait. Un
+     * autre geste parti depuis, ce qu'il a fait ne se dit plus ; un refus se dit toujours.
+     * Sans rien à dire, il laisse le message tel qu'il est : celui du geste d'avant s'en est
+     * allé à son départ, et ce qui s'affiche depuis est le refus d'un autre — qu'un geste
+     * abandonné derrière lui ne doit pas effacer.
+     */
+    const report = (outcome: Outcome, gesture: UndoableGesture | null, turn: number) => {
+        const said =
+            outcome.kind === 'saved'
+                ? gesture === null || turn !== turnRef.current
+                    ? null
+                    : undoMessage(gesture, outcome.step)
+                : refusalMessage(outcome);
+        if (said !== null) {
+            show(said);
+        }
+    };
+
+    /**
+     * Un geste qui passe par la file de la journée attend la fenêtre de ticket ouverte : on
+     * l'a quittée pour le faire, elle s'enregistre donc d'abord, comme sur un clic à côté, et
+     * les gestes s'enregistrent dans l'ordre où on les a faits. Refusée, elle reste ouverte
+     * avec son message, et le geste n'a pas lieu.
+     *
+     * Le geste ne lit pas la fenêtre : il peut partir d'un écran où elle est encore ouverte.
+     * Ce qu'il peut faire se juge sur la journée enregistrée, une fois la fenêtre partie : un
+     * effacement juste après elle efface ce qu'elle vient d'écrire. De même après un geste
+     * encore en route : la journée affichée n'a pas encore ce qu'il écrit, et le geste se juge
+     * à son tour dans la file, qui ne fait rien quand il n'y a rien à faire.
+     */
+    const afterWindow = (action: 'copy' | 'cut' | 'pause' | 'clear' | null, gesture: (session: DaySession) => void) => {
+        menuWaitRef.current = null;
+        if (session === null || closed) {
+            return;
+        }
+        const from = session;
+        const go = () => {
+            const { busy, day: saved } = from.current();
+            if (action === null || busy || selectionActions(saved.grid, selection, false)[action]) {
+                gesture(from);
+            }
+        };
+        if (ticketWindow === null) {
+            go();
 
             return;
         }
-        setMessage({
-            key: next(),
-            content:
-                gridMessage.ticket === null ? (
-                    gridMessage.text
-                ) : (
-                    <>
-                        <b className="font-mono font-semibold whitespace-nowrap">{gridMessage.ticket}</b>{' '}
-                        {gridMessage.text}
-                    </>
-                ),
-            action: gridMessage.undo
-                ? {
-                      label: 'Annuler',
-                      title: `Annuler (${shortcutLabel('Z', mac)})`,
-                      keyShortcuts: shortcutAria('Z', mac),
-                      onAction: () => {
-                          rewind('undo');
-                      },
-                  }
-                : undefined,
+        void leaveWindow().then((left) => {
+            if (left && current(from)) {
+                go();
+            }
         });
-    };
-
-    /** Le message d'un geste : ce qu'il a fait disparaître, ou pourquoi il n'a rien fait. */
-    const report = (outcome: Outcome, gesture: UndoableGesture | null) => {
-        if (outcome.kind === 'saved') {
-            show(gesture === null ? null : undoMessage(gesture, outcome.step));
-        } else {
-            show(refusalMessage(outcome));
-        }
     };
 
     /** Un geste sur la grille. Le message du geste d'avant s'en va : son « Annuler » viserait celui-ci. */
@@ -378,70 +528,72 @@ export function useGridEditing({
         if (session === null || closed) {
             return;
         }
-        setMessage(null);
+        const turn = begin();
         void session.apply(changes).then((outcome) => {
             if (current(session)) {
-                report(outcome, gesture);
+                report(outcome, gesture, turn);
             }
         });
     };
 
     const rewind = (direction: 'undo' | 'redo') => {
-        if (session === null || closed) {
-            return;
-        }
-        setMessage(null);
-        void (direction === 'undo' ? session.undo() : session.redo()).then((outcome) => {
-            if (current(session)) {
-                show(refusalMessage(outcome, direction));
-            }
+        afterWindow(null, (from) => {
+            begin();
+            void (direction === 'undo' ? from.undo() : from.redo()).then((outcome) => {
+                const said = refusalMessage(outcome, direction);
+                if (current(from) && said !== null) {
+                    show(said);
+                }
+            });
         });
     };
 
     const copy = () => {
-        if (session !== null && grid !== null && selectionActions(grid, selection, false).copy) {
-            void session.copy(selection);
-        }
+        afterWindow('copy', (from) => {
+            void from.copy(selection);
+        });
     };
 
     const cut = () => {
-        if (session === null || closed || grid === null || !selectionActions(grid, selection, false).cut) {
-            return;
-        }
-        setMessage(null);
-        void session.cut(selection).then((outcome) => {
-            if (current(session)) {
-                report(outcome, 'cut');
-            }
+        afterWindow('cut', (from) => {
+            const turn = begin();
+            void from.cut(selection).then((outcome) => {
+                if (current(from)) {
+                    report(outcome, 'cut', turn);
+                }
+            });
         });
     };
 
     const paste = () => {
-        if (session === null || closed || selection.quarters.length === 0) {
+        if (selection.quarters.length === 0) {
             return;
         }
-        setMessage(null);
-        void session.paste(selection).then(({ outcome, pasted }) => {
-            if (!current(session)) {
-                return;
-            }
-            if (pasted.length > 0) {
-                setSelection(selectQuarters(pasted));
-            }
-            report(outcome, 'paste');
+        const before = selection;
+        afterWindow(null, (from) => {
+            const turn = begin();
+            void from.paste(selection).then(({ outcome, pasted }) => {
+                if (!current(from)) {
+                    return;
+                }
+                if (pasted.length > 0) {
+                    setSelection((shown) => followed(shown, before, selectQuarters(pasted)));
+                }
+                report(outcome, 'paste', turn);
+            });
         });
     };
 
     const convertToPause = () => {
-        if (grid !== null && selectionActions(grid, selection, false).pause) {
+        afterWindow('pause', () => {
             run(fill(selection.quarters, PAUSE), 'pause');
-        }
+        });
     };
 
     const clear = () => {
-        if (grid !== null && selectionActions(grid, selection, false).clear) {
+        afterWindow('clear', () => {
             run(fill(selection.quarters, null), 'clear');
-        }
+        });
     };
 
     // La fenêtre de ticket.
@@ -450,28 +602,67 @@ export function useGridEditing({
      * Une fenêtre déjà ouverte s'enregistre d'abord, comme sur un clic à côté : une Entrée
      * ou une lettre tapée sur la grille ne la jettent pas. Refusée, elle reste ouverte avec
      * son message, et l'autre ne s'ouvre pas.
+     *
+     * Ce qu'elle vise se lit sur la journée enregistrée, une fois les gestes d'avant
+     * enregistrés : ouverte sur un collage encore en route, elle montrerait ce qu'il
+     * remplace, et l'enregistrer l'écraserait. Un de ces gestes refusé, elle ne s'ouvre pas,
+     * comme ceux qui attendaient derrière lui dans la file : elle partait d'une journée qui
+     * n'est plus la bonne, et son refus reste dit.
+     *
+     * @param aimAt ce qu'elle vise sur cette journée ; rien, elle ne s'ouvre pas
+     * @param none  ce qui se dit alors, s'il y a lieu
      */
-    const openWindow = (target: EntryTarget | null, aim: WindowAim, draft: EntryDraft | null = null) => {
-        if (target === null || session === null || closed) {
+    const openWindow = (
+        aimAt: (grid: Grid) => EntryTarget | null,
+        aim: WindowAim,
+        draft: EntryDraft | null = null,
+        none: (() => void) | null = null,
+    ) => {
+        menuWaitRef.current = null;
+        if (session === null || closed) {
             return;
         }
         const before = beforeWindowRef?.current ?? null;
-        if (ticketWindow === null && before === null) {
-            present(target, aim, draft);
+        if (ticketWindow === null && before === null && !session.current().busy) {
+            openingRef.current = null;
+            presentOn(session.current().day.grid, aimAt, aim, draft, none);
 
             return;
         }
-        const opening = { session, target, aim, draft };
+        const opening = { session, aimAt, aim, draft, none };
         openingRef.current = opening;
-        void Promise.all([leaveWindow(), before?.() ?? true]).then(([left, others]) => {
-            if (openingRef.current !== opening) {
+        const refusals = session.refusals();
+        void Promise.all([leaveWindow(), before?.() ?? true]).then(async ([left, others]) => {
+            const waiting = () =>
+                openingRef.current === opening && left && others && current(session) && session.refusals() === refusals;
+            while (waiting() && session.current().busy) {
+                await session.settled();
+            }
+            if (!waiting()) {
+                if (openingRef.current === opening) {
+                    openingRef.current = null;
+                }
+
                 return;
             }
             openingRef.current = null;
-            if (left && others && current(session)) {
-                present(opening.target, opening.aim, opening.draft);
-            }
+            presentOn(session.current().day.grid, opening.aimAt, opening.aim, opening.draft, opening.none);
         });
+    };
+
+    const presentOn = (
+        saved: Grid,
+        aimAt: (grid: Grid) => EntryTarget | null,
+        aim: WindowAim,
+        draft: EntryDraft | null,
+        none: (() => void) | null,
+    ) => {
+        const target = aimAt(saved);
+        if (target !== null) {
+            present(target, aim, draft);
+        } else {
+            none?.();
+        }
     };
 
     /**
@@ -484,12 +675,14 @@ export function useGridEditing({
         if (grid === null || closed || selection.quarters.length === 0) {
             return;
         }
-        const target = partTarget(grid, selection);
-        if (target === null) {
-            show(PART_REFUSAL);
-        } else {
-            openWindow(target, aim);
-        }
+        openWindow(
+            (saved) => partTarget(saved, selection),
+            aim,
+            null,
+            () => {
+                show(PART_REFUSAL);
+            },
+        );
     };
 
     /** Au clavier, sans pointeur : le milieu de la colonne, et le créneau où s'arrête la sélection. */
@@ -504,17 +697,11 @@ export function useGridEditing({
         if (ticketWindow === null) {
             return Promise.resolve(true);
         }
-        if (windowHeld()) {
-            setTicketWindow((open) =>
-                open === null ? open : { ...open, errors: { ...NO_ERRORS, ticket: TICKET_NOT_FOUND, focus: true } },
-            );
-
-            return Promise.resolve(false);
-        }
+        const check = windowCheckRef.current;
 
         return write(
             saveEntry(ticketWindow.target, ticketWindow.draft),
-            leavingPage ? undefined : windowCheckRef.current.known,
+            leavingPage ? { refused: check.refused, known: () => undefined } : check,
         );
     };
 
@@ -557,108 +744,138 @@ export function useGridEditing({
      * fenêtre attend celle d'avant, les touches suivantes lui reviennent (onListboxKeyDown).
      */
     const typeOnSelection = (key: string) => {
-        openWindow(selectionTarget(selection), keyboardAim(), { ticket: typedTicket(key), comment: '' });
+        openWindow(() => selectionTarget(selection), keyboardAim(), { ticket: typedTicket(key), comment: '' });
     };
 
     /**
-     * Une touche pendant que la fenêtre demandée par une lettre attend celle d'avant : elle
-     * lui revient, comme si elle était déjà ouverte — un caractère s'écrit à la suite du
-     * ticket, Retour arrière efface le dernier, Échap y renonce —, et aucune autre ne fait
-     * rien à la grille entre-temps. Faux s'il n'y a pas de telle fenêtre.
+     * Une touche pendant qu'une fenêtre demandée attend celle d'avant, ou un geste en
+     * route : elle lui revient, comme si elle était déjà ouverte, et aucune ne fait rien à
+     * la grille entre-temps, raccourcis compris. Échap y renonce. Demandée par une lettre,
+     * un caractère s'écrit à la suite du ticket et Retour arrière efface le dernier. Tab,
+     * les touches de fonction et les raccourcis du navigateur gardent leur effet. Faux s'il
+     * n'y a pas de telle fenêtre.
      */
     const typeOnOpening = (event: KeyboardEvent<HTMLElement>): boolean => {
-        const opening = openingRef.current;
-        if (
-            opening?.session !== session ||
-            opening.draft === null ||
-            event.ctrlKey ||
-            event.metaKey ||
-            event.altKey ||
-            event.nativeEvent.isComposing
-        ) {
+        const opening = waitingOpening();
+        if (opening === null || event.nativeEvent.isComposing) {
             return false;
         }
         const { key } = event;
-        const { ticket } = opening.draft;
+        const { draft } = opening;
+        const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
         if (key === 'Escape') {
             event.preventDefault();
             openingRef.current = null;
-        } else if (key === 'Backspace') {
+        } else if (plain && draft !== null && key === 'Backspace') {
             event.preventDefault();
-            opening.draft = { ...opening.draft, ticket: ticket.slice(0, -1) };
-        } else if (key.length === 1) {
+            opening.draft = { ...draft, ticket: draft.ticket.slice(0, -1) };
+        } else if (plain && draft !== null && key.length === 1) {
             event.preventDefault();
-            opening.draft = { ...opening.draft, ticket: typedTicket(ticket + key) };
+            opening.draft = { ...draft, ticket: typedTicket(draft.ticket + key) };
+        } else if (plain && key !== 'Tab' && !/^F\d+$/.test(key)) {
+            event.preventDefault();
         }
 
         return true;
     };
 
+    /** La fenêtre de cette journée qui attend pour s'ouvrir, s'il y en a une. */
+    const waitingOpening = () => {
+        const opening = openingRef.current;
+
+        return opening?.session === session ? opening : null;
+    };
+
     /**
-     * Ce que fait la fenêtre ; la promesse dit si elle s'est fermée. Un enregistrement
-     * déjà en route n'en lance pas un second : on attend le sien.
+     * Ce que fait la fenêtre ; la promesse dit si elle s'est fermée. Il passe par le chemin
+     * commun des champs Ticket (ticketSave.ts) : un enregistrement déjà en route n'en lance
+     * pas un second, on attend le sien ; un ticket que Jira ne connaît pas garde la fenêtre
+     * ouverte, même au clic à côté, le refus sous son champ.
      *
-     * `known` demande la réponse de Jira sur le ticket tapé, quand il le cherche encore :
-     * l'attente compte comme l'envoi. Rien ne se tape, rien ne ferme la fenêtre ni n'en
-     * ouvre une autre, et ce qui part est ce que la fenêtre montrait au geste.
+     * `check`, quand Jira cherche encore le ticket tapé, fait attendre sa réponse : l'attente
+     * compte comme l'envoi. Rien ne se tape, rien ne ferme la fenêtre ni n'en ouvre une autre,
+     * et ce qui part est ce que la fenêtre montrait au geste. Sans lui — une pause, un
+     * effacement —, il n'y a pas de ticket à vérifier.
      */
-    const write = (action: EntryAction, known?: () => Promise<boolean> | undefined): Promise<boolean> => {
+    const write = (action: EntryAction, check: TicketCheck | null = null): Promise<boolean> => {
         const shown = ticketWindow;
+        const from = session;
         if (shown === null) {
             return Promise.resolve(true);
         }
-        if (shown.sending || pendingRef.current !== null) {
-            return pendingRef.current ?? Promise.resolve(false);
-        }
-        if (session === null) {
+        if (from === null) {
             return Promise.resolve(false);
         }
-        if (action.kind === 'close') {
-            setTicketWindow(null);
+        let turn = 0;
+        // La journée sur laquelle l'enregistrement part : relue changée pendant que Jira
+        // cherche le ticket, la fenêtre refusée suit son bloc et le dit.
+        const base = from.current().day.grid;
 
-            return Promise.resolve(true);
-        }
-        setMessage(null);
-        setTicketWindow({ ...shown, sending: true, errors: NO_ERRORS });
-        const pending = (known?.() ?? Promise.resolve(true)).then(async (exists) => {
-            if (!exists) {
-                // Introuvable : la fenêtre le dit sous le champ, le curseur dedans.
-                pendingRef.current = null;
-                keepWindow(shown.target, shown.aim);
+        return save.run({
+            check,
+            // Un geste fait avant que l'écran ait montré la réponse voit encore l'envoi : c'est
+            // cette réponse qui vaut pour lui.
+            sending: shown.sending,
+            refuse: (ticket, answered) => {
+                if (!answered) {
+                    setTicketWindow((open) =>
+                        open === null
+                            ? open
+                            : { ...open, sending: false, errors: { ...NO_ERRORS, ticket, focus: true } },
+                    );
+
+                    return;
+                }
+                const now = from.current().day.grid;
+                const target = retarget(now, shown.target);
+                const general =
+                    target !== shown.target || changedUnder(base, now, quartersOf(shown.target)) ? STALE_REFUSAL : null;
+                keepWindow(target, shown.aim);
                 setTicketWindow((open) =>
                     open?.key === shown.key
-                        ? { ...open, sending: false, errors: { ...NO_ERRORS, ticket: TICKET_NOT_FOUND, focus: true } }
+                        ? { ...open, target, sending: false, errors: { ...NO_ERRORS, ticket, general, focus: true } }
                         : open,
+                );
+            },
+            start: () => {
+                if (action.kind === 'close') {
+                    setTicketWindow(null);
+
+                    return true;
+                }
+                turn = begin();
+                setTicketWindow({ ...shown, sending: true, errors: NO_ERRORS });
+                const { changes } = action;
+                // Décidé sur la journée qu'on voit, il part une fois Jira d'accord : relue changée
+                // entre-temps, elle le refuse.
+                const seen = from.seen();
+
+                return () => from.apply(changes, seen);
+            },
+            settle: (outcome) => {
+                const closed = outcome.kind === 'saved' || outcome.kind === 'unchanged';
+                if (!current(from)) {
+                    return closed;
+                }
+                if (closed) {
+                    setTicketWindow((open) => (open?.key === shown.key ? null : open));
+                    const gesture = action.kind === 'write' ? action.gesture : null;
+                    if (outcome.kind === 'saved' && gesture !== null && turn === turnRef.current) {
+                        show(undoMessage(gesture, outcome.step));
+                    }
+
+                    return true;
+                }
+                // La journée a pu être relue : la fenêtre suit son bloc tel qu'il est désormais.
+                const target = retarget(from.current().day.grid, shown.target);
+                keepWindow(target, shown.aim);
+                setTicketWindow((open) =>
+                    open?.key === shown.key ? { ...open, target, sending: false, errors: errorsOf(outcome) } : open,
                 );
 
                 return false;
-            }
-            const outcome = await session.apply(action.changes);
-            pendingRef.current = null;
-            const closed = outcome.kind === 'saved' || outcome.kind === 'unchanged';
-            if (!current(session)) {
-                return closed;
-            }
-            if (closed) {
-                setTicketWindow((open) => (open?.key === shown.key ? null : open));
-                if (outcome.kind === 'saved' && action.gesture !== null) {
-                    show(undoMessage(action.gesture, outcome.step));
-                }
-
-                return true;
-            }
-            // La journée a pu être relue : la fenêtre suit son bloc tel qu'il est désormais.
-            const target = retarget(session.current().day.grid, shown.target);
-            keepWindow(target, shown.aim);
-            setTicketWindow((open) =>
-                open?.key === shown.key ? { ...open, target, sending: false, errors: errorsOf(outcome) } : open,
-            );
-
-            return false;
+            },
         });
-        pendingRef.current = pending;
-
-        return pending;
     };
 
     // Le rectangle se calcule quand Radix le mesure, jamais au rendu : la grille a pu
@@ -682,29 +899,32 @@ export function useGridEditing({
                 return { rect: new DOMRect(), stopped: false };
             }
             const kept = attachmentRef.current?.id === id ? attachmentRef.current.attachment : null;
-            const placed = placeOn(lane, anchored, aim, height, kept);
+            const placed = placeOn(lane, scrollerRef.current, anchored, aim, height, kept);
             if (height > 0 && kept === null) {
                 attachmentRef.current = { id, attachment: placed.attachment };
             }
 
             return placed;
         };
-    }, [target, aim, windowKey, laneRef]);
+    }, [target, aim, windowKey, laneRef, scrollerRef]);
 
     // Le clavier, au niveau de la page : annuler et rétablir valent partout, sauf dans
     // un champ, qui garde les siens. L'écouteur est posé une fois et lit l'état courant.
     const onPageKeyDown = useEffectEvent((event: globalThis.KeyboardEvent) => {
-        if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || editable(event.target)) {
+        // Une fenêtre qui attend pour s'ouvrir retient aussi annuler et rétablir (typeOnOpening).
+        if (event.defaultPrevented || editable(event.target) || waitingOpening() !== null) {
             return;
         }
-        const key = event.key.toLowerCase();
-        if (key === 'z' && !event.shiftKey && message?.key === foreignKeyRef.current && message.action !== undefined) {
-            event.preventDefault();
+        const shortcut = shortcutOf(event, PAGE_SHORTCUTS);
+        if (shortcut === null) {
+            return;
+        }
+        event.preventDefault();
+        if (shortcut === 'undo' && message?.key === foreignKeyRef.current && message.action !== undefined) {
             setMessage(null);
             message.action.onAction();
-        } else if (key === 'z' || key === 'y') {
-            event.preventDefault();
-            rewind(key === 'y' || event.shiftKey ? 'redo' : 'undo');
+        } else {
+            rewind(shortcut);
         }
     });
     useEffect(() => {
@@ -718,11 +938,10 @@ export function useGridEditing({
         };
     }, []);
 
-    // Le glisser : il suit le pointeur jusqu'au relâcher, même hors de la grille, et
-    // fait défiler la grille quand il approche de son bord. Ses écouteurs se posent à
-    // l'appui, pas au rendu d'après : un geste rapide relâcherait avant eux.
+    // Le glisser : il suit le pointeur jusqu'au relâcher, même hors de la grille, et fait
+    // défiler la grille quand il approche de son bord (pointerDrag.ts).
     const dragMove = (clientX: number, clientY: number) => {
-        const quarter = quarterAt(laneRef.current, clientY);
+        const quarter = pointedQuarter(laneRef.current, clientY);
         const drag = dragRef.current;
         if (drag !== null) {
             drag.lifted = drag.ticket !== null && blockDropRef?.current?.over(drag.ticket, clientX, clientY) === true;
@@ -756,9 +975,23 @@ export function useGridEditing({
             setSelection(selectQuarter(drag.from));
         }
     };
-    const dragHandlersRef = useRef({ move: dragMove, end: dragEnd });
+    // Échap abandonne le glisser, soulevé ou non, sans rien poser, comme un favori qu'on
+    // glisse : la grille ne garde en sélection que son quart d'heure de départ. La fenêtre de
+    // ticket restée ouverte n'entend pas cet Échap (pointerDrag.ts), et garde sa saisie.
+    const dragCancel = () => {
+        const drag = dragRef.current;
+        dragRef.current = null;
+        if (drag !== null) {
+            setSelection(selectQuarter(drag.from));
+        }
+        blockDropRef?.current?.cancel();
+    };
     useLayoutEffect(() => {
-        dragHandlersRef.current = { move: dragMove, end: dragEnd };
+        rewindRef.current = rewind;
+    });
+    const dragHandlersRef = useRef({ move: dragMove, end: dragEnd, cancel: dragCancel });
+    useLayoutEffect(() => {
+        dragHandlersRef.current = { move: dragMove, end: dragEnd, cancel: dragCancel };
     });
     useEffect(
         () => () => {
@@ -780,62 +1013,24 @@ export function useGridEditing({
         };
     }, [laneRef]);
 
-    /** @param startY où le pointeur a appuyé, dans la fenêtre du navigateur */
-    const startDrag = (quarter: number, startY: number) => {
+    /** @param start où le pointeur a appuyé, dans la fenêtre du navigateur */
+    const startDrag = (quarter: number, start: { x: number; y: number }) => {
         dragRef.current?.stop();
-        let pointerX = 0;
-        let pointerY: number | null = null;
-        let frame = 0;
-        const onMove = (event: globalThis.MouseEvent) => {
-            pointerX = event.clientX;
-            pointerY = event.clientY;
-            dragHandlersRef.current.move(pointerX, pointerY);
-        };
-        const onUp = (event: globalThis.MouseEvent) => {
-            stop();
-            dragHandlersRef.current.end(event.clientX, event.clientY);
-        };
-        // Échap abandonne le glisser, soulevé ou non, sans rien poser, comme un favori qu'on
-        // glisse : la grille ne garde en sélection que son quart d'heure de départ. Il ne ferme
-        // qu'une chose à la fois : écouté sur la fenêtre du navigateur, avant la fenêtre de
-        // ticket restée ouverte, il ne lui parvient pas, et elle garde sa saisie.
-        const onKey = (event: globalThis.KeyboardEvent) => {
-            const drag = dragRef.current;
-            if (event.key !== 'Escape' || drag === null) {
-                return;
-            }
-            event.preventDefault();
-            event.stopPropagation();
-            stop();
-            dragRef.current = null;
-            setSelection(selectQuarter(drag.from));
-            blockDropRef?.current?.cancel();
-        };
-        const scroll = () => {
-            const lane = laneRef.current;
-            const scroller = lane?.closest('[role="region"]');
-            if (scroller instanceof HTMLElement && lane !== null && pointerY !== null) {
-                const { top, bottom } = scroller.getBoundingClientRect();
-                const edge = (lane.getBoundingClientRect().height / Quarter.COUNT) * 2;
-                const inside = pointerX >= scroller.getBoundingClientRect().left;
-                // Un bord ne fait défiler que vers où le pointeur est allé depuis l'appui :
-                // parti de la dernière ligne visible, un glisser qui remonte ne fait pas
-                // descendre la grille sous lui, ni sa sélection avec elle.
-                const up = pointerY < top + edge && pointerY < startY;
-                const down = pointerY > bottom - edge && pointerY > startY;
-                if (inside && (up || down)) {
-                    scroller.scrollTop += (up ? -edge : edge) / 8;
-                    dragHandlersRef.current.move(pointerX, pointerY);
-                }
-            }
-            frame = requestAnimationFrame(scroll);
-        };
-        const stop = () => {
-            cancelAnimationFrame(frame);
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            window.removeEventListener('keydown', onKey, true);
-        };
+        const stop = startPointerDrag({
+            start,
+            threshold: 0,
+            lane: () => laneRef.current,
+            scroller: () => scrollerRef.current,
+            onMove: (x, y) => {
+                dragHandlersRef.current.move(x, y);
+            },
+            onEnd: (x, y) => {
+                dragHandlersRef.current.end(x, y);
+            },
+            onCancel: () => {
+                dragHandlersRef.current.cancel();
+            },
+        });
         const content = grid?.at(quarter) ?? null;
         dragRef.current = {
             from: quarter,
@@ -844,10 +1039,6 @@ export function useGridEditing({
             lifted: false,
             stop,
         };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-        window.addEventListener('keydown', onKey, true);
-        frame = requestAnimationFrame(scroll);
     };
 
     const focusGrid = () => {
@@ -858,11 +1049,14 @@ export function useGridEditing({
         givingFocusRef.current = true;
         listboxRef.current?.focus({ preventScroll: true });
         givingFocusRef.current = false;
+        if (keyboardLastRef.current && cursorShownRef.current) {
+            cursorOption()?.scrollIntoView({ block: 'nearest' });
+        }
     };
 
     /** Le clavier commence au premier quart d'heure entier en haut de la vue. */
     const keyboardStart = (): Selection => {
-        const top = Math.ceil(visibleTop() / Quarter.MINUTES) * Quarter.MINUTES;
+        const top = Quarter.ceil(visibleTop());
 
         return selectQuarter(Math.min(Math.max(top, Quarter.FIRST), Quarter.LAST));
     };
@@ -879,7 +1073,7 @@ export function useGridEditing({
      * n'arrive qu'à la réponse du serveur, et la ramène là (keepWindow).
      */
     const windowHeld = () =>
-        ticketWindow !== null && windowCheckRef.current.refused && !ticketWindow.sending && pendingRef.current === null;
+        ticketWindow !== null && windowCheckRef.current.refused && !ticketWindow.sending && save.current === null;
 
     const replaced = ticketWindow === null || grid === null ? null : replacedBy(grid, ticketWindow.target);
     const part = ticketWindow?.target.kind === 'part' ? ticketWindow.target : null;
@@ -905,7 +1099,10 @@ export function useGridEditing({
             setMessage(null);
         },
         onLaneMouseDown: (event) => {
-            const quarter = quarterAt(laneRef.current, event.clientY);
+            if (event.button === 0) {
+                menuWaitRef.current = null;
+            }
+            const quarter = pointedQuarter(laneRef.current, event.clientY);
             if (event.button !== 0 || quarter === null || grid === null || closed) {
                 return;
             }
@@ -914,6 +1111,10 @@ export function useGridEditing({
             if ((event.detail > 1 && !firstClickOnLaneRef.current) || windowHeld()) {
                 return;
             }
+            // Un appui est le dernier geste demandé : il renonce à la fenêtre qui attendait, qui
+            // viserait autre chose que ce qu'il sélectionne. Le second clic d'un double-clic sur
+            // un choix du menu, tombé sur la grille, n'en est pas un.
+            openingRef.current = null;
             focusGrid();
             setPointerCursor(true);
             if (event.shiftKey) {
@@ -922,16 +1123,18 @@ export function useGridEditing({
                 setSelection((shown) => toggleQuarter(shown, quarter));
             } else {
                 setSelection(selectQuarter(quarter));
-                startDrag(quarter, event.clientY);
+                startDrag(quarter, { x: event.clientX, y: event.clientY });
             }
         },
         onLaneDoubleClick: (event) => {
-            const quarter = quarterAt(laneRef.current, event.clientY);
+            const quarter = pointedQuarter(laneRef.current, event.clientY);
             if (quarter !== null && grid !== null && !closed && firstClickOnLaneRef.current) {
-                openWindow(targetAt(grid, quarter), { x: laneX(laneRef.current, event.clientX), quarter });
+                openWindow((saved) => targetAt(saved, quarter), { x: laneX(laneRef.current, event.clientX), quarter });
             }
         },
         onLaneContextMenu: (event) => {
+            const keyboardQuarter = keyboardMenuRef.current;
+            keyboardMenuRef.current = null;
             // Le menu du clavier est déjà ouvert sur le créneau sélectionné (touche Menu,
             // Maj+F10). Le navigateur peut envoyer le sien au relâchement, posé sur la liste
             // entière : il viserait un autre créneau, et on l'ignore.
@@ -952,35 +1155,90 @@ export function useGridEditing({
 
                 return;
             }
-            const quarter = quarterAt(laneRef.current, event.clientY);
+            const replay = menuReplayRef.current;
+            menuReplayRef.current = null;
+            // Le menu est le dernier geste demandé : la fenêtre qui attendait ne s'ouvre pas.
+            openingRef.current = null;
+            const trusted = replay?.trusted ?? event.nativeEvent.isTrusted;
             // Le menu se pose au pointeur, et « Nouveau ticket… » s'ouvre là où il était.
             // Ouvert au clavier, il n'en a pas : la fenêtre prend le milieu de la colonne.
-            menuXRef.current = event.nativeEvent.isTrusted ? laneX(laneRef.current, event.clientX) : null;
+            const x = replay === null ? (trusted ? laneX(laneRef.current, event.clientX) : null) : replay.x;
+            const aimed = replay === null ? keyboardQuarter : replay.quarter;
+            // Le clic droit à côté enregistre la fenêtre ouverte : le menu attend qu'elle se
+            // ferme, où il a été demandé — ouvert aussitôt, il passerait sous elle. Refusée,
+            // elle reste ouverte avec son message, la sélection sur ce qu'elle vise, et le
+            // menu ne s'ouvre pas.
+            if (replay === null && ticketWindow !== null) {
+                event.preventDefault();
+                const { clientX, clientY } = event;
+                const from = session;
+                const waiting = {};
+                menuWaitRef.current = waiting;
+                void leaveWindow().then((left) => {
+                    if (menuWaitRef.current !== waiting) {
+                        return;
+                    }
+                    menuWaitRef.current = null;
+                    const lane = laneRef.current;
+                    if (left && from !== null && current(from) && lane !== null) {
+                        menuReplayRef.current = { x, trusted, quarter: aimed };
+                        lane.dispatchEvent(
+                            new globalThis.MouseEvent('contextmenu', {
+                                bubbles: true,
+                                cancelable: true,
+                                clientX,
+                                clientY,
+                            }),
+                        );
+                    }
+                });
+
+                return;
+            }
+            menuXRef.current = x;
+            const quarter = aimed ?? pointedQuarter(laneRef.current, event.clientY);
             // Un clic droit hors de la sélection la remplace, comme dans un tableur. Le menu
             // ouvert au clavier (touche Menu, Maj+F10) arrive ici aussi, sans être de confiance.
             if (quarter !== null && !selection.quarters.includes(quarter)) {
                 setSelection(selectQuarter(quarter));
-                setPointerCursor(event.nativeEvent.isTrusted);
+                setPointerCursor(trusted);
             }
         },
         onListboxFocus: () => {
             // Le curseur arrive au clavier, par Tab : il compte comme venu du clavier, et sur
             // une grille sans sélection, il s'y montre là où il était resté, sinon en haut de
-            // la vue. Rendu par l'écran, il garde d'où venait sa sélection.
-            if (givingFocusRef.current || listboxRef.current?.matches(':focus-visible') !== true) {
+            // la vue. Resté hors de vue, la grille défile jusqu'à lui, comme aux flèches.
+            // Rendu par l'écran, ou par un clic, il garde d'où venait sa sélection, et la
+            // grille ne bouge pas. Rendu par le navigateur, au retour sur la page, rien n'a
+            // bougé : la grille non plus.
+            const restored = pageLeftRef.current;
+            pageLeftRef.current = false;
+            if (restored || givingFocusRef.current || listboxRef.current?.matches(':focus-visible') !== true) {
                 return;
             }
             setPointerCursor(false);
+            let shown = selection;
             if (selection.quarters.length === 0) {
-                setSelection(selection.head === null ? keyboardStart() : selectQuarter(selection.head));
+                shown = selection.head === null ? keyboardStart() : selectQuarter(selection.head);
+                setSelection(shown);
             }
+            reveal(shown.head);
+        },
+        onListboxBlur: () => {
+            pageLeftRef.current = !document.hasFocus();
+            const option = cursorOption()?.getBoundingClientRect();
+            const view = scrollerRef.current?.getBoundingClientRect();
+            cursorShownRef.current =
+                option !== undefined && view !== undefined && option.bottom > view.top && option.top < view.bottom;
         },
         onListboxKeyDown: (event) => {
+            menuWaitRef.current = null;
             if (grid === null || closed || typeOnOpening(event)) {
                 return;
             }
             const key = event.key;
             const command = event.ctrlKey || event.metaKey;
+            const shortcut = shortcutOf(event.nativeEvent, GRID_SHORTCUTS);
             if (key === 'ArrowUp' || key === 'ArrowDown') {
                 event.preventDefault();
                 setPointerCursor(false);
@@ -995,31 +1253,46 @@ export function useGridEditing({
                 if (!event.repeat) {
                     const target = targetOfSelection(grid, selection);
                     // La fenêtre refusée vise déjà cette sélection : Entrée l'enregistre de
-                    // nouveau, sans en rouvrir une sur ce qu'elle vient d'écrire.
-                    if (ticketWindow !== null && target !== null && sameQuarters(target, ticketWindow.target)) {
+                    // nouveau, sans en rouvrir une sur ce qu'elle vient d'écrire. Celle qui
+                    // s'enregistre encore n'est pas refusée : la nouvelle l'attend, et s'ouvre
+                    // sur ce qu'elle a écrit.
+                    if (
+                        ticketWindow?.sending === false &&
+                        target !== null &&
+                        sameQuarters(target, ticketWindow.target)
+                    ) {
                         void leaveWindow();
-                    } else {
-                        openWindow(target, keyboardAim());
+                    } else if (target !== null) {
+                        openWindow((saved) => targetOfSelection(saved, selection), keyboardAim());
                     }
                 }
-            } else if (key === 'F2' && !command && !event.altKey && !event.shiftKey) {
+            } else if (shortcut !== null) {
                 event.preventDefault();
-                if (!event.repeat) {
-                    editSelection(keyboardAim());
-                }
-            } else if (key === 'Delete' || key === 'Backspace') {
-                event.preventDefault();
-                clear();
-            } else if (key === 'ContextMenu' || (key === 'F10' && event.shiftKey)) {
-                // Le menu du clavier s'ouvre sur le créneau où la sélection s'arrête, pas
-                // là où le navigateur le poserait.
-                event.preventDefault();
-                openMenuAt(laneRef.current, listboxRef.current, selection.head);
-            } else if (command && !event.altKey) {
-                const letter = key.toLowerCase();
-                if (letter === 'c' || letter === 'x' || letter === 'v') {
-                    event.preventDefault();
-                    ({ c: copy, x: cut, v: paste })[letter]();
+                switch (shortcut) {
+                    case 'edit':
+                        if (!event.repeat) {
+                            editSelection(keyboardAim());
+                        }
+                        break;
+                    case 'delete':
+                        clear();
+                        break;
+                    case 'menu':
+                        // Le menu du clavier s'ouvre sur le créneau où la sélection s'arrête,
+                        // pas là où le navigateur le poserait.
+                        keyboardMenuRef.current = selection.head;
+                        openMenuOn(laneRef.current, listboxRef.current, selection.head);
+                        keyboardMenuRef.current = null;
+                        break;
+                    case 'copy':
+                        copy();
+                        break;
+                    case 'cut':
+                        cut();
+                        break;
+                    case 'paste':
+                        paste();
+                        break;
                 }
             } else if (typed(event.nativeEvent)) {
                 // La touche s'écrit dans la fenêtre, pas une seconde fois dans le champ
@@ -1031,7 +1304,7 @@ export function useGridEditing({
         actions: () =>
             grid === null || closed ? NO_ACTIONS : selectionActions(grid, selection, session?.hasClipboard() ?? false),
         newTicket: () => {
-            openWindow(selectionTarget(selection), { x: menuXRef.current, quarter: selection.head });
+            openWindow(() => selectionTarget(selection), { x: menuXRef.current, quarter: selection.head });
         },
         editSelection: () => {
             editSelection({ x: menuXRef.current, quarter: selection.head });
@@ -1060,15 +1333,17 @@ export function useGridEditing({
             );
         },
         checkTicket: () => {
-            setTicketWindow((open) =>
-                open === null || open.sending || hasTicketShape(open.draft.ticket)
+            setTicketWindow((open) => {
+                const refusal = open === null || open.sending ? null : shapeRefusal(open.draft.ticket);
+
+                return open === null || refusal === null
                     ? open
-                    : { ...open, errors: { ...open.errors, ticket: TICKET_SHAPE_REFUSAL, focus: false } },
-            );
+                    : { ...open, errors: { ...open.errors, ticket: refusal, focus: false } };
+            });
         },
-        saveWindow: (known) => {
+        saveWindow: (check) => {
             if (ticketWindow !== null) {
-                void write(saveEntry(ticketWindow.target, ticketWindow.draft), known);
+                void write(saveEntry(ticketWindow.target, ticketWindow.draft), check);
             }
         },
         flushWindow: leaveWindow,
@@ -1097,6 +1372,8 @@ export function useGridEditing({
         },
         focusGrid,
         deselect: () => {
+            // Quitter la grille renonce aussi au menu qui attendait une fenêtre.
+            menuWaitRef.current = null;
             if (selection.quarters.length === 0) {
                 return false;
             }
@@ -1104,10 +1381,10 @@ export function useGridEditing({
 
             return true;
         },
-        notify: (shown) => {
+        notify: (shown, undo, returnFocus) => {
             const key = next();
             foreignKeyRef.current = key;
-            setMessage(shown === null ? null : { ...shown, key });
+            setMessage(shown === null ? null : toastOf(shown, key, mac, undo, returnFocus));
         },
         copyTicket: (ticket) => {
             if (session === null) {
@@ -1121,16 +1398,18 @@ export function useGridEditing({
             });
         },
         dropTicket: (ticket, quarter) => {
+            menuWaitRef.current = null;
             if (session === null || grid === null || closed) {
                 return;
             }
             // Comme un clic à côté : la fenêtre ouverte s'enregistre d'abord. Refusée, elle
             // reste ouverte avec son message, et le favori n'est pas posé.
+            const before = selection;
             void leaveWindow().then((closed) => {
                 if (!closed || !current(session)) {
                     return;
                 }
-                setSelection(selectQuarter(quarter));
+                setSelection((shown) => followed(shown, before, selectQuarter(quarter)));
                 run(dropTicket(ticket, quarter), 'replace');
             });
         },
@@ -1152,20 +1431,6 @@ const NO_ACTIONS: SelectionActions = {
 /** L'identifiant de l'option d'un quart d'heure dans la liste des créneaux. */
 export function optionId(quarter: number): string {
     return `creneau-${Quarter.format(quarter).replace(':', '')}`;
-}
-
-/** Le quart d'heure sous le pointeur, au plus près de la grille quand il en sort par le haut ou le bas. */
-export function quarterAt(lane: HTMLElement | null, clientY: number): number | null {
-    if (lane === null) {
-        return null;
-    }
-    const { top, height } = lane.getBoundingClientRect();
-    if (height === 0) {
-        return null;
-    }
-    const index = Math.floor(((clientY - top) / height) * Quarter.COUNT);
-
-    return Quarter.FIRST + Math.min(Math.max(index, 0), Quarter.COUNT - 1) * Quarter.MINUTES;
 }
 
 /** L'horizontale d'un pointeur, depuis le bord gauche de la colonne des blocs. */
@@ -1195,15 +1460,17 @@ function laneX(lane: HTMLElement | null, clientX: number): number | null {
  */
 function placeOn(
     lane: HTMLElement,
+    scroller: HTMLElement | null,
     anchored: readonly number[],
     aim: WindowAim,
     height: number,
     attachment: Attachment | null,
 ): PlacedWindow & { readonly attachment: Attachment } {
     const rect = lane.getBoundingClientRect();
-    const row = rect.height / Quarter.COUNT;
-    const y = (quarter: number) => rect.top + ((quarter - Quarter.FIRST) / Quarter.MINUTES) * row;
-    const frame = lane.closest('[role="region"]')?.getBoundingClientRect() ?? rect;
+    const column = measureColumn(lane) ?? { top: rect.top, row: 0 };
+    const row = column.row;
+    const y = (quarter: number) => quarterTop(column, quarter);
+    const frame = scroller?.getBoundingClientRect() ?? rect;
     const view = { top: Math.max(frame.top, 0), bottom: Math.min(frame.bottom, window.innerHeight) };
     const margin = tokenPixels('--s-2');
     const room: Room = { height, gap: tokenPixels('--s-3'), margin };
@@ -1250,34 +1517,66 @@ function windowSelection(target: EntryTarget, aim: WindowAim): Selection {
     return selectQuarters(quartersOf(target), head);
 }
 
+/**
+ * La sélection qu'un geste donne une fois enregistré — ce qui a été collé, le favori déposé —,
+ * sauf si on en a fait une autre pendant qu'il était en route : la réponse ne la reprend pas.
+ *
+ * @param before la sélection au moment du geste
+ */
+function followed(shown: Selection, before: Selection, after: Selection): Selection {
+    return shown === before ? after : shown;
+}
+
+/** Un de ces quarts d'heure a changé d'une journée à l'autre. */
+function changedUnder(before: Grid, after: Grid, quarters: readonly number[]): boolean {
+    return quarters.some((quarter) => !sameCell(before.at(quarter), after.at(quarter)));
+}
+
 function sameQuarters(a: EntryTarget, b: EntryTarget): boolean {
     return quartersOf(a).join() === quartersOf(b).join();
 }
 
-/** Ouvre le menu du clic droit sur un quart d'heure, comme si on l'y avait demandé à la souris. */
-function openMenuAt(lane: HTMLElement | null, from: HTMLElement | null, quarter: number | null): void {
-    if (lane === null || from === null || quarter === null) {
+/** Ouvre le menu du clic droit sous un quart d'heure, un peu à droite du bord de la colonne. */
+function openMenuOn(lane: HTMLElement | null, from: HTMLElement | null, quarter: number | null): void {
+    const column = lane === null ? null : measureColumn(lane);
+    if (lane === null || column === null || from === null || quarter === null) {
         return;
     }
-    const rect = lane.getBoundingClientRect();
-    const row = rect.height / Quarter.COUNT;
-    const y = rect.top + ((quarter - Quarter.FIRST) / Quarter.MINUTES + 1) * row;
-    from.dispatchEvent(
-        new globalThis.MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            clientX: rect.left + row * 2,
-            clientY: y,
-        }),
-    );
+    openMenuAt(from, lane.getBoundingClientRect().left + column.row * 2, quarterTop(column, quarter + Quarter.MINUTES));
 }
 
 /**
- * Un clic droit demandé au clavier par le navigateur : un événement de pointeur sans
- * pointeur. Celui que la grille envoie elle-même n'est pas « de confiance ».
+ * Le message en bas de la grille : le ticket qu'il nomme en gras, puis ce qui s'est passé,
+ * et son « Annuler », s'il en a un, qui fait `undo` (Ctrl/⌘+Z, que son infobulle écrit).
  */
-function fromKeyboard(event: globalThis.MouseEvent): boolean {
-    return event.isTrusted && event instanceof PointerEvent && event.pointerType === '';
+function toastOf(
+    message: GridMessage,
+    key: number,
+    mac: boolean,
+    undo?: () => void,
+    returnFocus?: () => void,
+): ToastMessage {
+    return {
+        key,
+        content:
+            message.ticket === null ? (
+                message.text
+            ) : (
+                <>
+                    <b className="font-mono font-semibold whitespace-nowrap">{message.ticket}</b> {message.text}
+                </>
+            ),
+        action:
+            message.undo && undo !== undefined
+                ? {
+                      label: 'Annuler',
+                      title: `Annuler (${shortcutLabel('undo', mac) ?? ''})`,
+                      keyShortcuts: shortcutKeys('undo', mac),
+                      onAction: undo,
+                  }
+                : undefined,
+        returnFocus,
+    };
 }
 
 /**

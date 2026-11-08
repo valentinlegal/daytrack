@@ -1,9 +1,8 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { clearDay, freezeTime, writeDay } from './day';
+import { clearDay, daysFrom, freezeTime, writeDay } from './day';
 import { clickSlot, doubleClickSlot, expectGridMatchesBase, NEAR_LEFT, savedDay, ticketWindow } from './editing';
-import { expect, refusedWith, test } from './fixtures';
+import { expect, expectAccessible, refusedWith, test } from './fixtures';
 import { connection, JIRA_ACCOUNT, JIRA_TICKETS } from './jira';
 
 /**
@@ -21,19 +20,10 @@ import { connection, JIRA_ACCOUNT, JIRA_TICKETS } from './jira';
  * parcours ne prennent pas. Un samedi ou un dimanche est fermé à la saisie : un parcours
  * qui y saisit prend un jour de semaine.
  */
-function day(index: number): string {
-    return new Date(Date.UTC(2024, 2, 4 + index)).toISOString().slice(0, 10);
-}
+const day = daysFrom('2024-03-04');
 
 const EXPORT = JIRA_TICKETS['SHOP-482'];
 const FILTRE = JIRA_TICKETS['SHOP-498'];
-
-const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
-
-async function expectAccessible(page: Page): Promise<void> {
-    const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
-    expect(results.violations).toEqual([]);
-}
 
 /** La ligne d'état « Connecté à Jira en tant que… ». */
 function connectedLine(page: Page) {
@@ -98,7 +88,8 @@ test.describe('la bienvenue', () => {
 
                     return style.textDecorationColor === style.color;
                 });
-            expect(await underlined()).toBe(false);
+            // Le pointeur vient de partir : la couleur du soulignement finit sa transition.
+            await expect.poll(underlined).toBe(false);
             await link.hover();
             await expect.poll(underlined).toBe(true);
             await page.mouse.move(0, 0);
@@ -269,7 +260,6 @@ test.describe('le jeton refusé', () => {
         expect(await savedDay(request, date)).toEqual([
             { start: '09:00', end: '09:15', kind: 'work', ticket: 'SHOP-498', comment: null },
         ]);
-        await clearDay(request, date);
     });
 
     test('perd sa seconde phrase sous 1280 px', async ({ page }) => {
@@ -1012,7 +1002,6 @@ test.describe('la fenêtre Nouveau ticket', () => {
         await expect(window).toHaveCount(0);
         // Le bloc porte le titre que Jira a donné.
         await expect(page.getByRole('list', { name: 'Saisies du jour' })).toContainText(FILTRE?.title ?? '');
-        await clearDay(request, date);
     });
 
     test('refuse un ticket que Jira ne connaît pas, même au clic à côté', async ({ page, request }) => {
@@ -1071,7 +1060,6 @@ test.describe('la fenêtre Nouveau ticket', () => {
         await expect(page.getByRole('list', { name: 'Saisies du jour' })).toContainText(
             JIRA_TICKETS['SHOP-519']?.title ?? '',
         );
-        await clearDay(request, date);
     });
 
     test.describe('qui attend Jira', () => {
@@ -1128,7 +1116,6 @@ test.describe('la fenêtre Nouveau ticket', () => {
                 { start: '16:00', end: '16:15', kind: 'work', ticket: 'OPS-21', comment: null },
             ]);
             await expectGridMatchesBase(page, request, date);
-            await clearDay(request, date);
         });
     });
 });
@@ -1153,7 +1140,6 @@ test.describe('Jira injoignable', () => {
         expect(await savedDay(request, date)).toEqual([
             { start: '09:30', end: '09:45', kind: 'work', ticket: 'PROJ-7', comment: null },
         ]);
-        await clearDay(request, date);
     });
 });
 
@@ -1186,7 +1172,6 @@ test.describe('les titres', () => {
         await expect(bug).toContainText('SHOP-519, Bug');
         await expect(bug).toContainText(JIRA_TICKETS['SHOP-519']?.title ?? '');
         await expect(recap).toContainText(JIRA_TICKETS['SHOP-519']?.title ?? '');
-        await clearDay(request, date);
     });
 
     test('du favori qu’on ajoute se montre sous son champ', async ({ page }) => {

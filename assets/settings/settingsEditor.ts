@@ -1,8 +1,6 @@
+import { firstRefusal, UNSAVED } from '../serverApi';
 import type { Settings, SettingsApi, SettingsResult } from './settingsApi';
 import type { Tint } from './tints';
-
-/** Ce que dit un enregistrement qui n'a pas abouti, sous ce qu'il visait. */
-export const UNSAVED = "L'enregistrement n'a pas abouti. Réessayez.";
 
 /** Ce que dit la page quand les réglages ne se lisent pas. */
 export const UNREAD = 'Les réglages ne se lisent pas. Rechargez la page.';
@@ -122,7 +120,7 @@ export class SettingsEditor {
                 if (result.status === 'saved') {
                     this.server = result.settings;
                 } else {
-                    this.errors = { ...this.errors, [areaOf(change)]: result.violations[0]?.message ?? UNSAVED };
+                    this.errors = { ...this.errors, [areaOf(change)]: firstRefusal(result.violations) };
                 }
             } catch {
                 this.errors = { ...this.errors, [areaOf(change)]: UNSAVED };

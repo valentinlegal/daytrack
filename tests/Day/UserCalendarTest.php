@@ -33,9 +33,10 @@ final class UserCalendarTest extends TestCase
     {
         $calendar = self::calendarAt('2026-10-06 10:00:00 Europe/Paris');
 
-        self::assertTrue($calendar->isOpen(self::date('2026-11-05')));
-        self::assertFalse($calendar->isOpen(self::date('2026-11-06')));
-        self::assertTrue($calendar->isOpen(self::date('2019-01-01')), 'Le passé n\'a pas de limite.');
+        self::assertSame('2026-11-05', $calendar->open('2026-11-05')?->format('Y-m-d'));
+        self::assertNull($calendar->open('2026-11-06'));
+        self::assertSame('2019-01-01', $calendar->open('2019-01-01')?->format('Y-m-d'), 'Le passé n\'a pas de limite.');
+        self::assertNull($calendar->open('2026-02-30'), 'Un jour qui n\'existe pas ne s\'ouvre pas.');
     }
 
     public function testATrenteJoursPileLaLimiteSuitMinuitDeLUtilisateur(): void
@@ -43,7 +44,7 @@ final class UserCalendarTest extends TestCase
         // 23:30 en heure universelle, le 6 octobre : il est déjà le 7 à Paris.
         $calendar = self::calendarAt('2026-10-06 23:30:00 UTC');
 
-        self::assertTrue($calendar->isOpen(self::date('2026-11-06')));
+        self::assertSame('2026-11-06', $calendar->open('2026-11-06')?->format('Y-m-d'));
     }
 
     public function testUneDateQuiNExistePasAuCalendrierEstRefusee(): void

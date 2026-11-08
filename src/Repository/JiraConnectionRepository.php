@@ -2,6 +2,8 @@
 
 namespace App\Repository;
 
+use App\Database\Lockable;
+use App\Database\LocksItsTable;
 use App\Entity\JiraConnection;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\ORM\Query;
@@ -10,8 +12,10 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * @extends ServiceEntityRepository<JiraConnection>
  */
-final class JiraConnectionRepository extends ServiceEntityRepository
+final class JiraConnectionRepository extends ServiceEntityRepository implements Lockable
 {
+    use LocksItsTable;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, JiraConnection::class);

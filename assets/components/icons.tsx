@@ -125,9 +125,13 @@ export function RetryIcon() {
     );
 }
 
-export function CupIcon() {
+/**
+ * La tasse de la pause. En petit, à la taille du texte de la pastille « Pause », son
+ * trait est celui de la flèche de « Nouvelle version », qui a la même taille.
+ */
+export function CupIcon({ small = false }: { small?: boolean }) {
     return (
-        <svg {...STROKE} strokeWidth="1.5" className="size-4 flex-none">
+        <svg {...STROKE} strokeWidth={small ? '1.6' : '1.5'} className={`${small ? 'size-3' : 'size-4'} flex-none`}>
             <path d="M3 6h8v3.5A3.5 3.5 0 0 1 7.5 13h-1A3.5 3.5 0 0 1 3 9.5z" />
             <path d="M11 7h1a2 2 0 0 1 0 4h-1.2M5.5 2.5v1.5M8.5 2.5v1.5" />
         </svg>

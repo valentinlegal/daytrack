@@ -1,25 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import { clampWidth, readSideWidth, SIDE_WIDTH_STORAGE_KEY, writeSideWidth } from '../../../assets/day/sideWidth';
+import { blockedStorage, memoryStorage } from '../grid/support';
 
 const BOUNDS = { min: 224, max: 360, initial: 256 };
 
+/** Le stockage tel que la préférence l'ouvre : à chaque lecture, le même. */
 function storage(initial: Record<string, string> = {}) {
-    const values = new Map(Object.entries(initial));
+    const kept = memoryStorage({ initial });
 
-    return {
-        values,
-        get: () => ({
-            getItem: (key: string) => values.get(key) ?? null,
-            setItem: (key: string, value: string) => values.set(key, value),
-            removeItem: (key: string) => values.delete(key),
-        }),
-    };
+    return { values: kept.items, get: () => kept };
 }
-
-const blocked = () => {
-    throw new DOMException('Accès refusé', 'SecurityError');
-};
 
 describe('la largeur de la colonne de gauche', () => {
     it('reste entre ses bornes, au pixel près', () => {
@@ -42,9 +33,9 @@ describe('la largeur de la colonne de gauche', () => {
         expect(readSideWidth(storage().get, BOUNDS)).toBeNull();
         expect(readSideWidth(storage({ [SIDE_WIDTH_STORAGE_KEY]: 'large' }).get, BOUNDS)).toBeNull();
         expect(readSideWidth(storage({ [SIDE_WIDTH_STORAGE_KEY]: '' }).get, BOUNDS)).toBeNull();
-        expect(readSideWidth(blocked, BOUNDS)).toBeNull();
+        expect(readSideWidth(blockedStorage, BOUNDS)).toBeNull();
         expect(() => {
-            writeSideWidth(blocked, 300);
+            writeSideWidth(blockedStorage, 300);
         }).not.toThrow();
     });
 });

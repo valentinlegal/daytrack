@@ -3,7 +3,7 @@
 namespace App\Tests\Api;
 
 use App\Tests\Support\JiraApi;
-use Symfony\Bundle\FrameworkBundle\KernelBrowser;
+use App\Tests\Support\ServerApi;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 /**
@@ -13,8 +13,7 @@ use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 final class VersionApiTest extends WebTestCase
 {
     use JiraApi;
-
-    private KernelBrowser $browser;
+    use ServerApi;
 
     protected function setUp(): void
     {
@@ -65,7 +64,7 @@ final class VersionApiTest extends WebTestCase
 
     public function testLaRouteNEcritRien(): void
     {
-        $this->browser->request('POST', '/api/version', server: ['CONTENT_TYPE' => 'application/json', 'HTTP_SEC_FETCH_SITE' => 'same-origin'], content: '{}');
+        $this->browser->request('POST', '/api/version', server: ['CONTENT_TYPE' => 'application/json'] + self::SAME_ORIGIN, content: '{}');
 
         self::assertSame(405, $this->browser->getResponse()->getStatusCode());
     }

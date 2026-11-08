@@ -1,8 +1,6 @@
-import AxeBuilder from '@axe-core/playwright';
-
-import { clearDay, writeDay } from './day';
+import { writeDay } from './day';
 import { EDITING_SCREENS, editingDay, openSampleDay } from './editing';
-import { expect, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
+import { expectAccessible, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
 import { SCENARIOS } from './scenarios';
 
 /**
@@ -34,13 +32,8 @@ test.describe('les écrans de la saisie', () => {
                     await expectScreen(page, testInfo, `${screen.name}-${String(viewport.width)}-${name}.png`);
 
                     if (viewport.width === 1440) {
-                        const results = await new AxeBuilder({ page })
-                            .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                            .analyze();
-                        expect(results.violations).toEqual([]);
+                        await expectAccessible(page);
                     }
-
-                    await clearDay(request, date);
                 });
             });
         });

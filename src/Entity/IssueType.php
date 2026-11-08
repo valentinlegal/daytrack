@@ -22,6 +22,9 @@ use Symfony\Component\Uid\Uuid;
 #[ORM\UniqueConstraint(name: 'issue_type_instance', columns: ['instance', 'jira_id'])]
 class IssueType
 {
+    /** La longueur d'un nom de type gardé : Jira n'en donne pas de plus long. */
+    public const int NAME_MAX = 255;
+
     #[ORM\Id]
     #[ORM\Column(type: UuidType::NAME)]
     public private(set) Uuid $id;
@@ -33,7 +36,7 @@ class IssueType
     #[ORM\Column(length: 50)]
     public private(set) string $jiraId;
 
-    #[ORM\Column(length: 255)]
+    #[ORM\Column(length: self::NAME_MAX)]
     public private(set) string $name;
 
     /** Son niveau dans la hiérarchie de Jira : 1 parent, 0 standard, −1 sous-tâche. */
@@ -54,7 +57,7 @@ class IssueType
 
     public function describe(JiraIssueType $type): void
     {
-        $this->name = mb_substr($type->name, 0, 255);
+        $this->name = mb_substr($type->name, 0, self::NAME_MAX);
         $this->level = $type->level;
     }
 

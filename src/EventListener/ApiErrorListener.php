@@ -2,9 +2,9 @@
 
 namespace App\EventListener;
 
+use App\Api\ApiError;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Event\ExceptionEvent;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Symfony\Component\HttpKernel\KernelEvents;
@@ -21,14 +21,6 @@ use Symfony\Component\Validator\Exception\ValidationFailedException;
 #[AsEventListener(event: KernelEvents::EXCEPTION)]
 final readonly class ApiErrorListener
 {
-    private const array CODES = [
-        Response::HTTP_BAD_REQUEST => 'bad_request',
-        Response::HTTP_NOT_FOUND => 'not_found',
-        Response::HTTP_METHOD_NOT_ALLOWED => 'method_not_allowed',
-        Response::HTTP_UNSUPPORTED_MEDIA_TYPE => 'unsupported_media_type',
-        Response::HTTP_UNPROCESSABLE_ENTITY => 'invalid',
-    ];
-
     public function __invoke(ExceptionEvent $event): void
     {
         $exception = $event->getThrowable();
@@ -37,7 +29,7 @@ final readonly class ApiErrorListener
         }
 
         $status = $exception->getStatusCode();
-        $body = ['error' => self::CODES[$status] ?? 'http_'.$status];
+        $body = ['error' => ApiError::ofStatus($status)->value ?? 'http_'.$status];
 
         $previous = $exception->getPrevious();
         if ($previous instanceof ValidationFailedException) {

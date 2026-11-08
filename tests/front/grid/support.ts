@@ -61,12 +61,15 @@ export function rangesOf(grid: Grid): Range[] {
  * navigation privée, ou se remplir, comme un vrai : au-delà de `quota` caractères,
  * une écriture est refusée et laisse le stockage tel qu'il était.
  */
-export function memoryStorage({ refuse = false } = {}): TabStorage & {
+export function memoryStorage({
+    refuse = false,
+    initial = {},
+}: { refuse?: boolean; initial?: Record<string, string> } = {}): TabStorage & {
     items: Map<string, string>;
     quota: number;
     used: () => number;
 } {
-    const items = new Map<string, string>();
+    const items = new Map(Object.entries(initial));
     const guard = (): void => {
         if (refuse) {
             throw new DOMException('Accès refusé', 'SecurityError');
@@ -107,6 +110,11 @@ export function memoryStorage({ refuse = false } = {}): TabStorage & {
 
     return storage;
 }
+
+/** Un stockage que le navigateur refuse d'ouvrir : y accéder lève, comme en navigation privée. */
+export const blockedStorage = (): never => {
+    throw new DOMException('Accès refusé', 'SecurityError');
+};
 
 /** Peu de contenus, pour que des voisins identiques se rencontrent souvent. */
 export const CONTENTS: readonly Cell[] = [

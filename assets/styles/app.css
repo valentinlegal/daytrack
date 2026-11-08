@@ -76,6 +76,7 @@
     --spacing-ctl-sm: var(--h-ctl-sm);
     --spacing-field: var(--h-field);
     --spacing-row: var(--h-row);
+    --spacing-pill: var(--h-pill);
     --spacing-foot: var(--h-foot);
     --spacing-side: var(--w-side);
     --spacing-side-narrow: var(--w-side-narrow);
@@ -91,7 +92,7 @@
     --spacing-ticket: calc(var(--w-id) * 2);
 
     /* La zone de texte au départ : deux lignes. */
-    --spacing-area: calc(var(--h-field) + var(--h-row));
+    --spacing-area: calc(var(--h-field) + var(--h-pill));
     --spacing-pop: var(--w-pop);
     --spacing-pop-sm: var(--w-pop-sm);
     --spacing-pop-md: var(--w-pop-md);

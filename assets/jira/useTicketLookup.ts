@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { hasTicketShape } from '../grid/entry';
 import { normalizeTicket } from '../grid/grid';
 import type { LookupResult } from './jiraApi';
+import { isTokenRefusal } from './jiraStatus';
 import type { TicketInfo } from './ticketInfo';
 import { useJiraState, useTicketBook, useTickets } from './TicketsContext';
 
@@ -52,7 +53,7 @@ export function useTicketLookup(typed: string): {
     // Jira refuse le jeton : rien de ce qu'on tape ne se vérifie, même un ticket connu.
     // La recherche part quand même : une réponse de Jira dirait que le jeton passe de
     // nouveau.
-    const refusal = state === 'refused' || state === 'missing_scope' ? state : null;
+    const refusal = isTokenRefusal(state) ? state : null;
     const ticket = book === null ? null : shapedTicket(typed);
     const known = ticket === null || refusal !== null ? undefined : tickets.get(ticket);
     // La réponse ne vaut que pour le ticket encore tapé : une fenêtre rouverte plus tard, le

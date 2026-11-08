@@ -13,8 +13,26 @@ describe('ce que la page dit de la reprise', () => {
         expect(readV1LeftOut(JSON.stringify(leftOut))).toEqual(leftOut);
     });
 
-    it.each([undefined, '', 'pas du JSON', 'null'])('ne dit rien de ce qui ne se lit pas : %s', (value) => {
-        expect(readV1LeftOut(value)).toEqual(NOTHING_LEFT_OUT);
+    it.each([undefined, '', 'pas du JSON', 'null', '[]', '{"entries":"non"}'])(
+        'ne dit rien de ce qui ne se lit pas : %s',
+        (value) => {
+            expect(readV1LeftOut(value)).toEqual(NOTHING_LEFT_OUT);
+        },
+    );
+
+    it('laisse de côté une ligne de travers sans faire taire les autres', () => {
+        const entry = { date: '2024-03-05', start: '09:10', end: null, ticket: null };
+        const objective = { date: '2024-03-06', from: 1440, to: 780 };
+
+        expect(
+            readV1LeftOut(
+                JSON.stringify({
+                    entries: [entry, { date: '2024-03-04', start: 630 }, null],
+                    objectives: [{ date: '2024-03-07', from: '24h00', to: 780 }, objective],
+                    favorites: ['PROJET', 12],
+                }),
+            ),
+        ).toEqual({ entries: [entry], objectives: [objective], favorites: ['PROJET'] });
     });
 });
 
@@ -26,7 +44,7 @@ describe('dire que la liste est lue', () => {
 
         expect(fetcher).toHaveBeenCalledWith('/api/v1-import/seen', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
             body: '{}',
         });
     });

@@ -101,6 +101,12 @@ final class Catalog
     public const string TOKEN_LOST = 'JETON';
     /** Jira limite le débit : une écriture d'heures sur deux reçoit 429, à refaire après Retry-After. */
     public const string QUOTA = 'QUOTA';
+    /**
+     * Jira accepte les heures et les relit, puis ne trouve plus le ticket, ni ses heures :
+     * le compte a perdu le droit de voir son projet. Elles y restent pourtant, comme dans
+     * un vrai Jira, qui répond de même à un ticket supprimé.
+     */
+    public const string VANISHING = 'DISPARU';
 
     public const int SLOW_SECONDS = 20;
     /** Le reste à faire de chaque ticket avant qu'on y saisisse : 4h00. */
@@ -144,6 +150,7 @@ final class Catalog
         self::DEAF => 'Simulation : Jira enregistre sans répondre, puis ne répond plus à la relecture',
         self::TOKEN_LOST => 'Simulation : Jira accepte puis refuse le jeton à la relecture',
         self::QUOTA => 'Simulation : Jira limite le débit, il faut réessayer',
+        self::VANISHING => 'Simulation : Jira accepte et relit les heures, puis ne trouve plus ce ticket',
     ];
 
     /**

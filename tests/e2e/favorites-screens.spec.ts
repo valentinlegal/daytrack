@@ -1,12 +1,12 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { clearDay, freezeTime, weekday, writeDay } from './day';
+import { freezeTime, weekdaysFrom, writeDay } from './day';
 import { clickSlot, slotPoint } from './editing';
 import {
-    SAMPLE_FAVORITES,
     expect,
+    expectAccessible,
     expectScreen,
+    SAMPLE_FAVORITES,
     serveFavorites,
     type ShownFavorite,
     shownFavorites,
@@ -36,9 +36,7 @@ const BASE = SCENARIOS[0]?.entries ?? [];
  * prennent pas : ils tournent en même temps, sur la même base (settings.spec.ts finit en
  * septembre, calendar.spec.ts commence en janvier 2025).
  */
-function day(index: number): string {
-    return weekday('2024-10-01', index);
-}
+const workday = weekdaysFrom('2024-10-01');
 
 function favoriteCard(page: Page, ticket: string) {
     return page.locator('[data-favorite]').filter({ hasText: ticket });
@@ -153,9 +151,16 @@ const SCREENS: {
             await page.mouse.move(from.x, from.y);
             await page.mouse.down();
             await page.mouse.move(from.x, (await slotPoint(page, '10:30')).y, { steps: 4 });
-            // Au bas d'OPS-12 : SHOP-482, déjà en favori, passe de la première à la troisième place.
-            await page.mouse.move(card.x + card.width / 4, card.y + card.height - 4, { steps: 10 });
+            // Sur la liste, SHOP-482 quitte la première place et OPS-12 remonte : son bas se
+            // mesure là où il est passé, quel que soit le côté d'où arrive le pointeur.
+            await page.mouse.move(card.x + card.width / 4, card.y + card.height / 2, { steps: 10 });
             await expect(page.locator('.favorite-drag')).toContainText('SHOP-482');
+            const moved = await favoriteCard(page, 'OPS-12').boundingBox();
+            if (moved === null) {
+                throw new Error('OPS-12 n’est plus à l’écran.');
+            }
+            // Au bas d'OPS-12 : SHOP-482, déjà en favori, passe de la première à la troisième place.
+            await page.mouse.move(moved.x + moved.width / 4, moved.y + moved.height - 4, { steps: 4 });
             await expect(page.locator('[data-favorite]').nth(2)).toContainText('SHOP-482');
         },
     },
@@ -229,7 +234,7 @@ test.describe('les écrans des favoris', () => {
 
             VIEWPORTS.forEach((viewport, v) => {
                 THEMES.forEach(({ scheme, name }, t) => {
-                    const date = day(s * 6 + v * 2 + t);
+                    const date = workday(s * 6 + v * 2 + t);
 
                     test(`${screen.name}, ${String(viewport.width)} × ${String(viewport.height)}, ${name}`, async ({
                         page,
@@ -257,17 +262,12 @@ test.describe('les écrans des favoris', () => {
                             // La place en pointillé d'un bloc soulevé est un décor, à l'opacité d'un
                             // contrôle inactif, comme le favori qu'on glisse : WCAG ne lui demande
                             // pas de contraste.
-                            const results = await new AxeBuilder({ page })
-                                .exclude('[data-favorite-placeholder]')
-                                .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                                .analyze();
-                            expect(results.violations).toEqual([]);
+                            await expectAccessible(page, { exclude: ['[data-favorite-placeholder]'] });
                         }
 
                         // Échap lâche le favori sans le poser.
                         await page.keyboard.press('Escape');
                         await page.mouse.up();
-                        await clearDay(request, date);
                     });
                 });
             });

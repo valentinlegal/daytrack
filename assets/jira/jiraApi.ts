@@ -1,6 +1,6 @@
-import { bodyOf, readViolations } from '../day/dayApi';
-import type { Violation } from '../grid/daySession';
 import { isRecord } from '../grid/json';
+import { type Refused, refused, serverApi } from '../serverApi';
+import { isTokenRefusal } from './jiraStatus';
 import { readTicket, readTickets, type TicketInfo } from './ticketInfo';
 
 /** Ce que Jira reproche au jeton enregistré. */
@@ -26,11 +26,9 @@ export interface JiraForm {
 export type TestResult =
     | { readonly status: 'connected'; readonly account: string }
     /** Le refus, sous le champ qu'il concerne : le jeton, ou l'adresse que Jira ne sert pas. */
-    | { readonly status: 'invalid'; readonly violations: readonly Violation[] };
+    | Refused;
 
-export type LinkResult =
-    | { readonly status: 'linked'; readonly connection: JiraConnection }
-    | { readonly status: 'invalid'; readonly violations: readonly Violation[] };
+export type LinkResult = { readonly status: 'linked'; readonly connection: JiraConnection } | Refused;
 
 /** Ce que la vérification du jeton enregistré a donné. */
 export interface CheckResult {
@@ -73,120 +71,98 @@ export interface JiraApi {
  * Le jeton ne fait que l'aller : aucune réponse ne le rend. Une réponse inattendue —
  * panne du réseau, erreur du serveur, corps illisible — lève.
  */
-export function httpJiraApi(fetcher: typeof fetch = (input, init) => fetch(input, init)): JiraApi {
-    async function send(method: 'GET' | 'POST' | 'PUT', target: string, body?: unknown): Promise<Response> {
-        return fetcher(target, {
-            method,
-            headers:
-                body === undefined
-                    ? { Accept: 'application/json' }
-                    : { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: body === undefined ? null : JSON.stringify(body),
-        });
-    }
-
-    async function okBody(response: Response, what: string): Promise<unknown> {
-        if (response.status !== 200) {
-            throw new Error(`L'API a répondu ${String(response.status)} pour ${what}.`);
-        }
-
-        return bodyOf(response);
-    }
-
-    async function formResult<T>(response: Response, success: (json: unknown) => T): Promise<T | Invalid> {
-        const json = await bodyOf(response);
-        if (response.status === 200) {
-            return success(json);
-        }
-        if (response.status === 422 && isRecord(json)) {
-            return { status: 'invalid', violations: readViolations(json.violations) };
-        }
-
-        throw new Error(`L'API a répondu ${String(response.status)} à la connexion à Jira.`);
+export function httpJiraApi(fetcher?: typeof fetch): JiraApi {
+    const server = serverApi(fetcher);
+    function post<T>(target: string, body: unknown, read: (json: unknown) => T): Promise<T> {
+        return server.request('POST', target, { 200: read }, { body });
     }
 
     // Le jeton ne part que s'il a été collé : sans lui, le serveur reprend celui qu'il garde.
     const fields = ({ site, email, token }: JiraForm) => (token === null ? { site, email } : { site, email, token });
 
     return {
-        async connection() {
-            return readConnection(await okBody(await send('GET', '/api/jira'), 'la connexion à Jira'));
-        },
-        async test(form) {
-            return formResult(await send('POST', '/api/jira/test', fields(form)), (json) => ({
-                status: 'connected' as const,
-                account: text(isRecord(json) ? json.account : undefined, 'le compte'),
-            }));
-        },
-        async link(form) {
-            return formResult(await send('PUT', '/api/jira', fields(form)), (json) => {
-                const connection = readConnection(json);
-                if (connection === null) {
-                    throw new TypeError("L'API ne rend pas la connexion qu'elle vient d'enregistrer.");
+        connection: () => server.read('/api/jira', readConnection),
+        test: (form) =>
+            server.request<TestResult>(
+                'POST',
+                '/api/jira/test',
+                {
+                    200: (json) => ({
+                        status: 'connected',
+                        account: text(isRecord(json) ? json.account : undefined, 'le compte'),
+                    }),
+                    422: refused,
+                },
+                { body: fields(form) },
+            ),
+        link: (form) =>
+            server.request<LinkResult>(
+                'PUT',
+                '/api/jira',
+                {
+                    200: (json) => {
+                        const connection = readConnection(json);
+                        if (connection === null) {
+                            throw new TypeError("L'API ne rend pas la connexion qu'elle vient d'enregistrer.");
+                        }
+
+                        return { status: 'linked', connection };
+                    },
+                    422: refused,
+                },
+                { body: fields(form) },
+            ),
+        check: () =>
+            post('/api/jira/check', {}, (json): CheckResult => {
+                const status = isRecord(json) ? json.status : undefined;
+                if (
+                    status !== 'connected' &&
+                    status !== 'refused' &&
+                    status !== 'missing_scope' &&
+                    status !== 'unreachable' &&
+                    status !== 'not_linked'
+                ) {
+                    throw new TypeError("L'API ne dit pas si le jeton passe.");
                 }
 
-                return { status: 'linked' as const, connection };
-            });
-        },
-        async check() {
-            const json = await okBody(await send('POST', '/api/jira/check', {}), 'la vérification du jeton');
-            const status = isRecord(json) ? json.status : undefined;
-            if (
-                status !== 'connected' &&
-                status !== 'refused' &&
-                status !== 'missing_scope' &&
-                status !== 'unreachable' &&
-                status !== 'not_linked'
-            ) {
-                throw new TypeError("L'API ne dit pas si le jeton passe.");
-            }
+                const account = isRecord(json) && typeof json.account === 'string' ? json.account : null;
 
-            const account = isRecord(json) && typeof json.account === 'string' ? json.account : null;
+                return { status, account, missingScopes: scopes(isRecord(json) ? json.missingScopes : undefined) };
+            }),
+        // Une recherche garde le titre et note un refus du jeton : elle écrit, donc POST.
+        lookup: (ticket) =>
+            post(`/api/tickets/${encodeURIComponent(ticket)}/lookup`, {}, (json): LookupResult => {
+                const status = isRecord(json) ? json.status : undefined;
+                // Ce que Jira reproche au jeton, quand le serveur le dit.
+                const after = isRecord(json) && 'refusal' in json ? { refusal: refusal(json.refusal) } : {};
+                if (status === 'found') {
+                    const info = readTicket(isRecord(json) ? json.ticket : undefined);
+                    if (info === null) {
+                        throw new TypeError(`L'API trouve ${ticket} sans le décrire.`);
+                    }
 
-            return { status, account, missingScopes: scopes(isRecord(json) ? json.missingScopes : undefined) };
-        },
-        async lookup(ticket) {
-            // Une recherche garde le titre et note un refus du jeton : elle écrit, donc POST.
-            const json = await okBody(
-                await send('POST', `/api/tickets/${encodeURIComponent(ticket)}/lookup`, {}),
-                ticket,
-            );
-            const status = isRecord(json) ? json.status : undefined;
-            // Ce que Jira reproche au jeton, quand le serveur le dit.
-            const after = isRecord(json) && 'refusal' in json ? { refusal: refusal(json.refusal) } : {};
-            if (status === 'found') {
-                const info = readTicket(isRecord(json) ? json.ticket : undefined);
-                if (info === null) {
-                    throw new TypeError(`L'API trouve ${ticket} sans le décrire.`);
+                    return { status, ticket: info, ...after };
+                }
+                if (
+                    status === 'not_found' ||
+                    status === 'refused' ||
+                    status === 'missing_scope' ||
+                    status === 'unreachable'
+                ) {
+                    return { status, ...after };
                 }
 
-                return { status, ticket: info, ...after };
-            }
-            if (
-                status === 'not_found' ||
-                status === 'refused' ||
-                status === 'missing_scope' ||
-                status === 'unreachable'
-            ) {
-                return { status, ...after };
-            }
+                throw new TypeError(`L'API ne dit pas ce que Jira sait de ${ticket}.`);
+            }),
+        refresh: (tickets) =>
+            post('/api/tickets/refresh', { tickets }, (json): RefreshResult => {
+                if (!isRecord(json)) {
+                    throw new TypeError("L'API ne rend pas les titres.");
+                }
 
-            throw new TypeError(`L'API ne dit pas ce que Jira sait de ${ticket}.`);
-        },
-        async refresh(tickets) {
-            const json = await okBody(await send('POST', '/api/tickets/refresh', { tickets }), 'les titres');
-            if (!isRecord(json)) {
-                throw new TypeError("L'API ne rend pas les titres.");
-            }
-
-            return { tickets: readTickets(json.tickets), refusal: refusal(json.refusal) };
-        },
+                return { tickets: readTickets(json.tickets), refusal: refusal(json.refusal) };
+            }),
     };
-}
-
-interface Invalid {
-    readonly status: 'invalid';
-    readonly violations: readonly Violation[];
 }
 
 /** La connexion rendue par GET /api/jira, ou null si DayTrack n'est pas relié. */
@@ -208,7 +184,7 @@ function readConnection(json: unknown): JiraConnection | null {
 }
 
 function refusal(json: unknown): TokenRefusal | null {
-    return json === 'refused' || json === 'missing_scope' ? json : null;
+    return isTokenRefusal(json) ? json : null;
 }
 
 function scopes(json: unknown): string[] {

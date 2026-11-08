@@ -2,6 +2,8 @@
 
 namespace App\Repository;
 
+use App\Database\Lockable;
+use App\Database\LocksItsTable;
 use App\Entity\Favorite;
 use App\Entity\IssueType;
 use App\Entity\Slot;
@@ -16,8 +18,10 @@ use Symfony\Component\Uid\Uuid;
 /**
  * @extends ServiceEntityRepository<IssueType>
  */
-final class IssueTypeRepository extends ServiceEntityRepository
+final class IssueTypeRepository extends ServiceEntityRepository implements Lockable
 {
+    use LocksItsTable;
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, IssueType::class);

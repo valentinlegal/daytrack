@@ -23,6 +23,8 @@ final class State
      * @param bool                       $down          Jira ne répond plus que par une erreur
      * @param list<string>               $imageTags     les tags des images publiées
      * @param array<string, int>         $mute          les tickets de MUET écrits depuis leur dernière lecture
+     * @param array<string, int>         $vanishing     les tickets de DISPARU écrits depuis leur dernière lecture : elle sera la dernière
+     * @param array<string, int>         $vanished      les tickets de DISPARU que Jira ne trouve plus
      */
     public function __construct(
         public array $worklogs = [],
@@ -34,6 +36,8 @@ final class State
         public bool $down = false,
         public array $imageTags = self::IMAGE_TAGS,
         public array $mute = [],
+        public array $vanishing = [],
+        public array $vanished = [],
     ) {
     }
 
@@ -67,6 +71,8 @@ final class State
             'enPanne' => $this->down,
             'imagesPubliees' => $this->imageTags,
             'muets' => $this->mute,
+            'aDisparaitre' => $this->vanishing,
+            'disparus' => $this->vanished,
         ];
     }
 
@@ -101,6 +107,8 @@ final class State
             true === ($data['enPanne'] ?? false),
             \is_array($data['imagesPubliees'] ?? null) ? array_values(array_filter($data['imagesPubliees'], \is_string(...))) : self::IMAGE_TAGS,
             self::secondsByIssue($data['muets'] ?? null),
+            self::secondsByIssue($data['aDisparaitre'] ?? null),
+            self::secondsByIssue($data['disparus'] ?? null),
         );
     }
 

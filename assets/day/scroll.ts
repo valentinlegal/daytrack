@@ -40,12 +40,9 @@ export function openingTop(now: number | null, visibleMinutes: number): number {
 export function emptyHintStart(visibleTop: number, now: number | null, quarters = 2): number {
     const hint = quarters * Quarter.MINUTES;
     const last = Quarter.DAY_END - hint;
-    const start = Math.min(
-        Math.max(Math.ceil(visibleTop / Quarter.MINUTES) * Quarter.MINUTES + Quarter.MINUTES, Quarter.FIRST),
-        last,
-    );
+    const start = Math.min(Math.max(Quarter.ceil(visibleTop) + Quarter.MINUTES, Quarter.FIRST), last);
     if (now !== null && now > start && now < start + hint) {
-        return Math.min(Math.ceil(now / Quarter.MINUTES) * Quarter.MINUTES, last);
+        return Math.min(Quarter.ceil(now), last);
     }
 
     return start;

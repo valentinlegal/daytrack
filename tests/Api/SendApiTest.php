@@ -164,6 +164,107 @@ final class SendApiTest extends WebTestCase
         self::assertSame([], self::at($day, 'send', 'removed'));
     }
 
+    public function testUnTicketRetireQueJiraNeTrouvePlusLaisseLaJourneeEnvoyeeEtLeDit(): void
+    {
+        $this->linkJira();
+        $gone = Catalog::VANISHING.'-1';
+        $day = $this->sendOk($this->write(0, [self::work('09:30', '10:30', $gone), self::work('10:30', '11:00', 'SHOP-482')]));
+        self::assertSame('sent', self::at($day, 'send', 'state'));
+
+        // Le compte perd le droit de voir ce ticket, et on le retire de la journée.
+        $day = $this->write(self::intAt($day, 'version'), [self::clear('09:30', '10:30')]);
+        self::assertSame([$gone], self::at($day, 'send', 'removed'));
+
+        $day = $this->sendOk($day);
+
+        // Rien ne le ferait revenir : la journée est envoyée. Mais ses heures sont restées
+        // dans Jira, et le détail de l'envoi le dit, ticket par ticket.
+        self::assertSame('sent', self::at($day, 'send', 'state'));
+        self::assertSame([$gone], self::at($day, 'send', 'removed'));
+        self::assertSame([$gone], self::at($day, 'send', 'vanished'));
+        self::assertSame([
+            $gone.' 2026-10-06T09:30:00.000+0200 3600',
+            'SHOP-482 2026-10-06T10:30:00.000+0200 1800',
+        ], $this->myWorklogs());
+        self::assertSame(['2026-10-06' => 'sent'], $this->marks());
+        self::assertSame([$gone], self::at($this->day(), 'send', 'vanished'), 'Un rechargement le retrouve.');
+
+        // Modifiée puis renvoyée, la journée n'a plus rien à voir avec lui : il ne se relit plus.
+        $day = $this->write(self::intAt($day, 'version'), [self::work('11:00', '11:15', 'SHOP-482')]);
+        self::assertSame([], self::at($day, 'send', 'removed'));
+        self::assertSame([], self::at($day, 'send', 'vanished'));
+        $day = $this->sendOk($day);
+        self::assertSame('sent', self::at($day, 'send', 'state'));
+        self::assertSame([], self::at($day, 'send', 'vanished'));
+    }
+
+    public function testUneJourneeVideeDontJiraNeTrouvePlusLeTicketResteEnvoyeePourLeRedire(): void
+    {
+        $this->linkJira();
+        $gone = Catalog::VANISHING.'-1';
+        $day = $this->sendOk($this->write(0, [self::work('09:30', '10:30', $gone)]));
+
+        $day = $this->sendOk($this->write(self::intAt($day, 'version'), [self::clear('09:30', '10:30')]));
+
+        // « Rien à envoyer » n'ouvrirait plus rien : « Envoyé à 15:20 » rouvre son détail.
+        self::assertSame('sent', self::at($day, 'send', 'state'));
+        self::assertSame([$gone], self::at($day, 'send', 'vanished'));
+        self::assertSame([$gone], self::at($day, 'send', 'removed'));
+        self::assertSame(['date' => self::DAY, 'time' => '15:20'], self::at($day, 'send', 'sentAt'));
+        self::assertSame(['2026-10-06' => 'sent'], $this->marks());
+        self::assertSame([$gone], self::at($this->day(), 'send', 'vanished'), 'Un rechargement le retrouve.');
+
+        // Rien ne repart : Jira ne le trouvera pas davantage.
+        [$status, $again] = $this->sendDay(self::intAt($day, 'version'));
+        self::assertSame(409, $status);
+        self::assertSame('nothing', $again['error'] ?? null);
+
+        // Une nouvelle saisie se renvoie : la journée a été envoyée, vide.
+        $day = $this->write(self::intAt($day, 'version'), [self::work('09:30', '09:45', 'OPS-7')]);
+        self::assertSame('modified', self::at($day, 'send', 'state'));
+        self::assertSame([], self::at($day, 'send', 'vanished'));
+        self::assertSame('sent', self::at($this->sendOk($day), 'send', 'state'));
+    }
+
+    public function testUnTicketDeLaJourneeQueJiraNeTrouvePlusFaitUnEnvoiPartiel(): void
+    {
+        $this->linkJira();
+        $gone = Catalog::VANISHING.'-1';
+        $day = $this->sendOk($this->write(0, [self::work('09:30', '10:30', $gone), self::work('10:30', '11:00', 'SHOP-482')]));
+
+        // Ses heures, il les a encore dans la journée : qu'elles ne partent pas se dit.
+        $day = $this->sendOk($this->write(self::intAt($day, 'version'), [self::work('09:30', '10:30', $gone, 'Revue')]));
+
+        self::assertSame('partial', self::at($day, 'send', 'state'));
+        self::assertSame([$gone => 'not_found', 'SHOP-482' => null], self::at($day, 'send', 'outcomes'));
+        self::assertSame([], self::at($day, 'send', 'vanished'));
+    }
+
+    public function testUnTicketIntrouvableDansUnEnvoiPartielSeRelitEtSeRedit(): void
+    {
+        $this->linkJira();
+        $gone = Catalog::VANISHING.'-1';
+        $day = $this->sendOk($this->write(0, [self::work('09:30', '10:30', $gone), self::work('10:30', '11:00', 'SHOP-482')]));
+
+        $day = $this->sendOk($this->write(self::intAt($day, 'version'), [self::work('09:30', '10:30', 'FERME-1')]));
+
+        self::assertSame('partial', self::at($day, 'send', 'state'));
+        self::assertSame(['FERME-1' => 'closed', 'SHOP-482' => null, $gone => null], self::at($day, 'send', 'outcomes'));
+        self::assertContains($gone, self::arrayAt($day, 'send', 'removed'));
+        self::assertSame([$gone], self::at($day, 'send', 'vanished'));
+
+        // Le prochain envoi le relit : c'est l'envoi complet qui le dit. D'ici là, la
+        // confirmation ne promet pas de retirer ses heures de Jira.
+        $day = $this->write(self::intAt($day, 'version'), [self::work('09:30', '10:30', 'OPS-7')]);
+        self::assertSame('modified', self::at($day, 'send', 'state'));
+        self::assertContains($gone, self::arrayAt($day, 'send', 'removed'));
+        self::assertSame([$gone], self::at($day, 'send', 'vanished'));
+        $day = $this->sendOk($day);
+
+        self::assertSame('sent', self::at($day, 'send', 'state'));
+        self::assertSame([$gone], self::at($day, 'send', 'vanished'));
+    }
+
     public function testUneJourneeVideeApresUnEnvoiSeRenvoiePuisNAPlusRienAEnvoyer(): void
     {
         $this->linkJira();
@@ -1004,20 +1105,6 @@ final class SendApiTest extends WebTestCase
             json_encode($body, \JSON_THROW_ON_ERROR),
         ));
         self::assertLessThan(300, $response->status);
-    }
-
-    /**
-     * @return array<mixed>
-     */
-    private function marks(): array
-    {
-        $this->browser->request('GET', '/api/calendar/2026-09-28/2026-11-08');
-        self::assertResponseIsSuccessful();
-        $marks = json_decode((string) $this->browser->getResponse()->getContent(), true, flags: \JSON_THROW_ON_ERROR);
-        self::assertIsArray($marks);
-        self::assertIsArray($marks['marks']);
-
-        return $marks['marks'];
     }
 
     private static function textOf(mixed $document): string

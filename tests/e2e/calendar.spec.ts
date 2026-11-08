@@ -1,20 +1,28 @@
-import AxeBuilder from '@axe-core/playwright';
-import type { Locator, Page, Request } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
-import { clearDay, freezeTime, writeDay } from './day';
+import { freezeTime, writeDay } from './day';
 import {
+    blocks,
     clickSlot,
+    describedWrites,
     doubleClickSlot,
     dragSlots,
     expectGridMatchesBase,
+    figures,
+    lane,
     message,
+    objectiveButton,
+    openAnyway,
+    recordWrites,
     rightClickSlot,
     savedDay,
     slotPoint,
     slots,
     ticketWindow,
+    tokenColor,
 } from './editing';
-import { expect, test } from './fixtures';
+import { expect, expectAccessible, test } from './fixtures';
+import { calendar, cell, numberColor } from './calendar';
 
 /**
  * Le calendrier du mois et les jours non travaillés : les marques que le serveur calcule,
@@ -27,42 +35,12 @@ import { expect, test } from './fixtures';
  */
 test.use({ marks: 'base' });
 
-const MONTHS = [
-    'janvier',
-    'février',
-    'mars',
-    'avril',
-    'mai',
-    'juin',
-    'juillet',
-    'août',
-    'septembre',
-    'octobre',
-    'novembre',
-    'décembre',
-];
-
 /** Les tickets d'une heure, de 09:00 à 10:00. */
 const ONE_HOUR = [{ start: '09:00', end: '10:00', ticket: 'SHOP-482' }];
-
-function calendar(page: Page): Locator {
-    return page.getByRole('grid');
-}
 
 /** Le titre du mois affiché : « Janvier 2025 ». */
 function monthTitle(page: Page): Locator {
     return page.getByRole('heading', { level: 2, name: /^\S+ \d{4}$/ });
-}
-
-/** Un jour du calendrier, par le début de son libellé : « 15 janvier ». */
-function cell(page: Page, date: string): Locator {
-    const label = `${String(Number(date.slice(8)))} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ''}`;
-
-    return calendar(page).getByRole('button', { name: new RegExp(`^${label}(,|$)`) });
-}
-
-function figures(page: Page): Locator {
-    return page.getByRole('group', { name: 'Chiffres du jour' });
 }
 
 /**
@@ -114,46 +92,8 @@ function title(page: Page): Locator {
     return page.getByRole('heading', { level: 1 });
 }
 
-function objectiveButton(page: Page): Locator {
-    return page.getByRole('button', { name: /^Objectif du jour/ });
-}
-
-function openAnyway(page: Page): Locator {
-    return page.getByRole('button', { name: 'Saisir quand même' });
-}
-
-function blocks(page: Page): Locator {
-    return page.getByRole('list', { name: 'Saisies du jour' }).getByRole('listitem');
-}
-
-/** La colonne des blocs, que la grille fermée grise. */
-function lane(page: Page): Locator {
-    return page.getByRole('list', { name: 'Saisies du jour' }).locator('..');
-}
-
 function favoriteCard(page: Page, ticket: string): Locator {
     return page.locator('[data-favorite]').filter({ hasText: ticket });
-}
-
-/** La valeur qu'une couleur de tokens.css prend dans la page. */
-async function tokenColor(page: Page, token: `--${string}`): Promise<string> {
-    return page.evaluate((name) => {
-        const probe = document.createElement('div');
-        probe.style.color = `var(${name})`;
-        document.body.append(probe);
-        const color = getComputedStyle(probe).color;
-        probe.remove();
-
-        return color;
-    }, token);
-}
-
-/** La couleur du chiffre d'un jour. */
-async function numberColor(day: Locator): Promise<string> {
-    return day
-        .locator(':scope > span')
-        .first()
-        .evaluate((number) => getComputedStyle(number).color);
 }
 
 /**
@@ -177,26 +117,6 @@ async function markOf(day: Locator): Promise<string> {
         });
 }
 
-/**
- * Les écritures que la page envoie. La vérification du jeton et la relecture des titres
- * demandent à Jira ce qu'il sait : elles ne touchent à aucune journée.
- */
-function recordWrites(page: Page): Request[] {
-    const writes: Request[] = [];
-    page.on('request', (sent) => {
-        const jira = /\/api\/(jira\/check|tickets\/refresh)$/.test(new URL(sent.url()).pathname);
-        if (sent.method() !== 'GET' && !jira) {
-            writes.push(sent);
-        }
-    });
-
-    return writes;
-}
-
-function described(writes: readonly Request[]): string[] {
-    return writes.map((sent) => `${sent.method()} ${new URL(sent.url()).pathname}`);
-}
-
 /** Ce qui a le curseur : « button Saisir quand même », « listbox Créneaux de la journée ». */
 function focused(page: Page): Promise<string> {
     return page.evaluate(() => {
@@ -207,15 +127,6 @@ function focused(page: Page): Promise<string> {
 
         return `${element.getAttribute('role') ?? element.tagName.toLowerCase()} ${element.getAttribute('aria-label') ?? element.textContent.trim()}`;
     });
-}
-
-async function expectAccessible(page: Page): Promise<void> {
-    // axe attend ses propres minuteurs : l'heure doit de nouveau tourner.
-    await page.clock.resume();
-    const results = await new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-        .analyze();
-    expect(results.violations).toEqual([]);
 }
 
 /**
@@ -327,11 +238,8 @@ test.describe('le mois', () => {
             'Incomplet',
         ]);
 
+        await page.clock.resume();
         await expectAccessible(page);
-
-        for (const date of ['2025-01-06', '2025-01-07', '2025-01-08', '2025-01-11', '2025-01-12']) {
-            await clearDay(request, date);
-        }
     });
 
     test('un clic ouvre le jour, du mois ou d’à côté ; ses flèches parcourent les mois sans changer de jour', async ({
@@ -527,8 +435,6 @@ test.describe('le mois', () => {
         await expect(blocks(page)).toHaveCount(0);
         await expect(shown).toHaveAccessibleName('27 janvier, jour affiché');
         await expectGridMatchesBase(page, request, date);
-
-        await clearDay(request, date);
     });
 
     test('se relit au retour sur l’onglet, qu’un autre a pu changer', async ({ page, request }) => {
@@ -544,8 +450,6 @@ test.describe('le mois', () => {
             window.dispatchEvent(new Event('focus'));
         });
         await expect(cell(page, date)).toHaveAccessibleName('10 janvier, incomplet');
-
-        await clearDay(request, date);
     });
 
     test('une réponse arrivée après un autre mois ne s’affiche pas', async ({ page }) => {
@@ -652,7 +556,7 @@ test.describe('le mois', () => {
         await expect(page).toHaveURL('/2025-01-14');
         await expect(figures(page)).toBeVisible();
 
-        expect(described(writes)).toEqual([]);
+        expect(describedWrites(writes)).toEqual([]);
     });
 });
 
@@ -764,6 +668,7 @@ test.describe('le jour non travaillé', () => {
                 return getComputedStyle(probe).backgroundColor;
             }),
         );
+        await page.clock.resume();
         await expectAccessible(page);
 
         // À la souris : ni sélection, ni fenêtre, ni menu.
@@ -809,7 +714,7 @@ test.describe('le jour non travaillé', () => {
         await expect(openAnyway(page)).toBeVisible();
         await expect(blocks(page)).toHaveCount(0);
         expect(await savedDay(request, date)).toEqual([]);
-        expect(described(writes)).toEqual([]);
+        expect(describedWrites(writes)).toEqual([]);
     });
 
     test('« Saisir quand même » l’ouvre pour ce jour-là, sans rien écrire ; il se referme vide', async ({
@@ -831,7 +736,7 @@ test.describe('le jour non travaillé', () => {
             page.getByText('Double-cliquez sur un créneau, ou glissez un favori sur la grille.', { exact: true }),
         ).toBeVisible();
         await expect(figures(page)).toHaveText('Jour non travaillé');
-        expect(described(writes)).toEqual([]);
+        expect(describedWrites(writes)).toEqual([]);
 
         // Reparti et revenu sans saisie : il est de nouveau fermé.
         await page.getByRole('button', { name: 'Jour suivant' }).click();
@@ -887,7 +792,5 @@ test.describe('le jour non travaillé', () => {
         await expect(openAnyway(page)).toBeVisible();
         await expect(blocks(page)).toHaveCount(0);
         expect(await savedDay(request, date)).toEqual([]);
-
-        await clearDay(request, date);
     });
 });

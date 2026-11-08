@@ -2,14 +2,15 @@
 
 namespace App\Controller\Api;
 
+use App\Api\Input\EntryText;
 use App\Api\Input\TicketsInput;
+use App\Api\JsonPayload;
+use App\Jira\JiraFailure;
 use App\Jira\TicketBook;
+use App\Jira\TicketLookup;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Component\Serializer\Normalizer\AbstractNormalizer;
-use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 
 /**
  * Les tickets, tels que Jira les décrit : celui qu'on tape dans une fenêtre, et ceux
@@ -18,12 +19,6 @@ use Symfony\Component\Serializer\Normalizer\DenormalizerInterface;
 #[Route('/api/tickets', format: 'json')]
 final class TicketController extends AbstractController
 {
-    /** Un champ inconnu est refusé comme une valeur de travers, champ par champ. */
-    private const array STRICT = [
-        AbstractNormalizer::ALLOW_EXTRA_ATTRIBUTES => false,
-        DenormalizerInterface::COLLECT_EXTRA_ATTRIBUTES_ERRORS => true,
-    ];
-
     public function __construct(
         private readonly TicketBook $tickets,
     ) {
@@ -39,10 +34,15 @@ final class TicketController extends AbstractController
      * en POST, comme la relecture, et seule la page de DayTrack la demande
      * (SameOriginGuard).
      */
-    #[Route('/{key}/lookup', name: 'api_tickets_lookup', requirements: ['key' => '[A-Z][A-Z0-9_]+-[1-9][0-9]*'], methods: ['POST'])]
+    #[Route('/{key}/lookup', name: 'api_tickets_lookup', requirements: ['key' => EntryText::TICKET_SHAPE], methods: ['POST'])]
     public function lookup(string $key): JsonResponse
     {
-        $lookup = $this->tickets->lookup($key)->toArray();
+        // La forme est dans l'adresse ; la longueur, que l'adresse ne dit pas, ici : un
+        // identifiant refusé partout ailleurs n'est pas demandé à Jira, et se dit
+        // introuvable, comme Jira l'aurait dit.
+        $lookup = \strlen($key) > EntryText::TICKET_MAX
+            ? TicketLookup::failed(JiraFailure::NotFound, null)->toArray()
+            : $this->tickets->lookup($key)->toArray();
 
         return $this->json($lookup + ['refusal' => $this->tickets->refusal()?->value]);
     }
@@ -53,12 +53,13 @@ final class TicketController extends AbstractController
      * ne l'attend pas pour se montrer.
      */
     #[Route('/refresh', name: 'api_tickets_refresh', methods: ['POST'])]
-    public function refresh(#[MapRequestPayload(acceptFormat: 'json', serializationContext: self::STRICT)] TicketsInput $input): JsonResponse
+    public function refresh(#[JsonPayload] TicketsInput $input): JsonResponse
     {
         $refusal = $this->tickets->refresh($input->tickets);
 
         return $this->json([
-            'tickets' => $this->tickets->describe($input->tickets),
+            // Un objet même vide : le navigateur y cherche un ticket par son identifiant.
+            'tickets' => (object) $this->tickets->describe($input->tickets),
             'refusal' => $refusal?->value,
         ]);
     }

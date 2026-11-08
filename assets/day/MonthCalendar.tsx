@@ -273,7 +273,7 @@ function CalendarDay({
                       }
             }
         >
-            <span className={`flex h-row w-6 items-center justify-center rounded-pill text-sm tabular-nums ${number}`}>
+            <span className={`flex h-pill w-6 items-center justify-center rounded-pill text-sm tabular-nums ${number}`}>
                 {Number(date.slice(8))}
             </span>
             <span aria-hidden="true" className="day-mark" data-mark={mark ?? undefined} />

@@ -312,6 +312,24 @@ final class JiraClientTest extends TestCase
         self::assertGreaterThan(1, $most);
     }
 
+    public function testUnRalentissementDonneParSaDateSAttendSelonLHorlogeDeDayTrack(): void
+    {
+        $calls = 0;
+        $clock = new MockClock('2026-10-06 15:20:00 UTC');
+        $client = new JiraClient(new MockHttpClient(static function () use (&$calls): MockResponse {
+            ++$calls;
+
+            return 1 === $calls
+                ? new MockResponse('{}', ['http_code' => 429, 'response_headers' => ['Retry-After: Tue, 06 Oct 2026 15:20:07 GMT']])
+                : new MockResponse('{}', ['http_code' => 201]);
+        }), self::GATEWAY, $clock);
+
+        $outcomes = $client->write($this->credentials(), [WorklogWrite::add('SHOP-482', new \DateTimeImmutable('2026-10-06T09:00:00+02:00'), 900, null)]);
+
+        self::assertSame([WriteOutcome::Done], $outcomes);
+        self::assertSame('2026-10-06 15:20:07', $clock->now()->format('Y-m-d H:i:s'), 'Sept secondes, comptées depuis l\'heure de DayTrack.');
+    }
+
     private function connect(string $address, string $token): JiraConnected|JiraFailure
     {
         $parsed = JiraAddress::parse($address);

@@ -69,6 +69,11 @@ describe('copier', () => {
     it('ne copie rien sans sélection', () => {
         expect(copy(day, EMPTY_SELECTION)).toBeNull();
     });
+
+    it('ne copie pas une plage vide, même en morceaux', () => {
+        expect(copy(day, extendTo(selectQuarter(minutes('10:00')), minutes('10:15')))).toBeNull();
+        expect(copy(day, toggleQuarter(selectQuarter(minutes('08:00')), minutes('10:15')))).toBeNull();
+    });
 });
 
 describe('coller', () => {
@@ -183,6 +188,8 @@ describe('coller', () => {
         fc.assert(
             fc.property(gridArbitrary, fc.array(quarterArbitrary, { minLength: 1 }), (grid, quarters) => {
                 const selection = selectQuarters(quarters);
+                // Une plage vide ne se copie pas.
+                fc.pre(quarters.some((quarter) => grid.at(quarter) !== null));
                 const result = paste(copied(grid, selection), selection);
 
                 expect(result.kind).toBe('paste');
@@ -199,6 +206,7 @@ describe('coller', () => {
                 quarterArbitrary,
                 (grid, quarters, target) => {
                     const selection = selectQuarters(quarters);
+                    fc.pre(quarters.some((quarter) => grid.at(quarter) !== null));
                     const first = selection.quarters[0] ?? Quarter.FIRST;
                     const result = paste(copied(grid, selection), selectQuarter(target));
 

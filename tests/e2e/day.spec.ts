@@ -1,9 +1,8 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Locator, Page, Request } from '@playwright/test';
 
-import { addDays, clearDay, freezeTime, weekday, writeDay } from './day';
-import { glideTo } from './editing';
-import { expect, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
+import { addDays, daysFrom, freezeTime, weekday, writeDay } from './day';
+import { blocks, figures, glideTo, slot } from './editing';
+import { expect, expectAccessible, expectScreen, OPEN_TOOLTIP, test, THEMES, VIEWPORTS } from './fixtures';
 import { type Scenario, SCENARIOS } from './scenarios';
 
 /**
@@ -14,16 +13,15 @@ import { type Scenario, SCENARIOS } from './scenarios';
 
 const RECAP_KEY = 'daytrack.recap-open';
 
+/** Un quart d'heure de la grille, --h-row. */
+const ROW = 28;
+
 /**
  * Le jour d'un parcours : `index` jours après le lundi 3 mars 2025. Un samedi ou un
  * dimanche est fermé à la saisie, sans objectif : un parcours qui lit les chiffres d'une
  * journée ordinaire, ou qui y saisit, prend un jour de semaine.
  */
-function day(index: number): string {
-    const date = new Date(Date.UTC(2025, 2, 3 + index));
-
-    return `${String(date.getUTCFullYear())}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
-}
+const day = daysFrom('2025-03-03');
 
 async function rememberRecap(page: Page, open: boolean): Promise<void> {
     await page.addInitScript(
@@ -32,14 +30,6 @@ async function rememberRecap(page: Page, open: boolean): Promise<void> {
         },
         [RECAP_KEY, String(open)] as const,
     );
-}
-
-function figures(page: Page) {
-    return page.getByRole('group', { name: 'Chiffres du jour' });
-}
-
-function blocks(page: Page) {
-    return page.getByRole('list', { name: 'Saisies du jour' }).getByRole('listitem');
 }
 
 /**
@@ -161,14 +151,8 @@ test.describe('les états de l’écran', () => {
                         // L'infobulle ouverte d'une flèche se pose à la racine de la page, hors
                         // des repères, comme toute infobulle.
                         await page.clock.resume();
-                        const results = await new AxeBuilder({ page })
-                            .exclude('[data-radix-popper-content-wrapper]:has([role="tooltip"])')
-                            .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                            .analyze();
-                        expect(results.violations).toEqual([]);
+                        await expectAccessible(page, { exclude: [OPEN_TOOLTIP] });
                     }
-
-                    await clearDay(request, date);
                 });
             });
         });
@@ -231,7 +215,6 @@ test.describe('la ligne des chiffres', () => {
             if (today === undefined) {
                 await expect(page.locator('.now-line')).toHaveCount(0);
             }
-            await clearDay(request, date);
         });
     });
 });
@@ -276,7 +259,11 @@ test.describe('les infobulles', () => {
         await previous.hover();
         await expect(tooltip).toHaveText('Mercredi 13 août');
         // Vers la voisine : tout de suite, sans transition ; celle d'avant s'efface.
-        await glideTo(page, page.getByRole('button', { name: 'Jour suivant' }));
+        await glideTo(
+            page,
+            page.getByRole('button', { name: 'Jour suivant' }),
+            tooltip.filter({ hasText: 'Vendredi 15 août' }),
+        );
         const next = page.locator('[data-side][data-state="instant-open"]');
         await expect(next).toHaveText('Vendredi 15 août');
         await expect(next).toHaveCSS('animation-name', 'none');
@@ -369,8 +356,99 @@ test.describe('la navigation entre les jours', () => {
         await page.getByRole('button', { name: "Aujourd'hui", exact: true }).click();
         await expect(page).toHaveURL(`/${day(82)}`);
         await expect(page.locator('.now-line')).toHaveCount(1);
+    });
 
-        await clearDay(request, date);
+    test('Précédent et Suivant du navigateur repassent par les jours visités, l’adresse avec l’écran', async ({
+        page,
+    }) => {
+        // Du lundi 18 au mercredi 20 août 2025.
+        await freezeTime(page, day(170), '10:00');
+        await page.goto(`/${day(168)}`);
+        const title = page.getByRole('heading', { level: 1 });
+        await expect(figures(page)).toBeVisible();
+        for (const index of [169, 170]) {
+            await page.getByRole('button', { name: 'Jour suivant' }).click();
+            await expect(title).toHaveText(titleOf(index));
+        }
+
+        for (const index of [169, 168]) {
+            await page.goBack();
+            await expect(page).toHaveURL(`/${day(index)}`);
+            await expect(title).toHaveText(titleOf(index));
+            await expect(figures(page)).toBeVisible();
+        }
+        for (const index of [169, 170]) {
+            await page.goForward();
+            await expect(page).toHaveURL(`/${day(index)}`);
+            await expect(title).toHaveText(titleOf(index));
+            await expect(figures(page)).toBeVisible();
+        }
+        await expect(page.getByRole('button', { name: /, jour affiché/ })).toHaveAccessibleName(
+            /^20 août, .*jour affiché/,
+        );
+    });
+
+    test('une adresse tapée ouvre son jour, et une date impossible ramène à aujourd’hui', async ({ page }) => {
+        await freezeTime(page, day(170), '10:00');
+        await page.goto(`/${day(169)}`);
+        await expect(page.getByRole('heading', { level: 1 })).toHaveText(titleOf(169));
+
+        // Aujourd'hui est celui du serveur : l'heure de la page est arrêtée en 2025.
+        for (const typed of ['/2025-02-30', '/2025-8-19', '/2025-08-19x']) {
+            await page.goto(typed);
+            await expect(page).toHaveURL(/\/\d{4}-\d{2}-\d{2}$/);
+            const today = new URL(page.url()).pathname.slice(1);
+            expect(today).not.toBe(typed.slice(1));
+            await expect(page.locator('#app')).toHaveAttribute('data-date', today);
+            await expect(page.getByRole('group', { name: 'Chiffres du jour' })).toBeVisible();
+        }
+    });
+
+    test('une date impossible retrouvée par Précédent recharge la page, que le serveur ramène à aujourd’hui', async ({
+        page,
+    }) => {
+        await freezeTime(page, day(170), '10:00');
+        await page.goto(`/${day(168)}`);
+        await expect(figures(page)).toBeVisible();
+        await page.evaluate((shown) => {
+            history.pushState(null, '', '/2025-02-30');
+            history.pushState(null, '', `/${shown}`);
+        }, day(168));
+
+        const reloaded = page.waitForEvent('load');
+        await page.goBack();
+        await reloaded;
+        await expect(page).toHaveURL(/\/\d{4}-\d{2}-\d{2}$/);
+        expect(page.url()).not.toContain('2025-02-30');
+        await expect(page.locator('#app')).toHaveAttribute('data-date', new URL(page.url()).pathname.slice(1));
+        await expect(figures(page)).toBeVisible();
+    });
+
+    test('une ancre ajoutée à l’adresse ne change pas de jour, et laisse la journée affichée', async ({ page }) => {
+        // L'heure tourne : la page attend un instant après l'ancre.
+        await page.goto(`/${day(169)}`);
+        await expect(figures(page)).toBeVisible();
+
+        await page.evaluate(
+            () =>
+                new Promise<void>((resolve) => {
+                    window.addEventListener(
+                        'popstate',
+                        () => {
+                            window.setTimeout(resolve, 100);
+                        },
+                        { once: true },
+                    );
+                    window.location.hash = 'ailleurs';
+                }),
+        );
+
+        await expect(page).toHaveURL(`/${day(169)}#ailleurs`);
+        await expect(page.getByRole('heading', { level: 1 })).toHaveText(titleOf(169));
+        await expect(figures(page)).toBeVisible();
+        await page.getByRole('button', { name: 'Jour suivant' }).click();
+        await expect(page).toHaveURL(`/${day(170)}`);
+        await expect(figures(page)).toBeVisible();
     });
 
     test('au clavier aussi', async ({ page }) => {
@@ -451,9 +529,6 @@ test.describe('la navigation entre les jours', () => {
 
         await expect(page.getByRole('heading', { level: 1 })).toHaveText(titleOf(101));
         await expect(blocks(page)).toHaveText([/OPS-12.*Affichée/]);
-
-        await clearDay(request, slow);
-        await clearDay(request, shown);
     });
 
     test('revenir sur un jour avant que l’autre soit lu ne remontre pas l’ancienne journée', async ({
@@ -493,8 +568,6 @@ test.describe('la navigation entre les jours', () => {
         release();
         await expect(grid).toHaveAttribute('aria-busy', 'false');
         await expect(blocks(page)).toHaveText([/SHOP-482.*Premier/]);
-
-        await clearDay(request, first);
     });
 
     test('une journée qui ne se lit pas le dit, sans rien afficher d’autre', async ({ page }) => {
@@ -549,7 +622,7 @@ test.describe('les blocs', () => {
         const wrapped = comment('ESSAI-1');
         const box = await wrapped.boundingBox();
         const id = await block('ESSAI-1').getByText('ESSAI-1', { exact: true }).boundingBox();
-        expect(box?.height).toBe(3 * 24);
+        expect(box?.height).toBe(3 * ROW);
         expect((box?.x ?? 0) >= (id?.x ?? 0) + (id?.width ?? 0)).toBe(true);
         await expect(wrapped).toHaveCSS('-webkit-line-clamp', '3');
         expect(await clipped(wrapped)).toBe(true);
@@ -568,7 +641,7 @@ test.describe('les blocs', () => {
         const titled = comment('SHOP-482');
         const titleBox = await title.boundingBox();
         const titledBox = await titled.boundingBox();
-        expect(titledBox?.height).toBe(2 * 24);
+        expect(titledBox?.height).toBe(2 * ROW);
         expect((titledBox?.y ?? 0) >= (titleBox?.y ?? 0) + (titleBox?.height ?? 0)).toBe(true);
         expect(titledBox?.x).toBe(titleBox?.x);
         await expect(titled).toHaveCSS('-webkit-line-clamp', '2');
@@ -578,7 +651,30 @@ test.describe('les blocs', () => {
         await expect(after).toHaveCSS('text-overflow', 'ellipsis');
         expect(await clipped(after)).toBe(true);
         await expect(block('SHOP-519').getByText(/^Le total du panier/)).toBeVisible();
-        await clearDay(request, date);
+
+        // Chaque ligne est centrée sur son quart d'heure, au pixel près : sans titre, le
+        // commentaire dès le premier ; avec, le titre, puis le commentaire.
+        const middleOf = async (time: string) => {
+            const quarter = await slot(page, time).boundingBox();
+
+            return (quarter?.y ?? 0) + (quarter?.height ?? 0) / 2;
+        };
+        const lineMiddles = (locator: Locator) =>
+            locator.evaluate((node) => {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+
+                return [...range.getClientRects()].map((rect) => rect.y + rect.height / 2);
+            });
+        const expectCentered = async (locator: Locator, times: readonly string[]) => {
+            const middles = await lineMiddles(locator);
+            for (const [line, time] of times.entries()) {
+                expect(Math.abs((middles[line] ?? Infinity) - (await middleOf(time)))).toBeLessThanOrEqual(1);
+            }
+        };
+        await expectCentered(wrapped, ['09:00', '09:15', '09:30']);
+        await expectCentered(title, ['11:00']);
+        await expectCentered(titled, ['11:15', '11:30']);
     });
 });
 
@@ -601,7 +697,7 @@ test.describe('la journée vide', () => {
         await page.goto(`/${day(151)}`);
         await expect(hint(page)).toBeVisible();
 
-        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '08:00')) + 24, 0);
+        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '08:00')) + ROW, 0);
     });
 
     test('en fin de journée, il est en haut de ce qu’on voit, pas sous la ligne de l’heure', async ({ page }) => {
@@ -609,9 +705,9 @@ test.describe('la journée vide', () => {
         await page.goto(`/${day(150)}`);
         await expect(hint(page)).toBeVisible();
 
-        // La grille s'ouvre sur 11:00 (une heure au moins après « maintenant ») : le
-        // message prend 11:15, loin au-dessus de la ligne de 18:20.
-        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '12:00')) - 72, 0);
+        // La grille s'ouvre sur 12:00 (une heure au moins après « maintenant ») : le
+        // message prend 12:15, loin au-dessus de la ligne de 18:20.
+        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '13:00')) - 3 * ROW, 0);
     });
 
     test('si la ligne de l’heure passe dans le message, il descend au quart d’heure qui la suit', async ({ page }) => {
@@ -620,10 +716,10 @@ test.describe('la journée vide', () => {
         await expect(hint(page)).toBeVisible();
 
         // Vue ouverte sur 07:00 : 07:15 sans la ligne, 07:30 avec elle.
-        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '08:00')) - 48, 0);
+        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '08:00')) - 2 * ROW, 0);
 
         await page.clock.runFor(15 * 60_000);
-        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '08:00')) - 24, 0);
+        expect(await hintTop(page)).toBeCloseTo((await lineOf(page, '08:00')) - ROW, 0);
     });
 
     test('il défile avec la grille, et se replace en changeant de jour', async ({ page }) => {
@@ -633,15 +729,16 @@ test.describe('la journée vide', () => {
         const scroller = page.getByRole('region', { name: 'Grille de la journée' });
 
         await scroller.evaluate((element) => {
-            element.scrollTop = 300;
+            element.scrollTop = 348;
         });
         // Toujours à 08:15 dans la grille : sa place ne suit pas le défilement.
-        await expect.poll(async () => (await hintTop(page)) - (await lineOf(page, '08:00'))).toBeCloseTo(24, 0);
+        await expect.poll(async () => (await hintTop(page)) - (await lineOf(page, '08:00'))).toBeCloseTo(ROW, 0);
 
         await page.getByRole('button', { name: 'Jour suivant' }).click();
         await expect(page.getByRole('heading', { level: 1 })).toHaveText(titleOf(156));
-        // 300 px de défilement : la vue commence pile à 10:00, le message prend 10:15.
-        await expect.poll(async () => (await hintTop(page)) - (await lineOf(page, '10:00'))).toBeCloseTo(24, 0);
+        // 348 px de défilement, la marge et trois heures : la vue commence pile à 10:00, le
+        // message prend 10:15.
+        await expect.poll(async () => (await hintTop(page)) - (await lineOf(page, '10:00'))).toBeCloseTo(ROW, 0);
     });
 });
 
@@ -661,9 +758,7 @@ test.describe('l’heure qui tourne', () => {
 
         await expect(figures(page)).toContainText('Fin prévue à 18:00');
         const after = await line.boundingBox();
-        expect((after?.y ?? 0) - (before?.y ?? 0)).toBeCloseTo(24 / 15, 1);
-
-        await clearDay(request, date);
+        expect((after?.y ?? 0) - (before?.y ?? 0)).toBeCloseTo(ROW / 15, 1);
     });
 
     test('à minuit, la journée devient un jour passé', async ({ page }) => {
@@ -696,8 +791,6 @@ test.describe('le récapitulatif', () => {
             /^OPS-12.*0h45.*Daily.*0h15.*Poker planning.*0h30$/,
             /^SHOP-519.*0h30.*Reproduction.*0h30$/,
         ]);
-
-        await clearDay(request, date);
     });
 
     test('ouvert à partir de 1440 px, fermé en dessous, puis retenu d’un onglet à l’autre', async ({ page }) => {
@@ -777,8 +870,6 @@ test.describe('le récapitulatif', () => {
         await page.setViewportSize({ width: 1024, height: 720 });
         await page.getByRole('button', { name: 'Masquer le récapitulatif' }).click();
         await expect(rest).toBeHidden();
-
-        await clearDay(request, day(134));
     });
 
     test('sous 1280 px, il s’ouvre par-dessus la grille, et la croix comme Échap le ferment', async ({ page }) => {
@@ -821,8 +912,8 @@ test.describe('la position de la grille', () => {
         await page.goto(`/${day(140)}`);
         await expect(figures(page)).toBeVisible();
 
-        // 08:00, quatre heures de 24 px sous 07:00.
-        expect(await top(page)).toBe(96);
+        // 09:00, huit quarts d'heure sous 07:00.
+        expect(await top(page)).toBe(8 * ROW);
     });
 
     test('un rechargement plus tard dans la journée recalcule la position, tant qu’on n’a rien fait défiler', async ({
@@ -832,15 +923,15 @@ test.describe('la position de la grille', () => {
         await freezeTime(page, day(144), '15:20');
         await page.goto(`/${day(144)}`);
         await expect(figures(page)).toBeVisible();
-        expect(await top(page)).toBe(96);
+        expect(await top(page)).toBe(8 * ROW);
         await page.clock.runFor(100);
 
         await page.clock.pauseAt(new Date((await page.evaluate(() => Date.now())) + 3 * 3_600_000));
         await page.reload();
         await expect(figures(page)).toBeVisible();
 
-        // 18:20 : la grille commence à 11:00.
-        expect(await top(page)).toBe(384);
+        // 18:20 : la grille commence à 12:00.
+        expect(await top(page)).toBe(20 * ROW);
     });
 
     test('en fin d’après-midi, la grille descend', async ({ page }) => {
@@ -849,8 +940,8 @@ test.describe('la position de la grille', () => {
         await page.goto(`/${day(141)}`);
         await expect(figures(page)).toBeVisible();
 
-        // 11:00.
-        expect(await top(page)).toBe(384);
+        // 12:00.
+        expect(await top(page)).toBe(20 * ROW);
     });
 
     test('un autre jour s’ouvre sur 08:00, et changer de jour garde la position', async ({ page }) => {
@@ -858,15 +949,15 @@ test.describe('la position de la grille', () => {
         await freezeTime(page, day(143), '17:50');
         await page.goto(`/${day(142)}`);
         await expect(figures(page)).toBeVisible();
-        expect(await top(page)).toBe(96);
+        expect(await top(page)).toBe(4 * ROW);
 
         await page.getByRole('list', { name: 'Saisies du jour' }).evaluate((list) => {
             const scroller = list.closest('.overflow-auto');
             if (scroller !== null) {
-                scroller.scrollTop = 300;
+                scroller.scrollTop = 350;
             }
         });
-        // 300 px sous 07:00 : 10:07:30, retenu par l'onglet à l'image suivante.
+        // 350 px sous 07:00 : 10:07:30, retenu par l'onglet à l'image suivante.
         await expect
             .poll(async () => {
                 await page.clock.runFor(20);
@@ -876,11 +967,11 @@ test.describe('la position de la grille', () => {
             .toBe('607.5');
         await page.getByRole('button', { name: 'Jour suivant' }).click();
         await expect(page.getByRole('heading', { level: 1 })).toHaveText(titleOf(143));
-        expect(await top(page)).toBe(300);
+        expect(await top(page)).toBe(350);
 
         await page.reload();
         await expect(figures(page)).toBeVisible();
-        expect(await top(page)).toBe(300);
+        expect(await top(page)).toBe(350);
     });
 });
 

@@ -8,7 +8,7 @@ import { useTickets } from '../jira/TicketsContext';
 import { duration } from './format';
 import { RecapChip } from './TicketChip';
 import { CloseIcon, ErrorIcon, PanelFilledIcon, UnverifiedIcon } from '../components/icons';
-import type { TicketFate } from './sendView';
+import { fateLabel, fateMark, type TicketFate } from './sendView';
 
 /**
  * Le récapitulatif : un ticket par carte, du plus long au plus court, et une ligne par
@@ -116,6 +116,7 @@ function RecapCard({ ticket, fate }: { ticket: RecapTicket; fate: TicketFate | n
     const info = useTickets().get(ticket.ticket);
     const type = info?.type ?? null;
     const title = info?.title ?? null;
+    const mark = fate === null ? null : fateMark(fate);
 
     return (
         <li data-color={tintOf(info)} className="flex flex-col gap-1 border-b border-line-soft px-5 py-4">
@@ -130,17 +131,21 @@ function RecapCard({ ticket, fate }: { ticket: RecapTicket; fate: TicketFate | n
                 {fate !== null && (
                     // Comme partout, une erreur passe son texte en rouge, un succès reste discret.
                     <span
-                        className={`recap-send inline-flex flex-none items-center gap-2 text-xs ${fate === 'absent' || fate === 'partial' ? 'font-medium text-inc' : 'text-ink-2'}`}
+                        className={`recap-send inline-flex flex-none items-center gap-2 text-xs ${mark === 'error' ? 'font-medium text-inc' : 'text-ink-2'}`}
                     >
                         <span className="sr-only">, </span>
-                        {fate === 'sent' ? (
+                        {mark === 'ok' ? (
                             <span aria-hidden="true" className="day-mark" data-mark="sent" />
                         ) : (
                             <span className="recap-error">
-                                {fate === 'unverified' ? <UnverifiedIcon /> : <ErrorIcon />}
+                                {mark === 'unverified' ? (
+                                    <UnverifiedIcon />
+                                ) : (
+                                    <ErrorIcon tone={mark === 'warning' ? 'warning' : 'error'} />
+                                )}
                             </span>
                         )}
-                        {FATE_LABELS[fate]}
+                        {fateLabel(fate, false)}
                     </span>
                 )}
                 <span className="ml-auto flex-none text-lg font-bold tabular-nums">
@@ -161,10 +166,3 @@ function RecapCard({ ticket, fate }: { ticket: RecapTicket; fate: TicketFate | n
         </li>
     );
 }
-
-const FATE_LABELS: Record<TicketFate, string> = {
-    sent: 'Envoyé',
-    absent: 'Non envoyé',
-    partial: 'Envoyé en partie',
-    unverified: 'Non vérifié',
-};

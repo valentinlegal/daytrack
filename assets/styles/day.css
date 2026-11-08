@@ -317,8 +317,9 @@
 }
 
 /* La liste d'une fenêtre d'envoi, en tableau : ses lignes
-   partagent les colonnes de la liste — la marque d'envoi quand elle en a, la pastille à la
-   largeur de la plus longue, le titre, la durée —, et les titres s'alignent. Les colonnes
+   partagent les colonnes de la liste — la marque d'envoi quand elle en a, les pastilles à la
+   largeur de la plus longue, chacune gardant la sienne, le titre, la durée —, et les titres
+   s'alignent. Les colonnes
    de bord prennent la largeur de leur contenu : la marge des lignes ne les rogne pas. */
 .send-list {
     display: grid;
@@ -343,8 +344,13 @@
     grid-column: 1 / -2;
 }
 
-/* Pourquoi un ticket n'est pas arrivé : sous sa pastille. */
+/* Ce qui se dit sous un ticket — pourquoi il n'est pas arrivé, ce que Jira en garde — :
+   sous sa pastille, qu'une marque la précède ou non. */
 .send-why {
+    grid-column: 1 / -1;
+}
+
+.send-list[data-marks] .send-why {
     grid-column: 2 / -1;
 }
 

@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import type { SendOutcome } from '../../../assets/grid/daySession';
 import {
+    afterSend,
+    detailHead,
     failureMessage,
     failureReason,
+    fateLabel,
+    fateMark,
     fateOf,
     partialSummary,
     recapFates,
@@ -10,8 +15,11 @@ import {
     resultTitle,
     sendButton,
     sendRows,
+    SEND_UNANSWERED,
     sendSubtitle,
+    STALE_SEND,
     ticketLine,
+    VANISHED_LINE,
 } from '../../../assets/day/sendView';
 import { NOTHING_SENT, readSend, type SendStatus } from '../../../assets/grid/send';
 
@@ -205,7 +213,7 @@ describe('les fenêtres du bouton Jira', () => {
         expect(line('closed', 150)).toBe('Jira refuse les heures de ce ticket fermé.');
         expect(ticketLine({ ticket: 'B-1', minutes: 60, failure: 'closed' }, 'result')).toEqual({
             text: 'Jira refuse les heures de ce ticket fermé.',
-            soft: false,
+            tone: 'error',
         });
         expect(ticketLine({ ticket: 'B-1', minutes: 60, failure: 'mismatch' }, 'result')?.text).toBe(
             "Jira n'a pas les mêmes heures pour ce ticket.",
@@ -217,15 +225,15 @@ describe('les fenêtres du bouton Jira', () => {
     it('dit ce qu’il advient d’un ticket retiré, sans le dire en rouge quand tout va bien', () => {
         const row = { ticket: 'OPS-7', minutes: 0, removed: true };
 
-        expect(ticketLine(row, 'confirm')).toEqual({ text: 'Ses heures seront retirées de Jira.', soft: true });
-        expect(ticketLine(row, 'detail')).toEqual({ text: 'Retiré de la journée et de Jira.', soft: true });
+        expect(ticketLine(row, 'confirm')).toEqual({ text: 'Ses heures seront retirées de Jira.', tone: 'soft' });
+        expect(ticketLine(row, 'detail')).toEqual({ text: 'Retiré de la journée et de Jira.', tone: 'soft' });
         expect(ticketLine({ ...row, failure: null }, 'result')).toEqual({
             text: 'Retiré de la journée et de Jira.',
-            soft: true,
+            tone: 'soft',
         });
         expect(ticketLine({ ...row, failure: 'closed', inJira: 45 }, 'result')).toEqual({
             text: 'Retiré de la journée, Jira en a encore 0h45. Jira refuse les heures de ce ticket fermé.',
-            soft: false,
+            tone: 'error',
         });
         expect(ticketLine({ ticket: 'OPS-8', minutes: 30 }, 'confirm')).toBeNull();
     });
@@ -392,6 +400,118 @@ describe('les fenêtres du bouton Jira', () => {
     });
 });
 
+describe('un ticket retiré que Jira ne trouve plus', () => {
+    const sent = status({ state: 'sent', sentAt: SENT_AT, removed: ['OPS-7', 'DISPARU-1'], vanished: ['DISPARU-1'] });
+
+    it('vient en dernier, à 0h00, avec sa marque d’avertissement', () => {
+        const rows = sendRows(TICKETS, sent, 'detail');
+
+        expect(rows.slice(2)).toEqual([
+            { ticket: 'OPS-7', minutes: 0, removed: true },
+            { ticket: 'DISPARU-1', minutes: 0, removed: true, vanished: true },
+        ]);
+        expect(fateOf(null, undefined, true)).toBe('vanished');
+        expect(fateMark('vanished')).toBe('warning');
+        expect(fateLabel('vanished', true)).toBe('Introuvable dans Jira');
+    });
+
+    it('dit sous lui quoi faire, en noir, dans le détail comme dans le résultat', () => {
+        const row = { ticket: 'DISPARU-1', minutes: 0, removed: true, vanished: true };
+        const line = { text: VANISHED_LINE, tone: 'warning' };
+
+        expect(VANISHED_LINE).toBe(
+            "Jira ne trouve plus ce ticket. S'il a encore des heures de ce jour, retirez-les dans Jira.",
+        );
+        expect(ticketLine(row, 'detail')).toEqual(line);
+        expect(ticketLine({ ...row, failure: null }, 'result')).toEqual(line);
+    });
+
+    it('ne promet pas à la confirmation de retirer de Jira des heures qu’il ne trouve plus', () => {
+        const modified = status({ state: 'modified', removed: ['OPS-7', 'DISPARU-1'], vanished: ['DISPARU-1'] });
+        const [retired, gone] = sendRows(TICKETS, modified, 'confirm').slice(2);
+
+        expect(retired && ticketLine(retired, 'confirm')?.text).toBe('Ses heures seront retirées de Jira.');
+        expect(gone && ticketLine(gone, 'confirm')).toEqual({ text: VANISHED_LINE, tone: 'warning' });
+    });
+
+    it('ne compte pas dans la tête d’un envoi partiel, qui ne parle que des tickets du jour', () => {
+        const partial = status({
+            state: 'partial',
+            outcomes: new Map([
+                ['SHOP-482', null],
+                ['OPS-12', 'closed'],
+                ['DISPARU-1', null],
+            ]),
+            removed: ['DISPARU-1'],
+            vanished: ['DISPARU-1'],
+        });
+
+        expect(resultHead(sendRows(TICKETS, partial, 'result'), partial, false).text).toBe(
+            "1 ticket sur 2 est dans Jira. OPS-12 n'a pas été envoyé.",
+        );
+    });
+
+    it('le détail d’une journée vidée ne dit pas qu’elle a des heures dans Jira', () => {
+        const emptied = status({ state: 'nothing', sentAt: SENT_AT, removed: ['DISPARU-1'], vanished: ['DISPARU-1'] });
+
+        expect(detailHead(sendRows([], emptied, 'detail'))).toBeNull();
+        expect(detailHead(sendRows(TICKETS, sent, 'detail'))).toBe('Ces heures sont dans Jira pour ce jour.');
+    });
+});
+
+describe('ce qui suit un envoi', () => {
+    const done: SendOutcome = { kind: 'done' };
+    const none = { window: null, confetti: false, notice: null, tokenRefusal: null };
+
+    it('fait partir les confettis quand tout est arrivé', () => {
+        expect(afterSend(done, status({ state: 'sent', sentAt: SENT_AT }))).toEqual({ ...none, confetti: true });
+        expect(afterSend(done, status({ state: 'nothing' }))).toEqual(none);
+    });
+
+    it('ouvre le détail, sans confettis, quand Jira ne trouve plus un ticket retiré', () => {
+        expect(afterSend(done, status({ state: 'sent', sentAt: SENT_AT, vanished: ['DISPARU-1'] }))).toEqual({
+            ...none,
+            window: 'detail',
+        });
+        // Une journée vidée dont Jira ne trouve plus le ticket reste envoyée : son détail s'ouvre de même.
+        expect(
+            afterSend(
+                done,
+                status({ state: 'sent', sentAt: SENT_AT, removed: ['DISPARU-1'], vanished: ['DISPARU-1'] }),
+            ),
+        ).toEqual({
+            ...none,
+            window: 'detail',
+        });
+    });
+
+    it('ouvre le résultat d’un envoi qui n’a pas tout envoyé, et dit au bandeau un jeton refusé', () => {
+        expect(afterSend(done, status({ state: 'partial', vanished: ['DISPARU-1'] }))).toEqual({
+            ...none,
+            window: 'result',
+        });
+        expect(afterSend(done, status({ state: 'failed', failure: 'refused' }))).toEqual({
+            ...none,
+            window: 'result',
+            tokenRefusal: 'refused',
+        });
+        expect(afterSend(done, status({ state: 'unverified', failure: 'missing_scope' })).tokenRefusal).toBe(
+            'missing_scope',
+        );
+    });
+
+    it('dit en bas de la grille une journée changée ailleurs, ou un serveur muet', () => {
+        expect(afterSend({ kind: 'stale' }, status({ state: 'unsent' }))).toEqual({ ...none, notice: STALE_SEND });
+        expect(afterSend({ kind: 'failed' }, status({ state: 'unsent' }))).toEqual({
+            ...none,
+            notice: SEND_UNANSWERED,
+        });
+        // Un autre onglet envoie : le résultat viendra avec la journée relue.
+        expect(afterSend({ kind: 'failed' }, status({ state: 'sending' }))).toEqual(none);
+        expect(afterSend({ kind: 'sending' }, status({ state: 'sending' }))).toEqual(none);
+    });
+});
+
 describe('readSend', () => {
     it('lit l’état d’envoi d’une journée, un objet vide rendu en liste compris', () => {
         expect(
@@ -401,8 +521,9 @@ describe('readSend', () => {
                 attemptedAt: SENT_AT,
                 failure: null,
                 outcomes: { 'FERME-1': 'closed', 'OPS-7': null },
-                removed: [],
+                removed: ['DISPARU-1'],
                 inJira: { 'FERME-1': 105 },
+                vanished: ['DISPARU-1'],
             }),
         ).toEqual({
             state: 'partial',
@@ -413,10 +534,14 @@ describe('readSend', () => {
                 ['FERME-1', 'closed'],
                 ['OPS-7', null],
             ]),
-            removed: [],
+            removed: ['DISPARU-1'],
             inJira: new Map([['FERME-1', 105]]),
+            vanished: ['DISPARU-1'],
         });
-        expect(readSend({ ...NOTHING_SENT, outcomes: [], inJira: [] }).outcomes.size).toBe(0);
+        expect(readSend({ ...NOTHING_SENT, outcomes: {}, inJira: {} }).outcomes.size).toBe(0);
+        // Le serveur rend un objet même vide : un tableau n'en est pas un.
+        expect(() => readSend({ ...NOTHING_SENT, outcomes: [] })).toThrow(TypeError);
+        expect(() => readSend({ ...NOTHING_SENT, inJira: [] })).toThrow(TypeError);
     });
 
     it('refuse un état de travers plutôt que de l’afficher', () => {
@@ -428,6 +553,7 @@ describe('readSend', () => {
             outcomes: {},
             removed: [],
             inJira: {},
+            vanished: [],
         };
 
         for (const broken of [
@@ -436,6 +562,8 @@ describe('readSend', () => {
             { ...ok, failure: 'panne' },
             { ...ok, outcomes: { 'SHOP-482': 'perdu' } },
             { ...ok, removed: [3] },
+            { ...ok, vanished: [3] },
+            { ...ok, vanished: undefined },
             { ...ok, inJira: { 'SHOP-482': '1h45' } },
             null,
         ]) {

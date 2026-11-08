@@ -3,7 +3,8 @@
 # Le démarrage de l'image publiée : la base à jour avant de servir la moindre page.
 #
 #  1. Il reconnaît l'ancien docker-compose.yml de la v1, que la mise à jour ne peut pas
-#     remplacer : il est hors de l'image. L'application le dira, tant qu'il est là.
+#     remplacer : il est hors de l'image. L'application le dira, tant qu'il est là : tel
+#     que fourni (« default »), modifié (« custom ») ou derrière un proxy (« proxy »).
 #  2. Il joue les migrations, puis reprend les données de la v1 s'il y en a. Une erreur
 #     arrête tout : mieux vaut ne rien servir qu'une application vide, qui ferait croire
 #     les journées perdues.
@@ -50,11 +51,16 @@ case "$server_name" in
         ;;
 esac
 
-# Derrière un proxy, le fichier de la v1 ne pouvait pas dire de le croire : cette variable
-# n'existait pas. Sans elle, une écriture jugée sur son origine — sans Sec-Fetch-Site — se
-# refuserait : DayTrack se croirait en HTTP, et le navigateur en HTTPS.
-if [ -n "$old_compose" ] && [ "${SERVER_NAME:-}" = ':80' ] && [ -z "${TRUSTED_PROXIES:-}" ]; then
-    export TRUSTED_PROXIES='private_ranges'
+# « :80 » : la v1 était servie derrière un proxy. Le remplacer par le nouveau fichier lui
+# ferait perdre son adresse : on garde ce fichier, et on y change quelques lignes.
+if [ -n "$old_compose" ] && [ "${SERVER_NAME:-}" = ':80' ]; then
+    old_compose='proxy'
+    # Le fichier de la v1 ne pouvait pas dire de croire ce proxy : la variable n'existait
+    # pas. Sans elle, une écriture jugée sur son origine — sans Sec-Fetch-Site — se
+    # refuserait : DayTrack se croirait en HTTP, et le navigateur en HTTPS.
+    if [ -z "${TRUSTED_PROXIES:-}" ]; then
+        export TRUSTED_PROXIES='private_ranges'
+    fi
 fi
 
 php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --all-or-nothing

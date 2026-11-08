@@ -5,7 +5,7 @@ namespace App\Tests\Favorite;
 use App\Favorite\DuplicateFavorite;
 use App\Favorite\FavoriteWriter;
 use App\Repository\FavoriteRepository;
-use Doctrine\DBAL\Connection;
+use App\Tests\Support\PurgesDatabase;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\Uid\Uuid;
 
@@ -16,12 +16,14 @@ use Symfony\Component\Uid\Uuid;
  */
 final class FavoriteWriterTest extends KernelTestCase
 {
+    use PurgesDatabase;
+
     private FavoriteWriter $writer;
 
     protected function setUp(): void
     {
         self::bootKernel();
-        self::getContainer()->get(Connection::class)->executeStatement('DELETE FROM favorite');
+        self::purgeDatabase();
         $this->writer = self::getContainer()->get(FavoriteWriter::class);
     }
 

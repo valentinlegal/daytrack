@@ -33,8 +33,12 @@ final readonly class JiraClient
     /** Ce que la passerelle d'Atlassian répond quand le jeton passe sans le périmètre de l'appel. */
     private const string SCOPE_MISMATCH = 'scope does not match';
 
+    private const string READ_WORK = 'read:jira-work';
+    private const string WRITE_WORK = 'write:jira-work';
+    private const string READ_USER = 'read:jira-user';
+
     /** Les périmètres classiques dont DayTrack a besoin, dans l'ordre où l'aide les fait cocher. */
-    public const array SCOPES = ['read:jira-work', 'write:jira-work', 'read:jira-user'];
+    public const array SCOPES = [self::READ_WORK, self::WRITE_WORK, self::READ_USER];
 
     /** Les écritures d'heures qui partent ensemble, au plus : Jira n'a pas d'envoi groupé. */
     public const int PARALLEL_WRITES = 4;
@@ -272,7 +276,7 @@ final readonly class JiraClient
                 $attempts[$index] = ($attempts[$index] ?? 0) + 1;
 
                 if (WriteOutcome::Throttled === $outcome && $attempts[$index] < self::THROTTLE_ATTEMPTS) {
-                    $notBefore[$index] = $this->now() + self::retryAfter($response);
+                    $notBefore[$index] = $this->now() + $this->retryAfter($response);
                     $queue[] = $index;
                 } else {
                     $outcomes[$index] = $outcome;
@@ -331,9 +335,9 @@ final readonly class JiraClient
     public function missingScopes(JiraCredentials $credentials): array
     {
         $probes = [
-            'read:jira-work' => $this->readProbe($credentials),
-            'write:jira-work' => $this->logWorkProbe($credentials),
-            'read:jira-user' => $this->get($credentials, 'myself'),
+            self::READ_WORK => $this->readProbe($credentials),
+            self::WRITE_WORK => $this->logWorkProbe($credentials),
+            self::READ_USER => $this->get($credentials, 'myself'),
         ];
 
         return array_keys(array_filter($probes, static fn (?ResponseInterface $response): bool => self::lacksScope($response)));
@@ -416,7 +420,7 @@ final readonly class JiraClient
     }
 
     /** L'attente que Jira demande avant de repartir, en secondes, bornée. */
-    private static function retryAfter(ResponseInterface $response): float
+    private function retryAfter(ResponseInterface $response): float
     {
         try {
             $value = $response->getHeaders(false)['retry-after'][0] ?? null;
@@ -430,7 +434,7 @@ final readonly class JiraClient
 
         $date = null === $value ? false : strtotime($value);
 
-        return false === $date ? 1.0 : min((float) self::THROTTLE_MAX_WAIT, max(0.0, (float) ($date - time())));
+        return false === $date ? 1.0 : min((float) self::THROTTLE_MAX_WAIT, max(0.0, $date - $this->now()));
     }
 
     private function now(): float

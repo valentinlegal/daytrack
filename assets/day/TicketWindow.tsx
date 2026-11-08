@@ -1,29 +1,19 @@
-import {
-    type KeyboardEvent,
-    type MouseEvent,
-    type RefObject,
-    useEffect,
-    useId,
-    useMemo,
-    useRef,
-    useState,
-} from 'react';
+import { type MouseEvent, type RefObject, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { Button } from '../components/Button';
-import { Field } from '../components/Field';
-import { CupIcon, ErrorIcon, TrashIcon } from '../components/icons';
+import { GeneralError } from '../components/Field';
+import { CupIcon, TrashIcon } from '../components/icons';
 import { type Measurable, Popover } from '../components/Popover';
 import { TextArea } from '../components/TextArea';
-import { Tooltip } from '../components/Tooltip';
 import { tokenPixels } from '../components/tokenPixels';
-import { draftOf, quartersOf, saveDisabled, typedComment, typedTicket } from '../grid/entry';
-import { normalizeTicket } from '../grid/grid';
-import { lookupWarning, TICKET_NOT_FOUND } from '../jira/lookupMessages';
+import { Tooltip } from '../components/Tooltip';
+import { draftOf, quartersOf, saveDisabled, typedComment } from '../grid/entry';
 import { describedTicket, tintOf } from '../jira/ticketInfo';
-import { type Lookup, type TicketCheck, useTicketLookup } from '../jira/useTicketLookup';
+import type { Lookup, TicketCheck } from '../jira/useTicketLookup';
 import { dayLabel } from './calendar';
 import { windowSubtitle } from './messages';
 import { rewrite } from './rewrite';
+import { saveOnEnter, TicketField, useTicketField } from './TicketField';
 import type { PlacedWindow, TicketWindow as TicketWindowState } from './useGridEditing';
 
 /**
@@ -68,8 +58,8 @@ export function TicketWindow({
     /** Où dire ce que Jira sait du ticket tapé : un autre geste qui quitte la fenêtre le lit. */
     checkRef: RefObject<TicketCheck>;
     onDraft: (draft: TicketWindowState['draft']) => void;
-    /** `known`, quand Jira cherche encore le ticket tapé : demande sa réponse, que l'enregistrement attend. */
-    onSave: (known?: () => Promise<boolean> | undefined) => void;
+    /** Ce que Jira sait du ticket tapé : l'enregistrement attend sa réponse quand il le cherche encore. */
+    onSave: (check: TicketCheck) => void;
     onCancel: () => void;
     onPause: () => void;
     onDelete: () => void;
@@ -81,17 +71,15 @@ export function TicketWindow({
     const commentRef = useRef<HTMLTextAreaElement>(null);
     const noteId = useId();
     const previewId = useId();
-    // Ce que Jira dit du ticket tapé ; « Enregistrer » pendant la recherche l'attend.
-    const { lookup, check } = useTicketLookup(shown?.draft.ticket ?? '');
+    // Ce que Jira dit du ticket tapé ; « Enregistrer » pendant la recherche l'attend. Un bloc
+    // qui garde son ticket ne l'attend pas (useTicketField).
+    const field = useTicketField(
+        shown?.draft.ticket ?? '',
+        shown === null ? '' : draftOf(shown.target).ticket,
+        checkRef,
+    );
+    const { lookup, check } = field;
     const unknownTicket = check.refused;
-    // Un bloc qui garde son ticket n'attend pas Jira, qui ne peut pas le vérifier : changer
-    // son commentaire n'a pas à dépendre de lui. Seule une recherche en cours s'attend.
-    const unchanged =
-        shown !== null && normalizeTicket(shown.draft.ticket) === normalizeTicket(draftOf(shown.target).ticket);
-    const known = () => (unchanged && lookup.status !== 'searching' ? undefined : check.known());
-    useEffect(() => {
-        checkRef.current = { refused: unknownTicket, known };
-    });
     // Son créneau sorti de la vue, elle s'est arrêtée au bord : sa flèche désignerait un autre.
     const [stopped, setStopped] = useState(false);
 
@@ -160,7 +148,7 @@ export function TicketWindow({
         if (unknownTicket) {
             return;
         }
-        onSave(known);
+        onSave(check);
     };
 
     /**
@@ -172,12 +160,9 @@ export function TicketWindow({
         event.preventDefault();
     };
 
-    const onEnter = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            if (!event.repeat && !blocked) {
-                save();
-            }
+    const onEnter = () => {
+        if (!blocked) {
+            save();
         }
     };
 
@@ -255,19 +240,18 @@ export function TicketWindow({
             }
         >
             <div className="relative">
-                <Field
+                <TicketField
                     ref={ticketRef}
                     label="Ticket"
-                    mono
                     narrow
+                    field={field}
                     value={draft.ticket}
-                    error={errors.ticket ?? (unknownTicket ? TICKET_NOT_FOUND : null)}
-                    warning={lookupWarning(lookup)}
-                    onChange={(event) => {
-                        onDraft({ ...draft, ticket: rewrite(event.target, typedTicket) });
+                    refusal={errors.ticket}
+                    onTicket={(ticket) => {
+                        onDraft({ ...draft, ticket });
                     }}
-                    onBlur={onCheckTicket}
-                    onKeyDown={onEnter}
+                    onLeave={onCheckTicket}
+                    onEnter={onEnter}
                     // Le champ où le curseur arrive annonce le remplacement, et dit le ticket
                     // que Jira a trouvé. Refusé, il désigne son refus, que le champ relie lui-même.
                     aria-describedby={
@@ -291,19 +275,14 @@ export function TicketWindow({
                 onChange={(event) => {
                     onDraft({ ...draft, comment: rewrite(event.target, typedComment) });
                 }}
-                onKeyDown={onEnter}
+                onKeyDown={saveOnEnter(onEnter)}
             />
             {note !== null && (
                 <p id={noteId} className="flex gap-2 text-sm text-ink-2">
                     {note}
                 </p>
             )}
-            {errors.general !== null && (
-                <p role="alert" className="flex items-start gap-2 text-sm leading-(--lh) text-inc">
-                    <ErrorIcon />
-                    {errors.general}
-                </p>
-            )}
+            {errors.general !== null && <GeneralError message={errors.general} />}
         </Popover>
     );
 }

@@ -4,11 +4,12 @@ import { type Loss, lossOf } from '../grid/loss';
 import { type ObjectiveReading } from '../grid/objective';
 import * as Quarter from '../grid/quarter';
 import { type Selection, selectQuarters } from '../grid/selection';
+import { firstRefusal, UNSAVED } from '../serverApi';
 import { duration } from './format';
 
 /**
- * Ce que l'écran dit d'un geste : le message en bas de la grille, et les refus d'une
- * fenêtre.
+ * Ce que l'écran dit d'un geste : le message en bas de la grille — ceux de la grille, des
+ * favoris et de l'envoi —, et les refus d'une fenêtre.
  */
 export interface GridMessage {
     /** Le ticket que le message nomme, écrit en gras devant le texte ; null sinon. */
@@ -92,7 +93,7 @@ export function partNote(ticket: string, selected: number): string {
 }
 
 /** F2 sur une sélection que Modifier la sélection n'ouvre pas, son choix grisé dans le menu. */
-export const PART_REFUSAL: GridMessage = plain(
+export const PART_REFUSAL: GridMessage = notice(
     "Rien ne s'ouvre, la sélection ne porte pas un seul ticket avec un seul commentaire.",
 );
 
@@ -103,17 +104,17 @@ export const PART_REFUSAL: GridMessage = plain(
 export function refusalMessage(outcome: Outcome, rewinding: 'undo' | 'redo' | null = null): GridMessage | null {
     switch (outcome.kind) {
         case 'stale':
-            return plain("La journée a changé entre-temps. Rien n'a été modifié.");
+            return notice("La journée a changé entre-temps. Rien n'a été modifié.");
         case 'failed':
-            return plain(FAILED);
+            return notice(UNSAVED);
         case 'conflict':
-            return plain(
+            return notice(
                 `Ces créneaux ont changé entre-temps. ${rewinding === 'redo' ? "Rien n'est rétabli." : "Rien n'est annulé."}`,
             );
         case 'overflow':
-            return plain("Rien n'est collé, le groupe dépasserait 20:00.");
+            return notice("Rien n'est collé, le groupe dépasserait 20:00.");
         case 'invalid':
-            return plain(outcome.violations[0]?.message ?? FAILED);
+            return notice(firstRefusal(outcome.violations));
         case 'saved':
         case 'unchanged':
         case 'nothing':
@@ -121,8 +122,6 @@ export function refusalMessage(outcome: Outcome, rewinding: 'undo' | 'redo' | nu
             return null;
     }
 }
-
-const FAILED = "L'enregistrement n'a pas abouti. Réessayez.";
 
 /** Ce qu'une fenêtre dit sous ses champs quand elle n'a pas pu enregistrer. */
 export function windowRefusal(outcome: Outcome): string | null {
@@ -134,7 +133,7 @@ export function windowRefusal(outcome: Outcome): string | null {
         case 'conflict':
         case 'overflow':
         case 'nothing':
-            return FAILED;
+            return UNSAVED;
         case 'invalid':
         case 'saved':
         case 'unchanged':
@@ -189,6 +188,15 @@ export function objectiveRefusal(reading: Exclude<ObjectiveReading, { kind: 'ok'
     }
 }
 
-function plain(text: string): GridMessage {
+/** Un message sans ticket ni « Annuler » : un refus, ce qu'un autre onglet a changé. */
+export function notice(text: string): GridMessage {
     return { ticket: null, text, undo: false };
+}
+
+/**
+ * « SHOP-482 ajouté aux favoris », « SHOP-482 retiré des favoris » : son « Annuler » retire
+ * le favori ajouté, ou le remet à sa place.
+ */
+export function favoriteMessage(ticket: string, gesture: 'added' | 'removed'): GridMessage {
+    return { ticket, text: gesture === 'added' ? 'ajouté aux favoris' : 'retiré des favoris', undo: true };
 }

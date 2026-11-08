@@ -5,7 +5,7 @@ import { MenuContent, MenuItem, MenuSeparator } from '../components/Menu';
 import type { SelectionActions } from '../grid/actions';
 import type { Selection } from '../grid/selection';
 import { selectionSummary } from './messages';
-import { DELETE_KEYS, deleteLabel, shortcutAria, shortcutLabel } from './shortcuts';
+import { menuShortcut } from './shortcuts';
 
 /**
  * Le menu de la sélection : sa taille en tête, puis Nouveau ticket…, Modifier la
@@ -76,8 +76,7 @@ export function GridMenu({
             </MenuItem>
             <MenuItem
                 icon={<EditIcon />}
-                shortcut="F2"
-                keyShortcuts="F2"
+                {...menuShortcut('edit', mac)}
                 disabled={!actions.edit}
                 onSelect={() => {
                     windowOpenedRef.current = true;
@@ -87,31 +86,13 @@ export function GridMenu({
                 Modifier la sélection…
             </MenuItem>
             <MenuSeparator />
-            <MenuItem
-                icon={<CopyIcon />}
-                shortcut={shortcutLabel('C', mac)}
-                keyShortcuts={shortcutAria('C', mac)}
-                disabled={!actions.copy}
-                onSelect={onCopy}
-            >
+            <MenuItem icon={<CopyIcon />} {...menuShortcut('copy', mac)} disabled={!actions.copy} onSelect={onCopy}>
                 Copier
             </MenuItem>
-            <MenuItem
-                icon={<CutIcon />}
-                shortcut={shortcutLabel('X', mac)}
-                keyShortcuts={shortcutAria('X', mac)}
-                disabled={!actions.cut}
-                onSelect={onCut}
-            >
+            <MenuItem icon={<CutIcon />} {...menuShortcut('cut', mac)} disabled={!actions.cut} onSelect={onCut}>
                 Couper
             </MenuItem>
-            <MenuItem
-                icon={<PasteIcon />}
-                shortcut={shortcutLabel('V', mac)}
-                keyShortcuts={shortcutAria('V', mac)}
-                disabled={!actions.paste}
-                onSelect={onPaste}
-            >
+            <MenuItem icon={<PasteIcon />} {...menuShortcut('paste', mac)} disabled={!actions.paste} onSelect={onPaste}>
                 Coller
             </MenuItem>
             <MenuSeparator />
@@ -132,8 +113,7 @@ export function GridMenu({
             <MenuSeparator />
             <MenuItem
                 icon={<TrashIcon />}
-                shortcut={deleteLabel(mac)}
-                keyShortcuts={DELETE_KEYS}
+                {...menuShortcut('delete', mac)}
                 danger
                 disabled={!actions.clear}
                 onSelect={onClear}

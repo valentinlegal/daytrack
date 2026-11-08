@@ -2,7 +2,8 @@
 
 namespace App\Tests\Controller;
 
-use Doctrine\DBAL\Connection;
+use App\Tests\Support\JiraApi;
+use App\Tests\Support\ServerApi;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\Clock\Test\ClockSensitiveTrait;
 use Symfony\Component\HttpFoundation\Request;
@@ -16,6 +17,8 @@ use Symfony\Component\HttpFoundation\Request;
 final class AppControllerTest extends WebTestCase
 {
     use ClockSensitiveTrait;
+    use JiraApi;
+    use ServerApi;
 
     private const string DAY = '/2026-10-06';
 
@@ -49,27 +52,23 @@ final class AppControllerTest extends WebTestCase
 
     public function testLaPageDitOuEnEstLaConnexionAJira(): void
     {
-        $client = self::createClient();
-        $connection = self::getContainer()->get('doctrine.dbal.default_connection');
-        $connection->executeStatement('DELETE FROM jira_connection');
+        $this->browser = self::createClient();
+        self::purgeDatabase();
 
-        $client->request('GET', self::DAY);
+        $this->browser->request('GET', self::DAY);
         self::assertSelectorExists('#app[data-jira="unlinked"]');
 
-        $client->request('PUT', '/api/jira', server: ['CONTENT_TYPE' => 'application/json', 'HTTP_SEC_FETCH_SITE' => 'same-origin'], content: '{"site": "https://jira", "email": "dev@daytrack.test", "token": "jeton-de-developpement"}');
-        self::assertResponseIsSuccessful();
-        $client->request('GET', self::DAY);
+        $this->linkJira();
+        $this->browser->request('GET', self::DAY);
         self::assertSelectorExists('#app[data-jira="connected"]');
 
-        $connection->executeStatement("UPDATE jira_connection SET refusal = 'refused'");
-        $client->request('GET', self::DAY);
+        $this->connection()->executeStatement("UPDATE jira_connection SET refusal = 'refused'");
+        $this->browser->request('GET', self::DAY);
         self::assertSelectorExists('#app[data-jira="refused"][data-jira-scopes=""]');
 
-        $connection->executeStatement("UPDATE jira_connection SET refusal = 'missing_scope', missing_scopes = '[\"write:jira-work\",\"read:jira-user\"]'");
-        $client->request('GET', self::DAY);
+        $this->connection()->executeStatement("UPDATE jira_connection SET refusal = 'missing_scope', missing_scopes = '[\"write:jira-work\",\"read:jira-user\"]'");
+        $this->browser->request('GET', self::DAY);
         self::assertSelectorExists('#app[data-jira="missing_scope"][data-jira-scopes="write:jira-work read:jira-user"]');
-
-        $connection->executeStatement('DELETE FROM jira_connection');
     }
 
     public function testLesReglagesOntLeurAdresse(): void
@@ -87,20 +86,16 @@ final class AppControllerTest extends WebTestCase
 
     public function testLaBienvenueASonAdresseTantQueJiraNEstPasRelie(): void
     {
-        $client = self::createClient();
-        $connection = self::getContainer()->get('doctrine.dbal.default_connection');
-        $connection->executeStatement('DELETE FROM jira_connection');
+        $this->browser = self::createClient();
+        self::purgeDatabase();
 
-        $client->request('GET', '/bienvenue');
+        $this->browser->request('GET', '/bienvenue');
         self::assertResponseIsSuccessful();
         self::assertSelectorExists('#app[data-jira="unlinked"][data-date="2026-10-06"]');
 
-        $client->request('PUT', '/api/jira', server: ['CONTENT_TYPE' => 'application/json', 'HTTP_SEC_FETCH_SITE' => 'same-origin'], content: '{"site": "https://jira", "email": "dev@daytrack.test", "token": "jeton-de-developpement"}');
-        self::assertResponseIsSuccessful();
-        $client->request('GET', '/bienvenue');
+        $this->linkJira();
+        $this->browser->request('GET', '/bienvenue');
         self::assertResponseRedirects('/2026-10-06', 302);
-
-        $connection->executeStatement('DELETE FROM jira_connection');
     }
 
     public function testLAdresseSansJourMeneAAujourdhui(): void
@@ -160,22 +155,20 @@ final class AppControllerTest extends WebTestCase
     public function testParcourirDesJoursNEcritRien(): void
     {
         $client = self::createClient();
-        $connection = self::getContainer()->get(Connection::class);
-        $connection->executeStatement('DELETE FROM slot');
-        $connection->executeStatement('DELETE FROM day');
+        self::purgeDatabase();
 
         foreach (['/', self::DAY, '/2026-10-07', '/2026-11-05', '/2019-01-01', '/2026-02-30'] as $uri) {
             $client->request('GET', $uri);
         }
 
-        self::assertSame(0, $connection->fetchOne('SELECT COUNT(*) FROM day'));
+        self::assertSame(0, $this->connection()->fetchOne('SELECT COUNT(*) FROM day'));
     }
 
     public function testLaPageNeSEcritPas(): void
     {
         $client = self::createClient();
         foreach (['/', self::DAY] as $uri) {
-            $client->request('POST', $uri, server: ['HTTP_SEC_FETCH_SITE' => 'same-origin', 'CONTENT_TYPE' => 'application/json']);
+            $client->request('POST', $uri, server: ['CONTENT_TYPE' => 'application/json'] + self::SAME_ORIGIN);
 
             self::assertResponseStatusCodeSame(405, $uri);
         }
@@ -200,6 +193,36 @@ final class AppControllerTest extends WebTestCase
         self::assertSelectorExists('#app[data-old-compose="default"]');
 
         $client->request('GET', self::DAY, server: ['HTTP_HOST' => 'daytrack.localhost:8443', 'HTTPS' => 'on']);
+        self::assertSelectorExists('#app[data-old-compose="custom"]');
+    }
+
+    /** Derrière un proxy qui annonce du HTTPS, le fichier se garde, quel que soit le port qu'il joint. */
+    public function testUnFichierDeLaV1DerriereUnProxyEnHttpsSeGarde(): void
+    {
+        $_SERVER['DAYTRACK_OLD_COMPOSE'] = $_ENV['DAYTRACK_OLD_COMPOSE'] = 'proxy';
+        $_SERVER['TRUSTED_PROXIES'] = $_ENV['TRUSTED_PROXIES'] = 'private_ranges';
+        $client = self::createClient();
+
+        foreach (['6767', '80'] as $port) {
+            $client->request('GET', self::DAY, server: ['REMOTE_ADDR' => '172.18.0.2', 'HTTP_HOST' => 'daytrack:'.$port, 'HTTP_X_FORWARDED_PROTO' => 'https', 'HTTP_X_FORWARDED_HOST' => 'daytrack.example.com', 'HTTP_X_FORWARDED_PORT' => '443']);
+            self::assertSelectorExists('#app[data-old-compose="proxy"]', $port);
+        }
+    }
+
+    /**
+     * « :80 » sert aussi à couper le HTTPS, sans proxy : servi en HTTP, ou par un proxy qui
+     * ne serait pas cru, le fichier se remplace, et DayTrack repasse en HTTPS.
+     */
+    public function testUnFichierDeLaV1EnHttpSansProxyCompteCommeModifie(): void
+    {
+        $_SERVER['DAYTRACK_OLD_COMPOSE'] = $_ENV['DAYTRACK_OLD_COMPOSE'] = 'proxy';
+        $client = self::createClient();
+
+        $client->request('GET', self::DAY, server: ['HTTP_HOST' => 'localhost']);
+        self::assertSelectorExists('#app[data-old-compose="custom"]');
+
+        // Un en-tête de proxy envoyé par n'importe qui ne suffit pas à se faire croire.
+        $client->request('GET', self::DAY, server: ['REMOTE_ADDR' => '172.18.0.2', 'HTTP_HOST' => 'localhost', 'HTTP_X_FORWARDED_PROTO' => 'https']);
         self::assertSelectorExists('#app[data-old-compose="custom"]');
     }
 

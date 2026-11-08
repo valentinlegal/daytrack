@@ -57,11 +57,9 @@ final class DayRandomTest extends WebTestCase
         $random = $this->randomizer();
         $sequences = getenv('RANDOM_SEQUENCES');
         $sequences = false !== $sequences && '' !== $sequences ? (int) $sequences : self::SEQUENCES;
-        $this->linkJira();
-
         for ($sequence = 0; $sequence < $sequences; ++$sequence) {
-            $this->connection()->executeStatement('DELETE FROM slot');
-            $this->connection()->executeStatement('DELETE FROM day');
+            self::purgeDatabase();
+            $this->linkJira();
             $this->model = [];
             $this->version = 0;
             $this->objective = 450;

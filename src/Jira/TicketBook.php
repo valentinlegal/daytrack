@@ -2,6 +2,7 @@
 
 namespace App\Jira;
 
+use App\Database\LockedTransaction;
 use App\Entity\IssueType;
 use App\Entity\Ticket;
 use App\Repository\IssueTypeRepository;
@@ -31,6 +32,7 @@ final readonly class TicketBook
         private TicketRepository $tickets,
         private IssueTypeRepository $types,
         private EntityManagerInterface $entityManager,
+        private LockedTransaction $transaction,
         private JiraLink $link,
         private JiraClient $jira,
         private ClockInterface $clock,
@@ -62,8 +64,7 @@ final readonly class TicketBook
             return TicketLookup::found($known);
         }
 
-        $credentials = $this->link->credentials();
-        $askedOf = $this->link->current()?->instance;
+        [$credentials, $askedOf] = $this->asking();
 
         if (!$credentials instanceof JiraCredentials) {
             return TicketLookup::failed($credentials ?? JiraFailure::Unreachable, $known);
@@ -112,19 +113,12 @@ final readonly class TicketBook
             return [];
         }
 
-        $credentials = $this->link->credentials();
-        $askedOf = $this->link->current()?->instance;
+        [$credentials, $askedOf] = $this->asking();
         $answers = $credentials instanceof JiraCredentials
             ? $this->jira->issues($credentials, $unknown)
             : array_fill_keys($unknown, $credentials ?? JiraFailure::Unreachable);
 
-        foreach ($answers as $answer) {
-            if (JiraFailure::NotFound !== $answer && JiraFailure::Unreachable !== $answer) {
-                $this->link->record($answer);
-                break;
-            }
-        }
-
+        $this->learnFrom($answers);
         $this->store($answers, pending: true, askedOf: $askedOf);
 
         return array_keys(array_filter($answers, static fn (JiraIssue|JiraFailure $answer): bool => JiraFailure::NotFound === $answer));
@@ -149,22 +143,14 @@ final readonly class TicketBook
             return $this->refusal();
         }
 
-        $credentials = $this->link->credentials();
-        $askedOf = $this->link->current()?->instance;
+        [$credentials, $askedOf] = $this->asking();
 
         if (!$credentials instanceof JiraCredentials) {
             return $credentials;
         }
 
         $answers = $this->jira->issues($credentials, \array_slice($stale, 0, self::REFRESH_MAX));
-
-        foreach ($answers as $answer) {
-            if ($answer instanceof JiraIssue || $answer->isTokenRefusal()) {
-                $this->link->record($answer);
-                break;
-            }
-        }
-
+        $this->learnFrom($answers);
         $this->store($answers, askedOf: $askedOf);
 
         return $this->refusal();
@@ -174,6 +160,34 @@ final readonly class TicketBook
     public function refusal(): ?JiraFailure
     {
         return $this->link->current()?->refusal;
+    }
+
+    /**
+     * De quoi demander à Jira, et le Jira à qui la question part : ses réponses ne valent
+     * que pour lui (store()).
+     *
+     * @return array{JiraCredentials|JiraFailure|null, ?string}
+     */
+    private function asking(): array
+    {
+        return [$this->link->credentials(), $this->link->current()?->instance];
+    }
+
+    /**
+     * Ce que des réponses apprennent du jeton : la première qui en dit quelque chose — un
+     * ticket lu, ou un refus du jeton. Un ticket introuvable ou un Jira muet n'en disent rien.
+     *
+     * @param array<string, JiraIssue|JiraFailure> $answers
+     */
+    private function learnFrom(array $answers): void
+    {
+        foreach ($answers as $answer) {
+            if ($answer instanceof JiraIssue || $answer->isTokenRefusal()) {
+                $this->link->record($answer);
+
+                return;
+            }
+        }
     }
 
     private function isFresh(Ticket $ticket): bool
@@ -197,15 +211,8 @@ final readonly class TicketBook
      */
     private function store(array $answers, bool $pending = false, ?string $askedOf = null): array
     {
-        // Pas de wrapInTransaction() : il ferme le gestionnaire d'entités au premier
-        // refus, et la requête doit encore répondre.
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            // La première instruction est une écriture : elle verrouille la base jusqu'à
-            // la fin de la transaction, et deux onglets n'insèrent pas le même ticket.
-            $this->tickets->lock();
+        // Sous le verrou, deux onglets n'insèrent pas le même ticket.
+        return $this->transaction->run($this->tickets, function () use ($answers, $pending, $askedOf): array {
             $tickets = $this->tickets->byKeys(array_keys($answers));
             $now = $this->clock->now();
             $instance = $this->link->current()?->instance;
@@ -241,18 +248,8 @@ final readonly class TicketBook
                 }
             }
 
-            $this->entityManager->flush();
-            $connection->commit();
-
             return $tickets;
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        });
     }
 
     private function create(string $key): Ticket

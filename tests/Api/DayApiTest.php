@@ -218,6 +218,28 @@ final class DayApiTest extends WebTestCase
         }
     }
 
+    public function testChaqueRefusDitLaLimiteQuIlApplique(): void
+    {
+        $this->write(0, [self::work('09:00', '09:15', 'SHOP-482')]);
+
+        $refused = [
+            [self::work('06:45', '07:15', 'SHOP-482'), 'changes[0].start', 'Un créneau commence sur un quart d\'heure, de 07:00 à 19:45.'],
+            [self::work('19:45', '20:15', 'SHOP-482'), 'changes[0].end', 'Un créneau finit sur un quart d\'heure, de 07:15 à 20:00.'],
+            [self::work('10:00', '10:15', str_repeat('A', 46).'-1234'), 'changes[0].ticket', 'Un identifiant de ticket tient en 50 caractères.'],
+            [self::work('10:00', '10:15', 'SHOP-482', str_repeat('é', 501)), 'changes[0].comment', 'Le commentaire tient en 500 caractères.'],
+            [self::work('10:00', '10:15', 'SHOP-482', "Tests\nunitaires"), 'changes[0].comment', 'Le commentaire tient sur une ligne.'],
+        ];
+        foreach ($refused as [$change, $field, $message]) {
+            [, $body] = $this->patchSlots(1, [$change]);
+            self::assertSame([['field' => $field, 'message' => $message]], $body['violations'], $message);
+        }
+
+        foreach ([795 => 'L\'objectif va de 0h00 à 13h00.', 451 => 'L\'objectif se règle au quart d\'heure.'] as $objective => $message) {
+            [, $body] = $this->putObjective(1, $objective);
+            self::assertSame([['field' => 'objective', 'message' => $message]], $body['violations'], $message);
+        }
+    }
+
     public function testUnCommentaireNeParleJamaisALaBase(): void
     {
         $comment = "Revue'); DROP TABLE slot; --";

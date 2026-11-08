@@ -4,6 +4,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App, type AppConfig } from './App';
+import { readWeekdays } from './grid/day';
 import { readJiraStatus } from './jira/jiraStatus';
 import { followTheme } from './theme';
 import { readV1LeftOut } from './v1/v1ImportApi';
@@ -33,11 +34,11 @@ function readConfig(root: HTMLElement): AppConfig {
             date,
             timezone,
             futureDays: Number(futureDays),
-            // « 1 2 3 4 5 » ; vide si aucun jour n'est travaillé.
-            workingDays: (workingDays ?? '').split(' ').filter(Boolean).map(Number),
+            // « 1 2 3 4 5 » ; vide si aucun jour n'est travaillé. Lus comme ceux d'une journée.
+            workingDays: readWeekdays((workingDays ?? '').split(' ').filter(Boolean).map(Number)),
         },
         jira: readJiraStatus(jira, jiraScopes),
-        oldCompose: oldCompose === 'default' || oldCompose === 'custom' ? oldCompose : null,
+        oldCompose: oldCompose === 'default' || oldCompose === 'custom' || oldCompose === 'proxy' ? oldCompose : null,
         v1LeftOut: readV1LeftOut(v1LeftOut),
     };
 }

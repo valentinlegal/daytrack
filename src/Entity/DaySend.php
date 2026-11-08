@@ -2,6 +2,7 @@
 
 namespace App\Entity;
 
+use App\Day\UserCalendar;
 use App\Jira\JiraFailure;
 use App\Repository\DaySendRepository;
 use App\Sending\SendResult;
@@ -27,6 +28,9 @@ class DaySend
 {
     /** Au-delà, un envoi en cours est tenu pour interrompu : le serveur a pu s'arrêter. */
     public const string SENDING_EXPIRES = '-5 minutes';
+
+    /** Dans $outcomes, un ticket retiré de la journée que Jira ne trouve plus (Delivery::$vanished). */
+    private const string VANISHED = 'vanished';
 
     #[ORM\Id]
     #[ORM\Column(type: UuidType::NAME)]
@@ -92,7 +96,8 @@ class DaySend
     /**
      * Ce que cet essai a donné, ticket par ticket : null pour un ticket arrivé, sa raison
      * sinon, avec les secondes que la relecture a trouvées dans Jira quand elle les a dites.
-     * Une journée envoyée y garde les tickets que cet envoi a retirés de Jira.
+     * Une journée envoyée y garde les tickets que cet envoi a retirés de Jira. Un ticket
+     * retiré que Jira ne trouve plus y est marqué « vanished », dans les deux cas.
      *
      * @var array<string, string|array{failure: string, seconds: int}|null>
      */
@@ -112,8 +117,18 @@ class DaySend
     {
         $this->id = Uuid::v7();
         $this->day = $day;
-        $this->instance = $jira->instance ?? '';
-        $this->accountId = $jira->accountId ?? '';
+        ['instance' => $this->instance, 'accountId' => $this->accountId] = self::ownerOf($jira);
+    }
+
+    /**
+     * Ce qui fait qu'un envoi appartient à un Jira : son adresse, et le compte sous lequel
+     * le jour y est parti. Le dépôt cherche par là, et belongsTo() compare par là.
+     *
+     * @return array{instance: string, accountId: string}
+     */
+    public static function ownerOf(?JiraConnection $jira): array
+    {
+        return ['instance' => $jira->instance ?? '', 'accountId' => $jira->accountId ?? ''];
     }
 
     /**
@@ -131,7 +146,7 @@ class DaySend
         $send->touched = array_values(array_unique([...$touched, ...(null === $sentAt ? [] : Worklog::ticketsOf($worklogs))]));
 
         if (null !== $sentAt) {
-            $send->sentAt = self::universal($sentAt);
+            $send->sentAt = UserCalendar::universal($sentAt);
             $send->sent = $complete ? array_map(static fn (Worklog $worklog): array => $worklog->toArray(), $worklogs) : null;
         }
 
@@ -140,7 +155,7 @@ class DaySend
 
     public function belongsTo(JiraConnection $jira): bool
     {
-        return $jira->instance === $this->instance && $jira->accountId === $this->accountId;
+        return self::ownerOf($jira) === ['instance' => $this->instance, 'accountId' => $this->accountId];
     }
 
     public function isSending(\DateTimeImmutable $now): bool
@@ -171,6 +186,8 @@ class DaySend
     }
 
     /**
+     * Un ticket que Jira ne trouve plus n'y retient rien : il compte comme arrivé.
+     *
      * @return array<string, ?TicketFailure>
      */
     public function outcomes(): array
@@ -178,10 +195,21 @@ class DaySend
         $outcomes = [];
         foreach ($this->outcomes as $ticket => $outcome) {
             $failure = \is_array($outcome) ? $outcome['failure'] : $outcome;
-            $outcomes[$ticket] = null === $failure ? null : TicketFailure::tryFrom($failure) ?? TicketFailure::Mismatch;
+            $outcomes[$ticket] = null === $failure || self::VANISHED === $failure ? null : TicketFailure::tryFrom($failure) ?? TicketFailure::Mismatch;
         }
 
         return $outcomes;
+    }
+
+    /**
+     * Les tickets retirés de la journée que Jira ne trouvait plus à cet essai, ou à ce
+     * dernier envoi : il en garde peut-être des heures.
+     *
+     * @return list<string>
+     */
+    public function vanished(): array
+    {
+        return array_map('strval', array_keys(array_filter($this->outcomes, static fn (string|array|null $outcome): bool => self::VANISHED === $outcome)));
     }
 
     /**
@@ -202,7 +230,8 @@ class DaySend
     }
 
     /**
-     * Les tickets que le dernier envoi complet a retirés de Jira.
+     * Les tickets que le dernier envoi complet a retirés de la journée : de Jira, ou que
+     * Jira ne trouvait plus (vanished()).
      *
      * @return list<string>
      */
@@ -226,25 +255,26 @@ class DaySend
         }
 
         $this->touched = array_values(array_unique([...$this->touched, ...$tickets]));
-        $this->sendingSince = self::universal($now);
+        $this->sendingSince = UserCalendar::universal($now);
     }
 
     /**
      * Jira, relu, a exactement ces saisies : les tickets retirés de la journée n'y ont
-     * plus rien.
+     * plus rien, sauf ceux qu'il ne trouve plus, dont on ne sait rien.
      *
      * @param list<Worklog> $worklogs
      * @param list<string>  $retired  les tickets que cet envoi a retirés de Jira
+     * @param list<string>  $vanished les tickets retirés que Jira ne trouve plus : ils ne se relisent plus
      */
-    public function succeed(array $worklogs, array $retired, \DateTimeImmutable $now): void
+    public function succeed(array $worklogs, array $retired, array $vanished, \DateTimeImmutable $now): void
     {
-        $this->sentAt = self::universal($now);
+        $this->sentAt = UserCalendar::universal($now);
         $this->sent = array_map(static fn (Worklog $worklog): array => $worklog->toArray(), $worklogs);
         $this->touched = Worklog::ticketsOf($worklogs);
         $this->result = null;
         $this->attemptedAt = null;
         $this->attempted = [];
-        $this->outcomes = array_fill_keys($retired, null);
+        $this->outcomes = array_fill_keys($retired, null) + array_fill_keys($vanished, self::VANISHED);
         $this->failure = null;
         $this->sendingSince = null;
     }
@@ -255,8 +285,9 @@ class DaySend
      * @param list<string>                  $touched  ceux où DayTrack a pu écrire : avant cet essai, et pendant
      * @param bool                          $wrote    une écriture a pu changer Jira
      * @param array<string, int>            $inJira   les secondes que la relecture a trouvées
+     * @param list<string>                  $vanished les tickets retirés que Jira ne trouve plus
      */
-    public function fail(SendResult $result, array $worklogs, array $outcomes, ?JiraFailure $failure, array $touched, bool $wrote, array $inJira, \DateTimeImmutable $now): void
+    public function fail(SendResult $result, array $worklogs, array $outcomes, ?JiraFailure $failure, array $touched, bool $wrote, array $inJira, array $vanished, \DateTimeImmutable $now): void
     {
         if ($wrote) {
             $this->sent = null;
@@ -265,13 +296,15 @@ class DaySend
         // une journée vidée ensuite.
         $this->touched = array_values(array_unique($touched));
         $this->result = $result;
-        $this->attemptedAt = self::universal($now);
+        $this->attemptedAt = UserCalendar::universal($now);
         $this->attempted = array_map(static fn (Worklog $worklog): array => $worklog->toArray(), $worklogs);
         $this->outcomes = [];
         foreach ($outcomes as $ticket => $outcome) {
-            $this->outcomes[$ticket] = null !== $outcome && isset($inJira[$ticket])
-                ? ['failure' => $outcome->value, 'seconds' => $inJira[$ticket]]
-                : $outcome?->value;
+            $this->outcomes[$ticket] = match (true) {
+                null !== $outcome && isset($inJira[$ticket]) => ['failure' => $outcome->value, 'seconds' => $inJira[$ticket]],
+                null === $outcome && \in_array($ticket, $vanished, true) => self::VANISHED,
+                default => $outcome?->value,
+            };
         }
         $this->failure = $failure;
         $this->sendingSince = null;
@@ -288,11 +321,5 @@ class DaySend
     {
         $this->sent = null;
         $this->sendingSince = null;
-    }
-
-    /** La base garde l'heure sans son fuseau : elle s'y écrit, et s'en relit, en heure universelle. */
-    public static function universal(\DateTimeImmutable $at): \DateTimeImmutable
-    {
-        return $at->setTimezone(new \DateTimeZone('UTC'));
     }
 }

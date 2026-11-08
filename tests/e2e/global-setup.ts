@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { type FullConfig, request } from '@playwright/test';
 
+import { SAME_ORIGIN } from './day';
 import { JIRA_ACCOUNT } from './jira';
 
 /**
@@ -16,7 +17,7 @@ import { JIRA_ACCOUNT } from './jira';
  * Ils supposent aussi les jours travaillés par défaut, du lundi au vendredi : la journée
  * que lit la page les dit, et un samedi s'ouvre fermé à la saisie (tests/e2e/day.ts).
  *
- * Les jours que prennent les fichiers de parcours s'inscrivent dans un dossier propre à
+ * Les jours que prennent les parcours s'inscrivent dans un dossier propre à
  * ce lancement (claimDay, tests/e2e/day.ts), que les fils de test héritent de
  * l'environnement, et qui disparaît avec lui.
  */
@@ -28,7 +29,7 @@ export default async function globalSetup(config: FullConfig): Promise<() => voi
         const state = (await response.json()) as { linked: boolean; site?: string };
         if (!state.linked) {
             const linked = await context.put('/api/jira', {
-                headers: { 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' },
+                headers: SAME_ORIGIN,
                 data: { site: JIRA_ACCOUNT.site, email: JIRA_ACCOUNT.email, token: JIRA_ACCOUNT.token },
             });
             if (!linked.ok()) {

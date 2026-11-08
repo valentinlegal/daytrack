@@ -171,7 +171,6 @@ test.describe('le logo, une fenêtre ouverte', () => {
         await logo.click();
         await expect(ticketWindow(page)).toBeVisible();
         await expect(page).toHaveURL(`/${date}`);
-        await clearDay(request, date);
     });
 });
 

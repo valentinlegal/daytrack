@@ -14,12 +14,16 @@ final readonly class Delivery
      * @param array<string, ?TicketFailure> $outcomes null pour un ticket que Jira, relu, a tel que la journée le dit
      * @param list<string>                  $written  les tickets où une écriture est partie : Jira a pu en garder des heures
      * @param array<string, int>            $inJira   les secondes que la relecture a trouvées sur un ticket qui n'est pas arrivé tel quel
+     * @param list<string>                  $vanished les tickets retirés de la journée que Jira ne trouve plus : supprimés, ou que ce
+     *                                                compte ne voit plus. Ils ne retiennent pas la journée — rien ne les ferait
+     *                                                réapparaître —, mais Jira en garde peut-être des heures, que l'écran signale
      */
     public function __construct(
         public array $outcomes,
         public ?JiraFailure $failure = null,
         public array $written = [],
         public array $inJira = [],
+        public array $vanished = [],
     ) {
     }
 
@@ -47,7 +51,8 @@ final readonly class Delivery
     }
 
     /**
-     * Les tickets que la journée a quittés, dont Jira, relu, n'a plus rien.
+     * Les tickets que la journée a quittés, dont Jira, relu, n'a plus rien. Pas ceux qu'il
+     * ne trouve plus : on ne sait pas ce qu'il en garde.
      *
      * @param list<Worklog> $worklogs
      *
@@ -57,6 +62,6 @@ final readonly class Delivery
     {
         $arrived = array_keys(array_filter($this->outcomes, static fn (?TicketFailure $outcome): bool => null === $outcome));
 
-        return array_values(array_diff(array_map('strval', $arrived), Worklog::ticketsOf($worklogs)));
+        return array_values(array_diff(array_map('strval', $arrived), Worklog::ticketsOf($worklogs), $this->vanished));
     }
 }

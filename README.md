@@ -136,7 +136,7 @@ Ce que DayTrack 2 change :
 
 - L'écran est entièrement refait, autour d'une grille qu'on manipule à la souris et au clavier.
 - Tout se règle dans l'application, Jira compris. Une fois la reprise faite, l'ancien `docker-compose.yml` ne sert plus.
-- DayTrack ne répond plus qu'à votre machine. Un bandeau vous donne les commandes pour remplacer votre ancien fichier, qui écoute encore tout le réseau.
+- DayTrack ne répond plus qu'à votre machine. Un bandeau vous donne les commandes pour remplacer votre ancien fichier, qui écoute encore tout le réseau. Si DayTrack est derrière votre proxy, il vous dit plutôt quelles lignes y changer.
 
 Pour revenir en arrière, reprenez l'image `ghcr.io/valentinlegal/daytrack:1.1.0`. Vous retrouverez la v1 telle que vous l'aviez laissée, sans ce que vous avez saisi depuis.
 

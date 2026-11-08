@@ -10,7 +10,7 @@ use App\Repository\JiraConnectionRepository;
 use App\Sending\SendState;
 use App\Sending\Worklog;
 use App\Settings\UserSettings;
-use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\ClockInterface;
 
 /**
  * Les marques des jours que montre le calendrier, date après date, lues sans rien

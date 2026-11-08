@@ -3,7 +3,6 @@
 namespace App\Tests\Api;
 
 use App\Dev\Jira\Catalog;
-use App\Jira\TokenCipher;
 use App\Tests\Support\DayApi;
 use App\Tests\Support\JiraApi;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -317,6 +316,24 @@ final class TicketApiTest extends WebTestCase
 
         [$status] = $this->send('POST', '/api/tickets/refresh', ['tickets' => array_map(static fn (int $n): string => 'SHOP-'.$n, range(1, 201))]);
         self::assertSame(422, $status);
+
+        // La même forme qu'une saisie, longueur comprise.
+        [$status, $body] = $this->send('POST', '/api/tickets/refresh', ['tickets' => ['SHOP-482', str_repeat('A', 46).'-1234']]);
+        self::assertSame(422, $status);
+        self::assertSame([['field' => 'tickets[1]', 'message' => 'Un identifiant de ticket tient en 50 caractères.']], self::at($body, 'violations'));
+        self::assertSame(0, $this->ticketRows());
+    }
+
+    public function testUnIdentifiantTropLongSeDitIntrouvableSansDemanderAJira(): void
+    {
+        $this->linkJira();
+        // Muet, Jira ferait dire « ne répond pas » : « introuvable » ne vient pas de lui.
+        $this->simulate('panne', ['panne' => true]);
+
+        self::assertSame(['status' => 'not_found', 'ticket' => null, 'refusal' => null], $this->lookup(str_repeat('A', 46).'-1234'));
+        self::assertSame(0, $this->ticketRows());
+        // Cinquante caractères passent : la recherche répond, Jira muet ou non.
+        self::assertSame('unreachable', self::at($this->lookup(str_repeat('A', 45).'-1234'), 'status'));
     }
 
     public function testParcourirUnJourNAppelleNiNEcritRien(): void
@@ -370,7 +387,7 @@ final class TicketApiTest extends WebTestCase
     /** Le jeton tel que la base le garde, chiffré par la clé de cette installation. */
     private function encrypted(string $token): string
     {
-        return static::getContainer()->get(TokenCipher::class)->encrypt($token);
+        return $this->cipher()->encrypt($token);
     }
 
     private function ticketRows(): int

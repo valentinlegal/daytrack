@@ -3,10 +3,8 @@
 namespace App\Tests\Support;
 
 use App\Entity\EmptyDayWatch;
-use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\Assert;
-use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Component\Clock\Test\ClockSensitiveTrait;
 
 /**
@@ -14,34 +12,23 @@ use Symfony\Component\Clock\Test\ClockSensitiveTrait;
  * base derrière elle.
  *
  * L'heure est figée au mardi 6 octobre 2026, 15:20 à Paris, comme dans la journée
- * d'exemple. Le noyau ne redémarre pas d'une requête à l'autre : comme dans FrankenPHP,
- * un état laissé par une requête se verrait à la suivante.
+ * d'exemple. Chaque test part d'une base vide.
  */
 trait DayApi
 {
     use ClockSensitiveTrait;
-    use ReadsJson;
+    use ServerApi;
 
     protected const string TODAY = '2026-10-06';
 
-    /** Ce que le navigateur joint à une requête partie de la page de DayTrack. */
-    protected const array SAME_ORIGIN = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
-
-    private KernelBrowser $browser;
+    /** Le calendrier d'octobre 2026, du lundi 28 septembre au dimanche 1er novembre. */
+    protected const string MONTH_FROM = '2026-09-28';
+    protected const string MONTH_TO = '2026-11-01';
 
     protected function setUp(): void
     {
         self::mockTime('2026-10-06 15:20:00 Europe/Paris');
-
-        $this->browser = static::createClient();
-        $this->browser->disableReboot();
-
-        $this->connection()->executeStatement('DELETE FROM day_send');
-        $this->connection()->executeStatement('DELETE FROM slot');
-        $this->connection()->executeStatement('DELETE FROM day');
-        foreach (['favorite', 'ticket', 'issue_type', 'jira_connection', 'settings', 'v1_import', 'empty_day_watch'] as $table) {
-            $this->connection()->executeStatement('DELETE FROM '.$table);
-        }
+        $this->openBrowser();
     }
 
     /**
@@ -87,19 +74,6 @@ trait DayApi
         Assert::assertSame(200, $status, json_encode($day, \JSON_THROW_ON_ERROR));
 
         return $day;
-    }
-
-    /**
-     * @param array<mixed>|string   $body
-     * @param array<string, string> $server
-     *
-     * @return array{int, array<mixed>}
-     */
-    protected function send(string $method, string $uri, array|string $body, array $server = self::SAME_ORIGIN, string $contentType = 'application/json'): array
-    {
-        $this->browser->request($method, $uri, server: ['CONTENT_TYPE' => $contentType] + $server, content: \is_string($body) ? $body : json_encode($body, \JSON_THROW_ON_ERROR));
-
-        return [$this->browser->getResponse()->getStatusCode(), $this->json()];
     }
 
     /**
@@ -177,20 +151,26 @@ trait DayApi
         return (int) $count;
     }
 
-    protected function connection(): Connection
+    /**
+     * Les marques du calendrier, jour par jour, telles que le mois les lit.
+     *
+     * @return array<mixed>
+     */
+    protected function marks(string $from = self::MONTH_FROM, string $to = self::MONTH_TO): array
     {
-        return static::getContainer()->get('doctrine.dbal.default_connection');
+        return self::arrayAt($this->calendar($from, $to), 'marks');
     }
 
     /**
      * @return array<mixed>
      */
-    private function json(): array
+    protected function calendar(string $from, string $to): array
     {
-        $content = (string) $this->browser->getResponse()->getContent();
-        $data = json_decode($content, true);
-        Assert::assertIsArray($data, 'Pas une réponse JSON : '.$content);
+        $this->browser->request('GET', '/api/calendar/'.$from.'/'.$to);
+        Assert::assertSame(200, $this->browser->getResponse()->getStatusCode(), (string) $this->browser->getResponse()->getContent());
+        $calendar = $this->json();
+        Assert::assertSame(['marks', 'daysOff', 'workingDays'], array_keys($calendar));
 
-        return $data;
+        return $calendar;
     }
 }

@@ -131,6 +131,37 @@ describe('Grid', () => {
         );
     });
 
+    it('rend chaque ticket de la journée une fois, dans l’ordre de la journée, sans les pauses', () => {
+        const grid = gridOf([
+            ['09:00', '10:00', 'work', 'SHOP-482', 'Revue'],
+            ['10:00', '10:30', 'work', 'OPS-12', null],
+            ['10:30', '11:00', 'pause', null, null],
+            ['11:00', '11:30', 'work', 'SHOP-482', 'Suite'],
+            ['19:45', '20:00', 'work', 'ESSAI-3', null],
+        ]);
+
+        expect(grid.tickets()).toEqual(['SHOP-482', 'OPS-12', 'ESSAI-3']);
+        expect(Grid.empty().tickets()).toEqual([]);
+        expect(gridOf([['09:00', '09:15', 'pause', null, null]]).tickets()).toEqual([]);
+    });
+
+    it('sait s’il a une pause, jusqu’au dernier quart d’heure', () => {
+        expect(Grid.empty().hasPause()).toBe(false);
+        expect(gridOf([['09:00', '18:00', 'work', 'SHOP-482', null]]).hasPause()).toBe(false);
+        expect(gridOf([['07:00', '07:15', 'pause', null, null]]).hasPause()).toBe(true);
+        expect(gridOf([['19:45', '20:00', 'pause', null, null]]).hasPause()).toBe(true);
+        fc.assert(
+            fc.property(gridArbitrary, (grid) => {
+                expect(grid.hasPause()).toBe(grid.blocks().some((block) => block.content.kind === 'pause'));
+                expect(grid.tickets()).toEqual([
+                    ...new Set(
+                        grid.blocks().flatMap((block) => (block.content.kind === 'work' ? [block.content.ticket] : [])),
+                    ),
+                ]);
+            }),
+        );
+    });
+
     it('ne change pas : un geste rend une nouvelle grille', () => {
         const grid = Grid.empty();
         const filled = grid.with(new Map([[minutes('09:00'), PAUSE]]));
@@ -153,5 +184,46 @@ describe('Quarter', () => {
         expect(Quarter.all()).toHaveLength(52);
         expect(Quarter.all().at(0)).toBe(Quarter.FIRST);
         expect(Quarter.all().at(-1)).toBe(Quarter.LAST);
+    });
+
+    it.each([
+        // L'heure, puis le début de son quart d'heure et le premier qui commence à elle ou après.
+        ['10:00', '10:00', '10:00'],
+        ['10:01', '10:00', '10:15'],
+        ['10:14', '10:00', '10:15'],
+        ['10:15', '10:15', '10:15'],
+        ['00:00', '00:00', '00:00'],
+        ['06:59', '06:45', '07:00'],
+        ['19:59', '19:45', '20:00'],
+        ['23:59', '23:45', '00:00'],
+    ])('arrondit %s au quart d’heure : %s vers le bas, %s vers le haut', (time, down, up) => {
+        const minutes = Quarter.parse(time) ?? Number.NaN;
+
+        expect(Quarter.floor(minutes)).toBe(Quarter.parse(down));
+        // Minuit passé, le quart d'heure suivant est celui du lendemain : 24:00.
+        expect(Quarter.ceil(minutes) % 1440).toBe(Quarter.parse(up));
+    });
+
+    it('arrondit une heure qui a des secondes, sans jamais dépasser un quart d’heure', () => {
+        fc.assert(
+            fc.property(fc.integer({ min: 0, max: 1440 * 60 }), (seconds) => {
+                const minutes = seconds / 60;
+                const down = Quarter.floor(minutes);
+                const up = Quarter.ceil(minutes);
+
+                expect(down % Quarter.MINUTES).toBe(0);
+                expect(up % Quarter.MINUTES).toBe(0);
+                expect(down).toBeLessThanOrEqual(minutes);
+                expect(up).toBeGreaterThanOrEqual(minutes);
+                expect(minutes - down).toBeLessThan(Quarter.MINUTES);
+                expect(up - minutes).toBeLessThan(Quarter.MINUTES);
+                expect(up - down).toBe(seconds % (Quarter.MINUTES * 60) === 0 ? 0 : Quarter.MINUTES);
+            }),
+        );
+    });
+
+    it('ne rend jamais -0 en arrondissant vers le haut une heure négative', () => {
+        expect(Object.is(Quarter.ceil(-5), 0)).toBe(true);
+        expect(Quarter.floor(-5)).toBe(-15);
     });
 });

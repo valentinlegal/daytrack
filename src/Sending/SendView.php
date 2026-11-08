@@ -16,6 +16,7 @@ final readonly class SendView
      * @param array<string, ?TicketFailure> $outcomes ceux du dernier essai, quand il n'a pas tout envoyé
      * @param list<string>                  $removed  les tickets retirés de la journée : dont Jira a peut-être encore des heures, ou, une journée envoyée, dont le dernier envoi les a retirées
      * @param array<string, int>            $inJira   ce que la relecture a trouvé sur un ticket qui n'est pas arrivé tel quel, en secondes
+     * @param list<string>                  $vanished ceux de $removed que Jira ne trouvait plus, au dernier essai ou au dernier envoi : il en garde peut-être des heures
      */
     private function __construct(
         public SendState $state,
@@ -26,6 +27,7 @@ final readonly class SendView
         public array $outcomes,
         public array $removed,
         public array $inJira,
+        public array $vanished,
     ) {
     }
 
@@ -37,6 +39,12 @@ final readonly class SendView
         $state = SendState::of($send, $worklogs, $now);
         $failed = \in_array($state, [SendState::Partial, SendState::Unverified, SendState::Failed], true);
         $current = Worklog::ticketsOf($worklogs);
+        $removed = match (true) {
+            SendState::Sent === $state => $send?->retired() ?? [],
+            // Le résultat montre aussi ce que cet essai a retiré de Jira.
+            $failed => array_values(array_unique(array_diff([...$send->touched ?? [], ...array_map('strval', array_keys($send?->outcomes() ?? []))], $current))),
+            default => array_values(array_diff($send->touched ?? [], $current)),
+        };
 
         return new self(
             $state,
@@ -44,13 +52,11 @@ final readonly class SendView
             null === $send?->attemptedAt ? null : $calendar->local($send->attemptedAt),
             $failed ? $send?->failure : null,
             $failed && null !== $send ? $send->outcomes() : [],
-            match (true) {
-                SendState::Sent === $state => $send?->retired() ?? [],
-                // Le résultat montre aussi ce que cet essai a retiré de Jira.
-                $failed => array_values(array_unique(array_diff([...$send->touched ?? [], ...array_map('strval', array_keys($send?->outcomes() ?? []))], $current))),
-                default => array_values(array_diff($send->touched ?? [], $current)),
-            },
+            $removed,
             $failed && null !== $send ? $send->inJira() : [],
+            // Ceux que la fenêtre montre, la confirmation qui suit un essai comprise : elle ne
+            // promet pas de retirer de Jira des heures qu'il ne trouve plus.
+            array_values(array_intersect($send?->vanished() ?? [], $removed)),
         );
     }
 
@@ -63,6 +69,7 @@ final readonly class SendView
      *     outcomes: object,
      *     removed: list<string>,
      *     inJira: object,
+     *     vanished: list<string>,
      * }
      */
     public function toArray(): array
@@ -76,6 +83,7 @@ final readonly class SendView
             'outcomes' => (object) array_map(static fn (?TicketFailure $failure): ?string => $failure?->value, $this->outcomes),
             'removed' => $this->removed,
             'inJira' => (object) array_map(static fn (int $seconds): int => (int) round($seconds / 60), $this->inJira),
+            'vanished' => $this->vanished,
         ];
     }
 

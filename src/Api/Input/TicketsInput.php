@@ -15,10 +15,7 @@ final readonly class TicketsInput
      */
     public function __construct(
         #[Assert\Count(max: 200, maxMessage: 'Trop de tickets à la fois.')]
-        #[Assert\All([
-            new Assert\Type('string'),
-            new Assert\Regex(pattern: EntryText::TICKET_PATTERN, message: 'Un identifiant de ticket s\'écrit comme SHOP-482.'),
-        ])]
+        #[Assert\All([new Assert\Type('string'), new TicketKey()])]
         public array $tickets = [],
     ) {
     }

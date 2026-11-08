@@ -2,33 +2,19 @@
 
 namespace App\Tests\Support;
 
-use Doctrine\DBAL\Connection;
 use PHPUnit\Framework\Assert;
-use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 
 /**
  * Parler à l'API des favoris comme le fait la page de DayTrack, et regarder la base
- * derrière elle. Le noyau ne redémarre pas d'une requête à l'autre, comme dans
- * FrankenPHP.
+ * derrière elle. Chaque test part d'une base vide.
  */
 trait FavoriteApi
 {
-    use ReadsJson;
-
-    /** Ce que le navigateur joint à une requête partie de la page de DayTrack. */
-    protected const array SAME_ORIGIN = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
-
-    private KernelBrowser $browser;
+    use ServerApi;
 
     protected function setUp(): void
     {
-        $this->browser = static::createClient();
-        $this->browser->disableReboot();
-
-        $this->connection()->executeStatement('DELETE FROM favorite');
-        foreach (['ticket', 'issue_type', 'jira_connection', 'settings'] as $table) {
-            $this->connection()->executeStatement('DELETE FROM '.$table);
-        }
+        $this->openBrowser();
     }
 
     /**
@@ -70,22 +56,6 @@ trait FavoriteApi
     }
 
     /**
-     * @param array<mixed>|string|null $body
-     * @param array<string, string>    $server
-     *
-     * @return array{int, array<mixed>}
-     */
-    protected function send(string $method, string $uri, array|string|null $body = null, array $server = self::SAME_ORIGIN): array
-    {
-        $this->browser->request($method, $uri, server: ['CONTENT_TYPE' => 'application/json'] + $server, content: null === $body ? null : (\is_string($body) ? $body : json_encode($body, \JSON_THROW_ON_ERROR)));
-        $content = (string) $this->browser->getResponse()->getContent();
-        $data = json_decode($content, true);
-        Assert::assertIsArray($data, 'Pas une réponse JSON : '.$content);
-
-        return [$this->browser->getResponse()->getStatusCode(), $data];
-    }
-
-    /**
      * Les tickets de la liste, de haut en bas.
      *
      * @param list<array<mixed>> $favorites
@@ -113,10 +83,5 @@ trait FavoriteApi
             },
             $this->connection()->fetchAllAssociative('SELECT position, ticket FROM favorite ORDER BY position'),
         );
-    }
-
-    protected function connection(): Connection
-    {
-        return static::getContainer()->get('doctrine.dbal.default_connection');
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Settings;
 
+use App\Database\LockedTransaction;
 use App\Day\Objective;
 use App\Entity\IssueType;
 use App\Entity\Settings;
@@ -27,6 +28,7 @@ final readonly class UserSettings
         private IssueTypeRepository $types,
         private JiraConnectionRepository $connections,
         private EntityManagerInterface $entityManager,
+        private LockedTransaction $transaction,
     ) {
     }
 
@@ -80,16 +82,17 @@ final readonly class UserSettings
     /** Change la teinte d'un type ; faux s'il n'existe plus. */
     public function recolor(Uuid $id, Tint $color): bool
     {
-        $type = $this->types->byId($id);
+        return $this->transaction->run($this->types, function () use ($id, $color): bool {
+            $type = $this->types->byId($id);
 
-        if (!$type instanceof IssueType) {
-            return false;
-        }
+            if (!$type instanceof IssueType) {
+                return false;
+            }
 
-        $type->color = $color;
-        $this->entityManager->flush();
+            $type->color = $color;
 
-        return true;
+            return true;
+        });
     }
 
     /**
@@ -114,15 +117,8 @@ final readonly class UserSettings
      */
     private function write(\Closure $change): void
     {
-        // Pas de wrapInTransaction() : il ferme le gestionnaire d'entités au premier
-        // refus, et la requête doit encore répondre.
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            // La première instruction est une écriture : elle verrouille la base jusqu'à
-            // la fin de la transaction, et deux onglets ne créent pas chacun leur ligne.
-            $this->settings->lock();
+        $this->transaction->run($this->settings, function () use ($change): void {
+            // Lue sous le verrou : deux onglets ne créent pas chacun leur ligne.
             $settings = $this->settings->current();
 
             if (null === $settings) {
@@ -131,15 +127,6 @@ final readonly class UserSettings
             }
 
             $change($settings);
-            $this->entityManager->flush();
-            $connection->commit();
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        });
     }
 }

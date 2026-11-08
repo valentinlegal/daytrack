@@ -1,7 +1,5 @@
 import type { ReactNode } from 'react';
 
-import { ErrorIcon } from '../components/icons';
-
 /**
  * Une section des réglages : son titre et son explication à gauche, sur --w-side-narrow,
  * puis sa carte, à --s-7.
@@ -87,15 +85,5 @@ export function RowLabel({
                 </p>
             )}
         </div>
-    );
-}
-
-/** Ce qui n'a pas abouti dans une carte, sous ce qu'il visait. */
-export function SettingsError({ message }: { message: string }) {
-    return (
-        <p role="alert" className="flex items-start gap-2 pb-4 text-sm leading-(--lh) text-inc">
-            <ErrorIcon />
-            {message}
-        </p>
     );
 }

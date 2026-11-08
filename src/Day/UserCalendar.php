@@ -2,7 +2,7 @@
 
 namespace App\Day;
 
-use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 /**
@@ -68,14 +68,27 @@ final readonly class UserCalendar
         return $instant->setTimezone($this->timezone);
     }
 
-    /** Un jour qui s'ouvre : n'importe quel jour passé, et jusqu'à 30 jours devant. */
-    public function isOpen(\DateTimeImmutable $date): bool
+    /**
+     * Le jour d'une adresse, « AAAA-MM-JJ », s'il existe au calendrier et s'ouvre :
+     * n'importe quel jour passé, et jusqu'à 30 jours devant. Rend null sinon.
+     */
+    public function open(string $value): ?\DateTimeImmutable
     {
+        $date = self::date($value);
         $limit = $this->today()->modify(\sprintf('+%d days', self::FUTURE_DAYS));
 
         // Des chaînes ISO se comparent dans l'ordre du calendrier, quel que soit le
         // fuseau que porte chaque objet.
-        return $date->format('Y-m-d') <= $limit->format('Y-m-d');
+        return null !== $date && $date->format('Y-m-d') <= $limit->format('Y-m-d') ? $date : null;
+    }
+
+    /**
+     * Un instant tel que la base le garde : sans son fuseau, il s'y écrit, et s'en relit,
+     * en heure universelle. Le seul endroit qui l'y ramène.
+     */
+    public static function universal(\DateTimeImmutable $instant): \DateTimeImmutable
+    {
+        return $instant->setTimezone(new \DateTimeZone('UTC'));
     }
 
     /**

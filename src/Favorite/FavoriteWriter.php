@@ -2,6 +2,7 @@
 
 namespace App\Favorite;
 
+use App\Database\LockedTransaction;
 use App\Entity\Favorite;
 use App\Repository\FavoriteRepository;
 use Doctrine\ORM\EntityManagerInterface;
@@ -18,6 +19,7 @@ final readonly class FavoriteWriter
 {
     public function __construct(
         private EntityManagerInterface $entityManager,
+        private LockedTransaction $transaction,
         private FavoriteRepository $favorites,
     ) {
     }
@@ -104,37 +106,18 @@ final readonly class FavoriteWriter
      */
     private function write(\Closure $gesture): bool
     {
-        // Pas de wrapInTransaction() : il ferme le gestionnaire d'entités au premier
-        // refus, et la réponse doit encore lire la liste.
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            // La première instruction est une écriture : elle verrouille la base
-            // jusqu'à la fin de la transaction, et la liste lue ensuite est la dernière.
-            $this->favorites->lock();
+        return $this->transaction->run($this->favorites, function () use ($gesture): bool {
+            // Lue sous le verrou, la liste est la dernière.
             $list = $gesture($this->favorites->ordered());
             if (null === $list) {
-                $connection->rollBack();
-
                 return false;
             }
             foreach ($list as $position => $favorite) {
                 $favorite->position = $position;
             }
-            $this->entityManager->flush();
-            $connection->commit();
 
             return true;
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            // Ce que la mémoire tient ne correspond plus à la base : on l'oublie.
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        });
     }
 
     /**

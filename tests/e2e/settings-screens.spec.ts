@@ -1,7 +1,6 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { expect, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
+import { expect, expectAccessible, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
 import { serveSampleConnection } from './jira';
 import { pinFooter, SAMPLE_SETTINGS } from './settings';
 
@@ -107,10 +106,7 @@ test.describe('les écrans des réglages', () => {
                         );
 
                         if (viewport.width === 1440) {
-                            const results = await new AxeBuilder({ page })
-                                .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                                .analyze();
-                            expect(results.violations).toEqual([]);
+                            await expectAccessible(page);
                         }
                     });
                 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { momentAt, type UserMoment } from '../grid/clock';
+import { watchReturns } from '../useReturns';
 
 const MINUTE = 60_000;
 
@@ -10,7 +11,7 @@ const MINUTE = 60_000;
  * minuit compris.
  *
  * Un ordinateur qui se réveille ne rattrape pas les minuteurs en retard : l'heure se
- * relit aussi quand la page redevient visible.
+ * relit aussi au retour sur la page, comme ce qu'un autre onglet a pu changer.
  */
 export function useUserMoment(timeZone: string): UserMoment {
     const [moment, setMoment] = useState(() => momentAt(new Date(), timeZone));
@@ -27,18 +28,13 @@ export function useUserMoment(timeZone: string): UserMoment {
             setMoment((current) => (current.date === next.date && current.minute === next.minute ? current : next));
             schedule(now);
         };
-        const onVisible = () => {
-            if (document.visibilityState === 'visible') {
-                refresh();
-            }
-        };
 
         schedule(new Date());
-        document.addEventListener('visibilitychange', onVisible);
+        const stop = watchReturns(window, refresh);
 
         return () => {
             window.clearTimeout(timer);
-            document.removeEventListener('visibilitychange', onVisible);
+            stop();
         };
     }, [timeZone]);
 

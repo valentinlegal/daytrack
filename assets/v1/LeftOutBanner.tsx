@@ -126,7 +126,10 @@ export function LeftOutBanner({
                         que vous ne renvoyez pas leur journée.
                     </p>
                 )}
-                {failed && <p className="text-sm text-inc">Le serveur ne répond pas. Réessayez dans un instant.</p>}
+                {/* Une région là dès l'ouverture : c'est ce qui se dit quand elle change. */}
+                <p aria-live="polite" className={failed ? 'text-sm text-inc' : 'sr-only'}>
+                    {failed ? 'Le serveur ne répond pas. Réessayez dans un instant.' : ''}
+                </p>
             </Popover>
         </>
     );

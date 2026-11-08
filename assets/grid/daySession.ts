@@ -17,21 +17,15 @@ import {
     undone,
 } from './history';
 import * as Quarter from './quarter';
+import type { Refused, Violation } from '../serverApi';
 import type { Selection } from './selection';
 import type { TabStorage } from './tabStore';
-
-/** Une saisie refusée, champ par champ (src/EventListener/ApiErrorListener.php). */
-export interface Violation {
-    readonly field: string;
-    readonly message: string;
-}
 
 export type WriteResult =
     | { readonly status: 'saved'; readonly day: DayState }
     /** La journée avait changé ailleurs : rien n'est écrit, voici la journée à jour (409). */
     | { readonly status: 'stale'; readonly day: DayState }
-    /** Une règle refuse le geste : rien n'est écrit (422). */
-    | { readonly status: 'invalid'; readonly violations: readonly Violation[] };
+    | Refused;
 
 /**
  * Ce qu'a donné un envoi sur Jira, avec la journée telle qu'elle est ensuite : son état
@@ -138,6 +132,11 @@ const ABANDONED: Outcome = { kind: 'abandoned' };
  * Une session ne sert qu'un jour, et s'ouvre par DaySessions. Quand l'écran change de
  * jour, elle se ferme : ce qui était déjà en file finit de s'enregistrer, un nouveau
  * geste est abandonné, et plus rien n'atteint l'écran.
+ *
+ * Elle se relit à son tour dans la file (refresh) : au retour sur la page, ou pendant
+ * qu'un autre onglet l'envoie. Une relecture qui la trouve changée ailleurs fait refuser
+ * les gestes faits avant elle qui attendent encore leur tour, comme le serveur l'aurait
+ * fait : ils partaient de la journée qu'on voyait, qui n'est plus la bonne.
  */
 export class DaySession {
     readonly date: string;
@@ -150,6 +149,8 @@ export class DaySession {
     private pending = 0;
     /** Avance à chaque refus : les gestes qui attendaient derrière lui sont abandonnés. */
     private epoch = 0;
+    /** Avance à chaque relecture qui trouve la journée changée ailleurs (seen). */
+    private rereads = 0;
     private closed = false;
 
     constructor(day: DayState, api: DayApi, memory: TabMemory) {
@@ -188,15 +189,35 @@ export class DaySession {
     }
 
     /**
+     * Combien de gestes ont été refusés sur cette journée : ce qui attendait derrière un
+     * refus, hors de la file — une fenêtre qui attend pour s'ouvrir —, y renonce comme les
+     * gestes qu'elle abandonne.
+     */
+    refusals(): number {
+        return this.epoch;
+    }
+
+    /**
+     * La journée telle que l'écran la voit : ce qu'un geste décidé maintenant, mais qui
+     * n'entre dans la file que plus tard — une fenêtre qui attend Jira —, passe à `apply`.
+     */
+    seen(): number {
+        return this.rereads;
+    }
+
+    /**
      * Un geste : seuls partent les quarts d'heure qu'il change vraiment, comparés à la
      * journée une fois le ticket et le commentaire réécrits comme le serveur le fera.
+     *
+     * @param seen la journée sur laquelle il a été décidé (seen) ; relue changée depuis, il
+     *             est refusé
      */
-    apply(changes: QuarterChanges): Promise<Outcome> {
+    apply(changes: QuarterChanges, seen = this.rereads): Promise<Outcome> {
         for (const quarter of changes.keys()) {
             Quarter.assertQuarter(quarter);
         }
 
-        return this.enqueue(() => this.write(changes), ABANDONED);
+        return this.enqueue(() => this.write(changes), ABANDONED, { seen, stale: STALE });
     }
 
     /** Copier la sélection, telle qu'elle est une fois les gestes d'avant enregistrés. */
@@ -223,15 +244,19 @@ export class DaySession {
 
     /** Couper : copier puis effacer, un seul geste, sur la même journée. */
     cut(selection: Selection): Promise<Outcome> {
-        return this.enqueue(() => {
-            const copied = copy(this.day.grid, selection);
-            if (copied === null) {
-                return Promise.resolve(NOTHING);
-            }
-            this.memory.clipboard.write(copied);
+        return this.enqueue(
+            () => {
+                const copied = copy(this.day.grid, selection);
+                if (copied === null) {
+                    return Promise.resolve(NOTHING);
+                }
+                this.memory.clipboard.write(copied);
 
-            return this.write(fill(selection.quarters, null));
-        }, ABANDONED);
+                return this.write(fill(selection.quarters, null));
+            },
+            ABANDONED,
+            this.unseen(STALE),
+        );
     }
 
     /** Coller sur la sélection ce que le presse-papier tient à son tour dans la file. */
@@ -254,44 +279,64 @@ export class DaySession {
                 };
             },
             { outcome: ABANDONED, pasted: [] },
+            this.unseen({ outcome: STALE, pasted: [] }),
         );
     }
 
     undo(): Promise<Outcome> {
-        return this.enqueue(() => this.rewind(planUndo, (history) => history.undo.at(-1), undone), ABANDONED);
+        return this.enqueue(
+            () => this.rewind(planUndo, (history) => history.undo.at(-1), undone),
+            ABANDONED,
+            this.unseen(STALE),
+        );
     }
 
     redo(): Promise<Outcome> {
-        return this.enqueue(() => this.rewind(planRedo, (history) => history.redo.at(-1), redone), ABANDONED);
+        return this.enqueue(
+            () => this.rewind(planRedo, (history) => history.redo.at(-1), redone),
+            ABANDONED,
+            this.unseen(STALE),
+        );
     }
 
     /** L'objectif du jour. Il n'entre pas dans l'historique : sa fenêtre a son propre retour. */
     setObjective(objective: number): Promise<Outcome> {
-        return this.enqueue(() => {
-            const before = this.day;
-            if (before.objective === objective) {
-                return Promise.resolve(UNCHANGED);
-            }
+        return this.enqueue(
+            () => {
+                const before = this.day;
+                if (before.objective === objective) {
+                    return Promise.resolve(UNCHANGED);
+                }
 
-            return this.send(
-                before,
-                () => this.api.setObjective(this.date, before.version, objective),
-                false,
-                () => ({ kind: 'saved', step: null }),
-            );
-        }, ABANDONED);
+                return this.send(
+                    before,
+                    () => this.api.setObjective(this.date, before.version, objective),
+                    false,
+                    () => ({ kind: 'saved', step: null }),
+                );
+            },
+            ABANDONED,
+            this.unseen(STALE),
+        );
     }
 
     /**
      * Envoie la journée sur Jira telle qu'elle est enregistrée, une fois les gestes d'avant
      * partis : la journée envoyée est celle qu'on voit.
+     *
+     * @param shown la journée que la fenêtre de l'envoi montrait en s'ouvrant : sa version
+     *              part avec l'envoi, et le serveur refuse une journée changée depuis,
+     *              quel que soit le chemin qui y a mené ; relue changée (seen), rien ne part
+     *              même jusqu'à lui
      */
-    sendToJira(): Promise<SendOutcome> {
+    sendToJira(shown?: ShownDay): Promise<SendOutcome> {
+        const seen = shown?.seen ?? this.rereads;
+
         return this.enqueue(
             async (): Promise<SendOutcome> => {
                 let result: SendResult;
                 try {
-                    result = await this.api.send(this.date, this.day.version);
+                    result = await this.api.send(this.date, shown?.version ?? this.day.version);
                     this.assertSameDate(result.day);
                 } catch {
                     await this.reread();
@@ -306,6 +351,7 @@ export class DaySession {
                     : { kind: result.status === 'done' ? 'done' : result.status };
             },
             { kind: 'abandoned' },
+            { seen, stale: { kind: 'stale' } },
         );
     }
 
@@ -466,6 +512,9 @@ export class DaySession {
         try {
             const day = await this.api.read(this.date);
             this.assertSameDate(day);
+            if (day.version !== this.day.version) {
+                this.rereads += 1;
+            }
             this.day = day;
         } catch {
             // La journée reste celle d'avant : la prochaine lecture la remettra à jour.
@@ -484,8 +533,17 @@ export class DaySession {
         return outcome;
     }
 
-    /** @param abandoned ce que rend le geste s'il ne part pas */
-    private enqueue<T>(task: () => Promise<T>, abandoned: T): Promise<T> {
+    /** Un geste décidé maintenant, sur la journée qu'on voit : ce qu'il rend si elle est relue changée avant son tour. */
+    private unseen<T>(stale: T): Outdated<T> {
+        return { seen: this.rereads, stale };
+    }
+
+    /**
+     * @param abandoned ce que rend le geste s'il ne part pas
+     * @param outdated  la journée sur laquelle il a été décidé : relue changée avant son tour,
+     *                  il est refusé, et ce qui attend derrière lui abandonné
+     */
+    private enqueue<T>(task: () => Promise<T>, abandoned: T, outdated?: Outdated<T>): Promise<T> {
         if (this.closed) {
             return Promise.resolve(abandoned);
         }
@@ -493,7 +551,18 @@ export class DaySession {
         this.pending += 1;
         this.publish();
         const run = this.queue
-            .then(() => (epoch === this.epoch ? task() : abandoned))
+            .then(() => {
+                if (epoch !== this.epoch) {
+                    return abandoned;
+                }
+                if (outdated !== undefined && outdated.seen !== this.rereads) {
+                    this.refuse(STALE);
+
+                    return outdated.stale;
+                }
+
+                return task();
+            })
             .finally(() => {
                 this.pending -= 1;
                 this.publish();
@@ -523,6 +592,18 @@ export class DaySession {
             busy: this.pending > 0,
         };
     }
+}
+
+/** La journée telle qu'une fenêtre la montrait en s'ouvrant : sa version, et ses relectures (DaySession.seen). */
+export interface ShownDay {
+    readonly version: number;
+    readonly seen: number;
+}
+
+/** Ce que rend un geste quand la journée a été relue changée entre le moment où on l'a fait et son tour. */
+interface Outdated<T> {
+    readonly seen: number;
+    readonly stale: T;
 }
 
 function sameStep(a: Step, b: Step): boolean {

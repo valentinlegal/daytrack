@@ -514,3 +514,240 @@ describe('DaySession', () => {
         await expect(session.apply(fill([nine], PAUSE))).resolves.toMatchObject({ kind: 'saved' });
     });
 });
+
+describe('DaySession, la journée relue au retour sur la page', () => {
+    it('se relit à son tour dans la file, derrière les gestes déjà partis, et garde l’historique', async () => {
+        const server = new FakeDayServer();
+        const { transport, sent, release } = held();
+        const session = open(server, server.api(transport));
+
+        const gesture = session.apply(fill([nine], work('SHOP-482')));
+        const refreshed = session.refresh();
+        await sent();
+        release();
+        await expect(gesture).resolves.toMatchObject({ kind: 'saved' });
+        await sent();
+        release();
+        await refreshed;
+
+        expect(rangesOf(session.current().day.grid)).toEqual([['09:00', '09:15', 'work', 'SHOP-482', null]]);
+        expect(session.current()).toMatchObject({ canUndo: true, busy: false });
+        const undone = session.undo();
+        await sent();
+        release();
+        await expect(undone).resolves.toMatchObject({ kind: 'saved' });
+        expect(rangesOf(server.read(TODAY).grid)).toEqual([]);
+    });
+
+    it('refuse, comme le serveur, un geste fait avant une relecture qui trouve la journée changée ailleurs', async () => {
+        const server = new FakeDayServer();
+        const { transport, sent, release } = held();
+        const session = open(server, server.api(transport));
+        await open(server).apply(fill([nine], work('OPS-7')));
+
+        // De retour sur la page, la relecture part ; deux gestes faits sur ce qu'on voyait la suivent.
+        const refreshed = session.refresh();
+        await sent();
+        const refused = session.apply(fill([nine, quarterPast], PAUSE));
+        const behind = session.apply(fill([minutes('10:00')], PAUSE));
+        release();
+        await refreshed;
+
+        await expect(refused).resolves.toEqual({ kind: 'stale' });
+        await expect(behind).resolves.toEqual({ kind: 'abandoned' });
+        expect(server.writes).toHaveLength(1);
+        expect(rangesOf(session.current().day.grid)).toEqual([['09:00', '09:15', 'work', 'OPS-7', null]]);
+
+        // Fait sur la journée relue, le geste suivant part.
+        const next = session.apply(fill([quarterPast], PAUSE));
+        await sent();
+        release();
+        await expect(next).resolves.toMatchObject({ kind: 'saved' });
+    });
+
+    it('laisse partir un geste fait avant une relecture qui ne trouve rien de changé', async () => {
+        const server = new FakeDayServer();
+        const { transport, sent, release } = held();
+        const session = open(server, server.api(transport));
+
+        const refreshed = session.refresh();
+        await sent();
+        const gesture = session.apply(fill([nine], PAUSE));
+        release();
+        await refreshed;
+        await sent();
+        release();
+
+        await expect(gesture).resolves.toMatchObject({ kind: 'saved' });
+        expect(rangesOf(server.read(TODAY).grid)).toEqual([['09:00', '09:15', 'pause', null, null]]);
+    });
+
+    it('refuse un geste décidé avant la relecture qui n’entre dans la file qu’après elle', async () => {
+        const server = new FakeDayServer();
+        const session = open(server);
+        // Une fenêtre enregistrée attend Jira : ce qu'elle écrit est décidé maintenant.
+        const seen = session.seen();
+        await open(server).apply(fill([nine], work('OPS-7')));
+        await session.refresh();
+
+        await expect(session.apply(fill([nine], work('SHOP-482')), seen)).resolves.toEqual({ kind: 'stale' });
+        expect(rangesOf(server.read(TODAY).grid)).toEqual([['09:00', '09:15', 'work', 'OPS-7', null]]);
+        await expect(session.apply(fill([nine], work('SHOP-482')))).resolves.toMatchObject({ kind: 'saved' });
+    });
+
+    it('refuse l’envoi, l’objectif, l’annulation, la coupe et le collage décidés avant une relecture qui a tout changé', async () => {
+        const server = new FakeDayServer();
+        const { transport, sent, release } = held();
+        const session = open(server, server.api(transport));
+        const saved = session.apply(fill([nine], work('SHOP-482')));
+        await sent();
+        release();
+        await saved;
+        const copied = session.copy(extendTo(selectQuarter(nine), quarterPast));
+        await copied;
+        await open(server).apply(fill([minutes('14:00')], work('OPS-7')));
+
+        const refreshed = session.refresh();
+        await sent();
+        const gestures = [
+            session.sendToJira(),
+            session.setObjective(240),
+            session.undo(),
+            session.cut(selectQuarter(nine)),
+            session.paste(selectQuarter(minutes('16:00'))),
+        ];
+        release();
+        await refreshed;
+
+        await expect(Promise.all(gestures)).resolves.toEqual([
+            { kind: 'stale' },
+            { kind: 'abandoned' },
+            { kind: 'abandoned' },
+            { kind: 'abandoned' },
+            { outcome: { kind: 'abandoned' }, pasted: [] },
+        ]);
+        expect(server.writes.map((request) => request.kind)).toEqual(['changeSlots', 'changeSlots']);
+        expect(session.current().day.send.state).toBe('unsent');
+    });
+
+    // Chaque geste, seul en tête de file derrière la relecture : c'est lui qui est refusé.
+    const gestures: [string, (session: DaySession) => Promise<unknown>, unknown][] = [
+        ['un geste', (session) => session.apply(fill([quarterPast], PAUSE)), { kind: 'stale' }],
+        ['la coupe', (session) => session.cut(selectQuarter(nine)), { kind: 'stale' }],
+        [
+            'le collage',
+            (session) => session.paste(selectQuarter(minutes('16:00'))),
+            { outcome: { kind: 'stale' }, pasted: [] },
+        ],
+        ['l’annulation', (session) => session.undo(), { kind: 'stale' }],
+        ['le rétablissement', (session) => session.redo(), { kind: 'stale' }],
+        ['l’objectif', (session) => session.setObjective(240), { kind: 'stale' }],
+        ['l’envoi', (session) => session.sendToJira(), { kind: 'stale' }],
+    ];
+    for (const [name, gesture, refused] of gestures) {
+        it(`refuse ${name} fait avant une relecture qui a trouvé la journée changée`, async () => {
+            const server = new FakeDayServer();
+            const { transport, sent, release } = held();
+            const session = open(server, server.api(transport));
+            const first = session.apply(fill([nine], work('SHOP-482')));
+            await sent();
+            release();
+            await first;
+            const undone = session.undo();
+            await sent();
+            release();
+            await undone;
+            const redone = session.redo();
+            await sent();
+            release();
+            await redone;
+            const undoneAgain = session.undo();
+            await sent();
+            release();
+            await undoneAgain;
+            await session.copy(selectQuarter(minutes('10:00')));
+            const copied = session.copyContent(work('OPS-9'));
+            await copied;
+            await open(server).apply(fill([minutes('14:00')], work('OPS-7')));
+            const writes = server.writes.length;
+
+            const refreshed = session.refresh();
+            await sent();
+            const answer = gesture(session);
+            release();
+            await refreshed;
+
+            await expect(answer).resolves.toEqual(refused);
+            expect(server.writes).toHaveLength(writes);
+        });
+    }
+
+    /** La journée telle que la session la montre : ce qu'une fenêtre d'envoi retient en s'ouvrant. */
+    function shown(session: DaySession) {
+        return { version: session.current().day.version, seen: session.seen() };
+    }
+
+    it('refuse l’envoi confirmé sur la journée que la fenêtre montrait avant une relecture qui l’a changée', async () => {
+        const server = new FakeDayServer();
+        const session = open(server);
+        await session.apply(fill([nine], work('SHOP-482')));
+        const opened = shown(session);
+        await open(server).apply(fill([minutes('14:00')], work('OPS-7')));
+        await session.refresh();
+
+        await expect(session.sendToJira(opened)).resolves.toEqual({ kind: 'stale' });
+        expect(server.writes.map((request) => request.kind)).toEqual(['changeSlots', 'changeSlots']);
+        expect(session.current().day.send.state).toBe('unsent');
+        await expect(session.sendToJira(shown(session))).resolves.toEqual({ kind: 'done' });
+    });
+
+    it('envoie la version que la fenêtre montrait : changée depuis, le serveur refuse, même quand le navigateur l’a laissé passer', async () => {
+        const server = new FakeDayServer();
+        const session = open(server);
+        await session.apply(fill([nine], work('SHOP-482')));
+        const opened = shown(session);
+        await open(server).apply(fill([minutes('14:00')], work('OPS-7')));
+        await session.refresh();
+
+        // La relecture comptée comme vue : seul le serveur peut encore refuser (409).
+        const sending: Request[] = [];
+        const watched = new DaySession(
+            session.current().day,
+            server.api((request, handle) => {
+                sending.push(request);
+
+                return Promise.resolve(handle());
+            }),
+            tabMemory(memoryStorage()),
+        );
+        await expect(watched.sendToJira({ version: opened.version, seen: watched.seen() })).resolves.toEqual({
+            kind: 'stale',
+        });
+        expect(sending.filter((request) => request.kind === 'send')).toHaveLength(1);
+        expect(server.writes.map((request) => request.kind)).toEqual(['changeSlots', 'changeSlots']);
+        expect(watched.current().day.send.state).toBe('unsent');
+    });
+
+    it('annule après la relecture ce qui n’a pas bougé ailleurs, et jamais ce qu’un autre onglet a récrit', async () => {
+        const server = new FakeDayServer();
+        const session = open(server);
+        await session.apply(fill([nine], work('SHOP-482')));
+        await session.apply(fill([minutes('11:00')], work('SHOP-519')));
+        await open(server).apply(fill([minutes('14:00')], work('OPS-7')));
+        await session.refresh();
+
+        await expect(session.undo()).resolves.toMatchObject({ kind: 'saved' });
+        expect(rangesOf(server.read(TODAY).grid)).toEqual([
+            ['09:00', '09:15', 'work', 'SHOP-482', null],
+            ['14:00', '14:15', 'work', 'OPS-7', null],
+        ]);
+
+        await open(server).apply(fill([nine], work('OPS-8')));
+        await session.refresh();
+        await expect(session.undo()).resolves.toEqual({ kind: 'conflict' });
+        expect(rangesOf(server.read(TODAY).grid)).toEqual([
+            ['09:00', '09:15', 'work', 'OPS-8', null],
+            ['14:00', '14:15', 'work', 'OPS-7', null],
+        ]);
+    });
+});

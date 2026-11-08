@@ -4,6 +4,7 @@ namespace App\Api\Input;
 
 use App\Day\Quarter;
 use App\Day\SlotContent;
+use App\Entity\Slot;
 use Symfony\Component\Validator\Constraints as Assert;
 use Symfony\Component\Validator\Context\ExecutionContextInterface;
 
@@ -39,10 +40,10 @@ final readonly class SlotChangeInput
         $end = Quarter::parse($this->end);
 
         if (null === $start || !Quarter::isBoundary($start) || Quarter::DAY_END === $start) {
-            $context->buildViolation('Un créneau commence sur un quart d\'heure, de 07:00 à 19:45.')->atPath('start')->addViolation();
+            $context->buildViolation(\sprintf('Un créneau commence sur un quart d\'heure, de %s à %s.', Quarter::format(Quarter::FIRST), Quarter::format(Quarter::DAY_END - Quarter::MINUTES)))->atPath('start')->addViolation();
         }
         if (null === $end || !Quarter::isBoundary($end) || Quarter::FIRST === $end) {
-            $context->buildViolation('Un créneau finit sur un quart d\'heure, de 07:15 à 20:00.')->atPath('end')->addViolation();
+            $context->buildViolation(\sprintf('Un créneau finit sur un quart d\'heure, de %s à %s.', Quarter::format(Quarter::FIRST + Quarter::MINUTES), Quarter::format(Quarter::DAY_END)))->atPath('end')->addViolation();
         } elseif (null !== $start && $start >= $end) {
             $context->buildViolation('Un créneau finit après son début.')->atPath('end')->addViolation();
         }
@@ -60,7 +61,7 @@ final readonly class SlotChangeInput
             // d'un ticket est d'être là.
             $validator = $context->getValidator()->inContext($context);
             $validator->atPath('ticket')->validate($this->ticket, EntryText::ticketConstraints());
-            $validator->atPath('comment')->validate($this->comment, EntryText::lineConstraints(500, 'Le commentaire tient en 500 caractères.', 'Le commentaire tient sur une ligne.'));
+            $validator->atPath('comment')->validate($this->comment, EntryText::lineConstraints(Slot::COMMENT_MAX, 'Le commentaire'));
 
             return;
         }

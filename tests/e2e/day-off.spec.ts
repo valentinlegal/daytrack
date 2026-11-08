@@ -1,19 +1,26 @@
-import AxeBuilder from '@axe-core/playwright';
-import type { Locator, Page, Request } from '@playwright/test';
+import type { Page } from '@playwright/test';
 
-import { clearDay, freezeTime, writeDay } from './day';
+import { freezeTime, writeDay } from './day';
 import {
+    blocks,
     clickSlot,
+    describedWrites,
     doubleClickSlot,
     expectGridMatchesBase,
+    figures,
+    lane,
     message,
     objectiveButton,
     objectiveWindow,
+    openAnyway,
+    recordWrites,
     savedDay,
     slots,
     ticketWindow,
+    tokenColor,
 } from './editing';
-import { expect, refusedWith, test } from './fixtures';
+import { expect, expectAccessible, refusedWith, test } from './fixtures';
+import { cell, numberColor } from './calendar';
 
 /**
  * Le jour mis à 0h00 dans la fenêtre Objectif du jour, en attendant les congés : vide, il
@@ -24,83 +31,10 @@ import { expect, refusedWith, test } from './fixtures';
  */
 test.use({ marks: 'base' });
 
-const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre'];
-
-/** Un jour du calendrier, par le début de son libellé : « 8 septembre ». */
-function cell(page: Page, date: string): Locator {
-    const label = `${String(Number(date.slice(8)))} ${MONTHS[Number(date.slice(5, 7)) - 1] ?? ''}`;
-
-    return page.getByRole('grid').getByRole('button', { name: new RegExp(`^${label}(,|$)`) });
-}
-
-function figures(page: Page): Locator {
-    return page.getByRole('group', { name: 'Chiffres du jour' });
-}
-
-function openAnyway(page: Page): Locator {
-    return page.getByRole('button', { name: 'Saisir quand même' });
-}
-
-function blocks(page: Page): Locator {
-    return page.getByRole('list', { name: 'Saisies du jour' }).getByRole('listitem');
-}
-
-/** La colonne des blocs, que la grille fermée grise. */
-function lane(page: Page): Locator {
-    return page.getByRole('list', { name: 'Saisies du jour' }).locator('..');
-}
-
-/** La valeur qu'une couleur de tokens.css prend dans la page. */
-async function tokenColor(page: Page, token: `--${string}`): Promise<string> {
-    return page.evaluate((name) => {
-        const probe = document.createElement('div');
-        probe.style.color = `var(${name})`;
-        document.body.append(probe);
-        const color = getComputedStyle(probe).color;
-        probe.remove();
-
-        return color;
-    }, token);
-}
-
-/** La couleur du chiffre d'un jour du calendrier. */
-async function numberColor(day: Locator): Promise<string> {
-    return day
-        .locator(':scope > span')
-        .first()
-        .evaluate((number) => getComputedStyle(number).color);
-}
-
-/** Les écritures que la page envoie, hors ce qu'elle demande à Jira. */
-function recordWrites(page: Page): Request[] {
-    const writes: Request[] = [];
-    page.on('request', (sent) => {
-        const jira = /\/api\/(jira\/check|tickets\/refresh)$/.test(new URL(sent.url()).pathname);
-        if (sent.method() !== 'GET' && !jira) {
-            writes.push(sent);
-        }
-    });
-
-    return writes;
-}
-
-function described(writes: readonly Request[]): string[] {
-    return writes.map((sent) => `${sent.method()} ${new URL(sent.url()).pathname}`);
-}
-
 async function dayRead(page: Page, date: string): Promise<{ objective: number; declaredOff: boolean }> {
     const response = await page.request.get(`/api/days/${date}`);
 
     return (await response.json()) as { objective: number; declaredOff: boolean };
-}
-
-async function expectAccessible(page: Page): Promise<void> {
-    // axe attend ses propres minuteurs : l'heure doit de nouveau tourner.
-    await page.clock.resume();
-    const results = await new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-        .analyze();
-    expect(results.violations).toEqual([]);
 }
 
 test('mis à 0h00, le jour se ferme et se grise sans que les flèches le sautent ; « Revenir à 7h30 » le rouvre', async ({
@@ -150,7 +84,8 @@ test('mis à 0h00, le jour se ferme et se grise sans que les flèches le sautent
     await page.reload();
     await expect(openAnyway(page)).toBeVisible();
     await expect(figures(page)).toHaveText('0h00/0h00Jour non travaillé');
-    expect(described(writes)).toEqual([]);
+    expect(describedWrites(writes)).toEqual([]);
+    await page.clock.resume();
     await expectAccessible(page);
 
     // Les flèches ne le sautent pas, et le calendrier le grise vu d'ailleurs.
@@ -171,8 +106,6 @@ test('mis à 0h00, le jour se ferme et se grise sans que les flèches le sautent
     await expect(page.getByRole('progressbar')).toHaveCount(1);
     await expect(cell(page, date)).toHaveAccessibleName('8 septembre, jour affiché');
     expect(await dayRead(page, date)).toMatchObject({ objective: 450, declaredOff: false });
-
-    await clearDay(request, date);
 });
 
 test('« Saisir quand même » laisse 0h00 : tout compte en plus, le jour reste grisé et se referme vide', async ({
@@ -191,7 +124,7 @@ test('« Saisir quand même » laisse 0h00 : tout compte en plus, le jour reste 
         page.getByText('Double-cliquez sur un créneau, ou glissez un favori sur la grille.', { exact: true }),
     ).toBeVisible();
     await expect(figures(page)).toHaveText('0h00/0h00Jour non travaillé');
-    expect(described(writes)).toEqual([]);
+    expect(describedWrites(writes)).toEqual([]);
 
     // Une heure et demie d'astreinte, au clavier.
     await clickSlot(page, '09:00');
@@ -220,8 +153,6 @@ test('« Saisir quand même » laisse 0h00 : tout compte en plus, le jour reste 
     await expect(openAnyway(page)).toBeVisible();
     await expect(cell(page, date)).toHaveAccessibleName('15 septembre, jour affiché, non travaillé');
     expect(await savedDay(request, date)).toEqual([]);
-
-    await clearDay(request, date);
 });
 
 test('pendant sa lecture, un jour que le calendrier sait mis à 0h00 se montre déjà fermé', async ({
@@ -258,8 +189,6 @@ test('pendant sa lecture, un jour que le calendrier sait mis à 0h00 se montre d
     release();
     await expect(figures(page)).toHaveText('0h00/0h00Jour non travaillé');
     await expect(openAnyway(page)).toBeVisible();
-
-    await clearDay(request, date);
 });
 
 test('vu avec une saisie, vidé puis mis à 0h00, il reste ouvert tant qu’on y est : Ctrl+Z rend la saisie', async ({
@@ -301,8 +230,6 @@ test('vu avec une saisie, vidé puis mis à 0h00, il reste ouvert tant qu’on y
     await expect(page).toHaveURL('/2021-10-14');
     await cell(page, date).click();
     await expect(openAnyway(page)).toBeVisible();
-
-    await clearDay(request, date);
 });
 
 test.describe('un onglet resté ouvert pendant qu’on mettait le jour à 0h00 ailleurs', () => {
@@ -345,7 +272,5 @@ test.describe('un onglet resté ouvert pendant qu’on mettait le jour à 0h00 a
         await expect(blocks(page)).toHaveCount(0);
         await expect(message(page)).toHaveCount(0);
         expect(await savedDay(request, date)).toEqual([]);
-
-        await clearDay(request, date);
     });
 });

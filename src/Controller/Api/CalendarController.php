@@ -42,9 +42,8 @@ final class CalendarController extends AbstractController
 
         $days = $this->marks->between($first, $last);
 
-        // json_encode et non le sérialiseur, qui rendrait un objet vide en tableau : le
-        // navigateur y cherche un jour par sa date.
-        return new JsonResponse([
+        return $this->json([
+            // Un objet même vide : le navigateur y cherche un jour par sa date.
             'marks' => (object) array_map(static fn (DayMark $mark): string => $mark->value, $days->marks),
             'daysOff' => $days->daysOff,
             'workingDays' => $this->settings->workingDays(),

@@ -1,5 +1,8 @@
+import type { SendOutcome } from '../grid/daySession';
 import type { RecapTicket } from '../grid/recap';
 import type { SendFailure, SendStatus, TicketFailure } from '../grid/send';
+import type { TokenRefusal } from '../jira/jiraApi';
+import { isTokenRefusal, TOKEN_EXPIRED } from '../jira/jiraStatus';
 import { dayAndMonth, dayLabel } from './calendar';
 import { duration } from './format';
 
@@ -135,15 +138,24 @@ export interface SendRow {
     readonly inJira?: number;
     /** Retiré de la journée depuis un envoi : hors du compte, à 0h00. */
     readonly removed?: boolean;
+    /** Retiré, et Jira ne le trouve plus : il en garde peut-être des heures. */
+    readonly vanished?: boolean;
 }
 
 /**
  * Ce qui est arrivé à un ticket, d'après la relecture de Jira : il y est, il n'y est pas,
- * il n'y est qu'en partie, ou DayTrack n'a pas pu le relire.
+ * il n'y est qu'en partie, DayTrack n'a pas pu le relire, ou Jira ne le trouve plus.
  */
-export type TicketFate = 'sent' | 'absent' | 'partial' | 'unverified';
+export type TicketFate = 'sent' | 'absent' | 'partial' | 'unverified' | 'vanished';
 
-export function fateOf(failure: TicketFailure | null | undefined, inJira: number | undefined): TicketFate {
+export function fateOf(
+    failure: TicketFailure | null | undefined,
+    inJira: number | undefined,
+    vanished = false,
+): TicketFate {
+    if (vanished) {
+        return 'vanished';
+    }
     if (failure === null || failure === undefined) {
         return 'sent';
     }
@@ -155,6 +167,47 @@ export function fateOf(failure: TicketFailure | null | undefined, inJira: number
 }
 
 /**
+ * La marque d'un ticket, dans les fenêtres comme au récapitulatif, qui la dessinent chacun
+ * à leur façon : arrivé, erreur, « ? » de ce que DayTrack n'a pas pu relire, ou
+ * avertissement d'un ticket que Jira ne trouve plus.
+ */
+export type FateMark = 'ok' | 'error' | 'unverified' | 'warning';
+
+export function fateMark(fate: TicketFate): FateMark {
+    switch (fate) {
+        case 'sent':
+            return 'ok';
+        case 'absent':
+        case 'partial':
+            return 'error';
+        case 'unverified':
+            return 'unverified';
+        case 'vanished':
+            return 'warning';
+    }
+}
+
+/** Ce que le lecteur d'écran dit de la marque ; un ticket retiré de la journée dit ce que Jira en garde. */
+export function fateLabel(fate: TicketFate, removed: boolean): string {
+    switch (fate) {
+        case 'unverified':
+            return 'Non vérifié';
+        case 'vanished':
+            return 'Introuvable dans Jira';
+        case 'sent':
+            return removed ? 'Retiré de Jira' : 'Envoyé';
+        case 'partial':
+            return removed ? 'Encore dans Jira' : 'Envoyé en partie';
+        case 'absent':
+            return removed ? 'Encore dans Jira' : 'Non envoyé';
+    }
+}
+
+/** Sous un ticket retiré que Jira ne trouve plus : supprimé, ou que le compte ne voit plus. */
+export const VANISHED_LINE =
+    "Jira ne trouve plus ce ticket. S'il a encore des heures de ce jour, retirez-les dans Jira.";
+
+/**
  * Les lignes d'une fenêtre : les tickets du jour, du plus long au plus court, comme le
  * récapitulatif, puis ceux retirés depuis un envoi, à 0h00 — le renvoi retire leurs
  * heures de Jira, et rien n'en disparaît sans avoir été montré.
@@ -162,7 +215,12 @@ export function fateOf(failure: TicketFailure | null | undefined, inJira: number
 export function sendRows(tickets: readonly RecapTicket[], status: SendStatus, kind: SendWindowKind): SendRow[] {
     const rows: SendRow[] = [
         ...tickets.map((ticket) => ({ ticket: ticket.ticket, minutes: ticket.minutes })),
-        ...status.removed.map((ticket) => ({ ticket, minutes: 0, removed: true })),
+        ...status.removed.map((ticket) => ({
+            ticket,
+            minutes: 0,
+            removed: true,
+            ...(status.vanished.includes(ticket) ? { vanished: true } : {}),
+        })),
     ];
     if (kind !== 'result') {
         return rows;
@@ -226,13 +284,20 @@ function restReason(failure: TicketFailure): string {
     }
 }
 
-/** Sous un ticket d'une fenêtre : ce qu'il faut en dire, en rouge sauf `soft`. */
+/**
+ * Sous un ticket d'une fenêtre : ce qu'il faut en dire, et sur quel ton — `error` en
+ * rouge, `soft` discret, `warning` en couleur du texte, plus fort que le titre : rien n'a
+ * échoué, mais il y a quelque chose à faire, et l'orange ne se lit pas sur un texte.
+ */
 export interface SendLineText {
     readonly text: string;
-    readonly soft: boolean;
+    readonly tone: 'error' | 'soft' | 'warning';
 }
 
 export function ticketLine(row: SendRow, kind: SendWindowKind): SendLineText | null {
+    if (row.vanished === true) {
+        return { text: VANISHED_LINE, tone: 'warning' };
+    }
     if (kind !== 'result') {
         if (row.removed !== true) {
             return null;
@@ -240,7 +305,7 @@ export function ticketLine(row: SendRow, kind: SendWindowKind): SendLineText | n
 
         return {
             text: kind === 'confirm' ? 'Ses heures seront retirées de Jira.' : 'Retiré de la journée et de Jira.',
-            soft: true,
+            tone: 'soft',
         };
     }
 
@@ -249,13 +314,13 @@ export function ticketLine(row: SendRow, kind: SendWindowKind): SendLineText | n
         return null;
     }
     if (fate === 'sent') {
-        return row.removed === true ? { text: 'Retiré de la journée et de Jira.', soft: true } : null;
+        return row.removed === true ? { text: 'Retiré de la journée et de Jira.', tone: 'soft' } : null;
     }
 
     const failure = row.failure ?? 'mismatch';
     const held = row.inJira;
     if (held === undefined) {
-        return { text: failureReason(failure), soft: false };
+        return { text: failureReason(failure), tone: 'error' };
     }
     if (row.removed === true) {
         const reason =
@@ -265,19 +330,27 @@ export function ticketLine(row: SendRow, kind: SendWindowKind): SendLineText | n
                   ? ' Jira a refusé le jeton enregistré.'
                   : ` ${failureReason(failure)}`;
 
-        return { text: `Retiré de la journée, Jira en a encore ${duration(held)}.${reason}`, soft: false };
+        return { text: `Retiré de la journée, Jira en a encore ${duration(held)}.${reason}`, tone: 'error' };
     }
     // Autant d'heures, mais pas les mêmes : le total n'apprend rien, la raison suffit.
     if (held === row.minutes) {
-        return { text: failureReason(failure), soft: false };
+        return { text: failureReason(failure), tone: 'error' };
     }
     if (held > row.minutes) {
         const reason = failure === 'mismatch' ? '' : ` ${failureReason(failure)}`;
 
-        return { text: `Jira a ${duration(held)} au lieu de ${duration(row.minutes)}.${reason}`, soft: false };
+        return { text: `Jira a ${duration(held)} au lieu de ${duration(row.minutes)}.${reason}`, tone: 'error' };
     }
 
-    return { text: `Jira a ${duration(held)} sur ${duration(row.minutes)}${restReason(failure)}`, soft: false };
+    return { text: `Jira a ${duration(held)} sur ${duration(row.minutes)}${restReason(failure)}`, tone: 'error' };
+}
+
+/**
+ * La phrase en tête du détail d'un envoi réussi. Une journée vidée n'a plus d'heures dans
+ * Jira : seuls ses tickets retirés se disent, dessous.
+ */
+export function detailHead(rows: readonly SendRow[]): string | null {
+    return rows.some((row) => row.removed !== true) ? 'Ces heures sont dans Jira pour ce jour.' : null;
 }
 
 /** Le titre de la fenêtre du résultat. */
@@ -500,7 +573,7 @@ export function recapFates(
 export function failureMessage(failure: SendFailure | null): string {
     switch (failure) {
         case 'refused':
-            return "L'envoi a échoué. Jira refuse le jeton enregistré, il a sans doute expiré.";
+            return `L'envoi a échoué. ${TOKEN_EXPIRED}`;
         case 'missing_scope':
             return "L'envoi a échoué. Il manque au jeton enregistré un périmètre dont DayTrack a besoin.";
         default:
@@ -513,4 +586,46 @@ export function sendSubtitle(date: string, status: SendStatus, kind: SendWindowK
     const moment = kind === 'detail' ? status.sentAt : kind === 'result' ? status.attemptedAt : null;
 
     return moment === null ? dayLabel(date) : `${dayLabel(moment.date)} à ${moment.time}`;
+}
+
+/** Ce qui suit un envoi, une fois la réponse arrivée sur la journée qu'on voit encore. */
+export interface AfterSend {
+    /**
+     * La fenêtre qui s'ouvre d'elle-même : le résultat d'un envoi qui n'a pas tout envoyé,
+     * ou le détail d'un envoi complet qui a un ticket retiré à signaler.
+     */
+    readonly window: SendWindowKind | null;
+    readonly confetti: boolean;
+    /** Un message en bas de la grille. */
+    readonly notice: string | null;
+    /** Ce que Jira reproche au jeton, pour le bandeau. */
+    readonly tokenRefusal: TokenRefusal | null;
+}
+
+export const STALE_SEND = "La journée a changé entre-temps. Rien n'a été envoyé.";
+export const SEND_UNANSWERED = "L'envoi n'a pas abouti. Réessayez.";
+
+/**
+ * Tout est arrivé, les confettis partent ; sinon la fenêtre du résultat s'ouvre d'elle-même.
+ * Un ticket retiré que Jira ne trouve plus ne retient pas la journée, mais il a quelque
+ * chose à faire dans Jira : le détail de l'envoi s'ouvre à la place des confettis, et le dit.
+ */
+export function afterSend(outcome: SendOutcome, status: SendStatus): AfterSend {
+    const none = { window: null, confetti: false, notice: null, tokenRefusal: null } as const;
+    if (outcome.kind === 'stale') {
+        return { ...none, notice: STALE_SEND };
+    }
+
+    const tokenRefusal = isTokenRefusal(status.failure) ? status.failure : null;
+    if (status.state === 'partial' || status.state === 'unverified' || status.state === 'failed') {
+        return { ...none, window: 'result', tokenRefusal };
+    }
+    if (status.state === 'sent' && outcome.kind === 'done') {
+        return status.vanished.length > 0 ? { ...none, window: 'detail' } : { ...none, confetti: true };
+    }
+    if (outcome.kind === 'failed' && status.state !== 'sending') {
+        return { ...none, notice: SEND_UNANSWERED, tokenRefusal };
+    }
+
+    return { ...none, tokenRefusal };
 }

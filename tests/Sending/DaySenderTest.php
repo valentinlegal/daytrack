@@ -2,6 +2,7 @@
 
 namespace App\Tests\Sending;
 
+use App\Database\LockedTransaction;
 use App\Day\DayReader;
 use App\Day\StaleDay;
 use App\Day\UserCalendar;
@@ -77,6 +78,7 @@ final class DaySenderTest extends WebTestCase
         $container = static::getContainer();
         $sender = new DaySender(
             $container->get(EntityManagerInterface::class),
+            $container->get(LockedTransaction::class),
             $container->get(DayRepository::class),
             $container->get(DaySendRepository::class),
             $container->get(JiraLink::class),
@@ -134,6 +136,7 @@ final class DaySenderTest extends WebTestCase
         $store = new MemoryStore();
         $sender = new DaySender(
             $container->get(EntityManagerInterface::class),
+            $container->get(LockedTransaction::class),
             $container->get(DayRepository::class),
             $container->get(DaySendRepository::class),
             $container->get(JiraLink::class),

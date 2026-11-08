@@ -5,19 +5,23 @@ import { CheckIcon, ErrorIcon, RetryIcon, SendIcon, UnverifiedIcon } from '../co
 import { Popover } from '../components/Popover';
 import { tokenPixels } from '../components/tokenPixels';
 import type { SendStatus } from '../grid/send';
+import { isTokenRefusal } from '../jira/jiraStatus';
 import { tintOf } from '../jira/ticketInfo';
 import { useJiraState, useTickets } from '../jira/TicketsContext';
 import { duration } from './format';
 import {
+    detailHead,
+    fateLabel,
+    fateMark,
     fateOf,
     resultHead,
     resultTitle,
     RETRY_LABEL,
     SEND_LABEL,
+    type SendLineText,
     type SendRow,
     sendSubtitle,
     type SendWindowKind,
-    type TicketFate,
     ticketLine,
 } from './sendView';
 import { TicketChip } from './TicketChip';
@@ -58,12 +62,13 @@ export function SendWindow({
 }) {
     // « Mettre à jour le jeton » tant que Jira le refuse ; remplacé depuis, on réessaie.
     const jira = useJiraState();
-    const tokenRefused = jira === 'refused' || jira === 'missing_scope';
+    const tokenRefused = isTokenRefusal(jira);
     // Le curseur entre dans la fenêtre, sur son premier bouton du pied : « Annuler » dans
     // la confirmation, pour qu'une Entrée répétée n'envoie jamais rien, « Fermer » ailleurs.
     const firstRef = useRef<HTMLButtonElement>(null);
     const title = kind === 'confirm' ? SEND_LABEL : kind === 'detail' ? 'Envoyé sur Jira' : resultTitle(status);
     const head = resultHead(rows, status, tokenRefused);
+    const detail = detailHead(rows);
 
     return (
         <Popover
@@ -126,7 +131,7 @@ export function SendWindow({
             )}
             {kind === 'detail' && (
                 <>
-                    <p className="text-sm leading-(--lh) text-ink-2">Ces heures sont dans Jira pour ce jour.</p>
+                    {detail !== null && <p className="text-sm leading-(--lh) text-ink-2">{detail}</p>}
                     <SendList rows={rows.map((row) => ({ ...row, failure: null }))} worked={worked} kind="detail" />
                 </>
             )}
@@ -203,34 +208,36 @@ function SendLine({ row, kind, reason }: { row: SendRow; kind: SendWindowKind; r
             <TicketChip ticket={row.ticket} />
             <span className="min-w-0 truncate text-sm text-ink-2">{info?.title ?? ''}</span>
             <span className="justify-self-end font-mono text-sm text-ink">{duration(row.minutes)}</span>
-            {line !== null && (
-                <span className={`send-why basis-full text-sm ${line.soft ? 'text-ink-2' : 'text-inc'}`}>
-                    {line.text}
-                </span>
-            )}
+            {line !== null && <span className={`send-why basis-full text-sm ${TONES[line.tone]}`}>{line.text}</span>}
         </li>
     );
 }
 
-/** La marque d'un ticket : la coche, l'icône d'erreur, ou le « ? » de ce que DayTrack n'a pas pu relire. */
+/** Le ton d'une ligne : un refus en rouge, un avertissement en couleur du texte, le reste discret. */
+const TONES: Record<SendLineText['tone'], string> = {
+    error: 'text-inc',
+    soft: 'text-ink-2',
+    warning: 'text-ink',
+};
+
+/**
+ * La marque d'un ticket : la coche, l'icône d'erreur, le « ? » de ce que DayTrack n'a pas
+ * pu relire, ou l'avertissement d'un ticket que Jira ne trouve plus.
+ */
 function FateMark({ row }: { row: SendRow }) {
-    const fate = fateOf(row.failure, row.inJira);
+    const fate = fateOf(row.failure, row.inJira, row.vanished);
+    const mark = fateMark(fate);
 
     return (
         <span className="flex w-4 flex-none items-center justify-center">
-            {fate === 'sent' ? <CheckIcon /> : fate === 'unverified' ? <UnverifiedIcon /> : <ErrorIcon />}
+            {mark === 'ok' ? (
+                <CheckIcon />
+            ) : mark === 'unverified' ? (
+                <UnverifiedIcon />
+            ) : (
+                <ErrorIcon tone={mark === 'warning' ? 'warning' : 'error'} />
+            )}
             <span className="sr-only">{fateLabel(fate, row.removed === true)}</span>
         </span>
     );
-}
-
-function fateLabel(fate: TicketFate, removed: boolean): string {
-    if (fate === 'unverified') {
-        return 'Non vérifié';
-    }
-    if (removed) {
-        return fate === 'sent' ? 'Retiré de Jira' : 'Encore dans Jira';
-    }
-
-    return fate === 'sent' ? 'Envoyé' : fate === 'partial' ? 'Envoyé en partie' : 'Non envoyé';
 }

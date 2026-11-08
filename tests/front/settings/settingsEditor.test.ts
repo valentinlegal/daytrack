@@ -1,8 +1,9 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
+import { UNSAVED } from '../../../assets/serverApi';
 import type { Settings, SettingsApi, SettingsResult } from '../../../assets/settings/settingsApi';
-import { SettingsEditor, UNSAVED } from '../../../assets/settings/settingsEditor';
+import { SettingsEditor } from '../../../assets/settings/settingsEditor';
 import { type Tint, TINTS } from '../../../assets/settings/tints';
 
 const STORY = '0199a3c4-5b6d-7e8f-9a0b-1c2d3e4f5a6b';

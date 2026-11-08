@@ -82,6 +82,14 @@ export function DayGrid({
     // Nouveau ticket sur une plage vide dessine le créneau visé ; sur une sélection déjà
     // saisie, ou en plusieurs morceaux, la sélection reste dessinée.
     const aimed = target !== null && grid !== null && aimsAtEmptyRange(grid, target) ? quartersOf(target) : null;
+    // Modifier le ticket entoure son bloc, et Nouveau ticket sur une plage vide la dessine en
+    // pointillé : leur sélection, prise à l'ouverture, ne se dessine pas en plus. Une autre —
+    // un glisser ailleurs, qui ne ferme la fenêtre qu'au relâcher, les flèches pendant
+    // qu'elle s'enregistre — se dessine, fenêtre ouverte ou non.
+    const selectionShownByWindow =
+        target !== null &&
+        (target.kind === 'edit' || aimed !== null) &&
+        selection.quarters.join() === quartersOf(target).join();
     // Le créneau atteint n'est désigné que s'il est sélectionné : son cadre montre alors
     // où est le curseur. Sans lui — après Échap —, la liste porte son propre anneau au
     // clavier ; venu du pointeur, rien ne se dessine.
@@ -147,7 +155,7 @@ export function DayGrid({
                             {now !== null && now >= Quarter.FIRST && now < Quarter.DAY_END && (
                                 <div
                                     aria-hidden="true"
-                                    className={`now-line ${rows(now - (now % Quarter.MINUTES), now - (now % Quarter.MINUTES) + Quarter.MINUTES)} now-at-${String(now % Quarter.MINUTES)}`}
+                                    className={`now-line ${rows(Quarter.floor(now), Quarter.floor(now) + Quarter.MINUTES)} now-at-${String(now % Quarter.MINUTES)}`}
                                 />
                             )}
                             {/* Une fenêtre encore ouverte sur une grille qui vient de se fermer — le jour
@@ -181,11 +189,10 @@ export function DayGrid({
                                         )}
                                     </div>
                                 )}
-                            {/* La sélection, d'un seul cadre par suite de créneaux ; la fenêtre
-                                ouverte la remplace par ce qu'elle vise. */}
+                            {/* La sélection, d'un seul cadre par suite de créneaux. */}
                             {/* Une grille fermée n'a pas de sélection, pas même celle d'avant sa fermeture. */}
                             {!closed &&
-                                (target === null || (target.kind !== 'edit' && aimed === null)) &&
+                                !selectionShownByWindow &&
                                 selectionRuns(selection).map((run) => (
                                     <div
                                         key={run.start}
@@ -219,6 +226,7 @@ export function DayGrid({
                                 className={`pointer-events-none col-start-1 row-span-full grid grid-rows-subgrid focus-visible:-outline-offset-(--ring) ${head === null && !editing.pointerCursor ? '' : 'outline-none'}`}
                                 onKeyDown={editing.onListboxKeyDown}
                                 onFocus={editing.onListboxFocus}
+                                onBlur={editing.onListboxBlur}
                             >
                                 {Quarter.all().map((quarter) => (
                                     <div
@@ -226,7 +234,9 @@ export function DayGrid({
                                         id={optionId(quarter)}
                                         role="option"
                                         aria-selected={isSelected(selection, quarter)}
-                                        className={rows(quarter, quarter + Quarter.MINUTES)}
+                                        // Amené au clavier, le créneau se montre avec la marge de la
+                                        // grille : 07:00 se lit entière sous la barre.
+                                        className={`${rows(quarter, quarter + Quarter.MINUTES)} scroll-my-3`}
                                     >
                                         <span className="sr-only">
                                             {optionLabel(quarter, grid?.at(quarter) ?? null)}
@@ -274,8 +284,8 @@ function BlockItem({ block, ringed }: { block: Block; ringed: boolean }) {
                 className={`${place} flex items-center justify-center gap-3 overflow-hidden rounded-1 border border-pause-hatch bg-pause-bg pr-3 pl-2 pause-hatch`}
             >
                 <span className="sr-only">{range}</span>
-                <span className="inline-flex h-row items-center gap-2 rounded-pill border border-pause-hatch bg-bg px-3 text-sm font-medium text-pause-ink">
-                    <CupIcon />
+                <span className="inline-flex h-5 items-center gap-1 rounded-pill border border-pause-hatch bg-bg px-2 text-sm font-medium text-pause-ink">
+                    <CupIcon small />
                     Pause
                     <span className="font-mono text-ink-3 tabular-nums">{duration(end - start)}</span>
                 </span>
@@ -286,11 +296,12 @@ function BlockItem({ block, ringed }: { block: Block; ringed: boolean }) {
     const twoLines = end - start >= TWO_LINES;
     const info = tickets.get(content.ticket);
     const title = info?.title ?? null;
-    // Une ligne par quart d'heure : le commentaire qui revient à la ligne prend --h-row
-    // par ligne. Le titre, venu de Jira, prend la première ligne ; tant que Jira ne l'a
-    // pas donné, le commentaire prend sa place et toutes les lignes du bloc, en --ink-2
-    // quelle que soit la taille du bloc. La teinte est celle de son type, le gris tant
-    // que Jira ne l'a pas décrit.
+    // Une ligne par quart d'heure, centrée sur lui : le commentaire qui revient à la ligne
+    // prend --h-row par ligne. Le titre, venu de Jira, prend la première ligne ; tant que
+    // Jira ne l'a pas donné, le commentaire prend sa place et toutes les lignes du bloc,
+    // remonté de --s-half — l'air et le bord du bloc —, en --ink-2 quelle que soit la
+    // taille du bloc. La teinte est celle de son type, le gris tant que Jira ne l'a pas
+    // décrit.
     const lines = (end - start) / Quarter.MINUTES;
     const comment = content.comment;
     const type = info?.type ?? null;
@@ -315,7 +326,7 @@ function BlockItem({ block, ringed }: { block: Block; ringed: boolean }) {
                 {title === null ? (
                     comment !== null && (
                         <span
-                            className={`min-w-0 text-ink-2 ${twoLines ? `leading-(--h-row) wrap-break-word line-clamp-${String(lines)}` : 'overflow-hidden text-ellipsis whitespace-nowrap'}`}
+                            className={`min-w-0 text-ink-2 ${twoLines ? `-mt-(--s-half) leading-(--h-row) wrap-break-word line-clamp-${String(lines)}` : 'overflow-hidden text-ellipsis whitespace-nowrap'}`}
                         >
                             {comment}
                         </span>

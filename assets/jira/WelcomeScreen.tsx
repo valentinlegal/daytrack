@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/Button';
+import { GeneralError } from '../components/Field';
 import { StackedLogo } from '../components/icons';
+import { UNSAVED } from '../serverApi';
 import type { JiraApi, JiraConnection } from './jiraApi';
 import {
     ConnectedLine,
     fieldErrorsOf,
     firstRefused,
-    GeneralError,
     type JiraField,
     type JiraFieldErrors,
     JiraFields,
     NO_FIELD_ERRORS,
-    UNSENT,
 } from './JiraFields';
 
 /**
@@ -81,7 +81,7 @@ export function WelcomeScreen({ api, onLinked }: { api: JiraApi; onLinked: (conn
                 refuse(fieldErrorsOf(result.violations));
             }
         } catch {
-            setGeneral(UNSENT);
+            setGeneral(UNSAVED);
         } finally {
             pendingRef.current = false;
             setPending(null);

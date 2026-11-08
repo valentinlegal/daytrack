@@ -108,6 +108,31 @@ export function FieldError({ id, error }: { id: string; error: string }) {
 }
 
 /**
+ * Ce qui ne tient à aucun champ — le serveur n'a pas répondu, une lecture a échoué —, dit
+ * dès son apparition, sur tous les écrans. Sous ce qu'il visait, comme le refus sous un
+ * champ ; ou, `instead`, au milieu de ce qui ne se lit pas, à sa place. `className` ne
+ * règle que sa place dans ce qui l'entoure.
+ */
+export function GeneralError({
+    message,
+    instead = false,
+    className,
+}: {
+    message: string;
+    instead?: boolean;
+    className?: string;
+}) {
+    const look = instead ? 'absolute inset-0 m-auto flex h-fit w-fit items-center gap-2 font-medium' : FIELD_MESSAGE;
+
+    return (
+        <p role="alert" className={[look, 'text-inc', className].filter(Boolean).join(' ')}>
+            <ErrorIcon />
+            {message}
+        </p>
+    );
+}
+
+/**
  * L'avertissement sous un champ : le texte reste en --ink-2, seule l'icône passe en
  * --warn, qui n'a pas le contraste d'un texte de 12 px.
  */

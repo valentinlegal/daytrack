@@ -91,6 +91,7 @@ export function Popover({
     children,
 }: PopoverProps) {
     const titleId = useId();
+    const subtitleId = useId();
     const outside = (event: Event) => {
         event.preventDefault();
         if (!sending) {
@@ -111,6 +112,9 @@ export function Popover({
                     alignOffset={alignOffset}
                     collisionPadding={tokenPixels('--s-2')}
                     aria-labelledby={titleId}
+                    // Le sous-titre — le jour et les heures, la taille d'une sélection — se lit
+                    // à l'ouverture, après le titre, comme il se voit dessous.
+                    aria-describedby={subtitle === undefined ? undefined : subtitleId}
                     data-sending={sending ? '' : undefined}
                     className={`${WIDTHS[width]} ${overRecap ? 'z-(--z-toast)' : 'z-(--z-pop)'} rounded-3 border border-line bg-bg-raise text-ink shadow-pop`}
                     onOpenAutoFocus={(event) => {
@@ -137,7 +141,11 @@ export function Popover({
                             <h2 id={titleId} className="text-lg font-bold">
                                 {title}
                             </h2>
-                            {subtitle !== undefined && <p className="mt-1 text-sm text-ink-3">{subtitle}</p>}
+                            {subtitle !== undefined && (
+                                <p id={subtitleId} className="mt-1 text-sm text-ink-3">
+                                    {subtitle}
+                                </p>
+                            )}
                         </div>
                         <Button
                             variant="ghost"

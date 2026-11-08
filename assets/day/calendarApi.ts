@@ -1,5 +1,6 @@
 import { readWeekdays } from '../grid/day';
 import { isRecord } from '../grid/json';
+import { serverApi } from '../serverApi';
 import { isDate } from './calendar';
 
 /**
@@ -30,18 +31,12 @@ export interface CalendarApi {
     marks(from: string, to: string): Promise<CalendarMonth>;
 }
 
-export function httpCalendarApi(fetcher: typeof fetch = (input, init) => fetch(input, init)): CalendarApi {
-    return {
-        async marks(from, to) {
-            const response = await fetcher(`/api/calendar/${encodeURIComponent(from)}/${encodeURIComponent(to)}`, {
-                headers: { Accept: 'application/json' },
-            });
-            if (response.status !== 200) {
-                throw new Error(`L'API a répondu ${String(response.status)} pour le calendrier.`);
-            }
+export function httpCalendarApi(fetcher?: typeof fetch): CalendarApi {
+    const server = serverApi(fetcher);
 
-            return readMonth(await response.json());
-        },
+    return {
+        marks: (from, to) =>
+            server.read(`/api/calendar/${encodeURIComponent(from)}/${encodeURIComponent(to)}`, readMonth),
     };
 }
 

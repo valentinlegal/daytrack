@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 
-import { type Entry, startTimeAt, weekday, writeDay } from './day';
+import { clearDay, type Entry, startTimeAt, weekday, writeDay } from './day';
 import { doubleClickSlot, savedDay, ticketWindow } from './editing';
 import { expect, refusedWith, test } from './fixtures';
 import { AVAILABLE, updateButton, updateWindow } from './version';
@@ -31,6 +31,15 @@ test.beforeAll(async ({ playwright }) => {
         ignoreHTTPSErrors: true,
     });
     await writeDay(request, DATE, ENTRIES);
+    await request.dispose();
+});
+
+test.afterAll(async ({ playwright }) => {
+    const request = await playwright.request.newContext({
+        baseURL: process.env.DAYTRACK_URL ?? 'https://localhost:8443',
+        ignoreHTTPSErrors: true,
+    });
+    await clearDay(request, DATE);
     await request.dispose();
 });
 
@@ -254,7 +263,6 @@ test.describe('avec une nouvelle version', () => {
         await expect(updateWindow(page)).toBeVisible();
         await expect(ticketWindow(page)).toHaveCount(0);
         expect(await savedDay(request, TICKET_DATE)).toHaveLength(1);
-        await writeDay(request, TICKET_DATE, []);
     });
 
     test.describe('à côté d’un ticket refusé', () => {

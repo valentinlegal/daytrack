@@ -3,6 +3,17 @@ import type { CheckResult, JiraApi, JiraConnection, TokenRefusal } from './jiraA
 /** Où en est la connexion à Jira, telle que la page le dit (data-jira). */
 export type JiraState = 'unlinked' | 'connected' | TokenRefusal;
 
+/**
+ * Jira refuse-t-il le jeton : expiré, révoqué, ou un périmètre qui manque ? Le seul endroit
+ * qui le dit, pour l'état de la page, un envoi ou une vérification.
+ */
+export function isTokenRefusal(value: unknown): value is TokenRefusal {
+    return value === 'refused' || value === 'missing_scope';
+}
+
+/** Ce que dit tout l'écran d'un jeton qui ne passe plus, quand Jira ne nomme pas de périmètre. */
+export const TOKEN_EXPIRED = 'Jira refuse le jeton enregistré, il a sans doute expiré.';
+
 export interface JiraStatusSnapshot {
     readonly state: JiraState;
     /** Les périmètres qui manquent au jeton, quand c'est ce que Jira lui reproche. */
@@ -55,7 +66,7 @@ export class JiraStatus {
     checked({ status, missingScopes }: CheckResult): void {
         if (status === 'connected') {
             this.set({ state: 'connected', missingScopes: [] });
-        } else if (status === 'refused' || status === 'missing_scope') {
+        } else if (isTokenRefusal(status)) {
             this.set({ state: status, missingScopes: status === 'missing_scope' ? missingScopes : [] });
         }
     }
@@ -111,8 +122,7 @@ export class JiraStatus {
 
 /** L'état que la page porte (templates/app.html.twig) ; une valeur inconnue se lit « pas relié ». */
 export function readJiraStatus(state: string | undefined, scopes: string | undefined): JiraStatusSnapshot {
-    const known: JiraState =
-        state === 'connected' || state === 'refused' || state === 'missing_scope' ? state : 'unlinked';
+    const known: JiraState = state === 'connected' || isTokenRefusal(state) ? state : 'unlinked';
 
     return {
         state: known,

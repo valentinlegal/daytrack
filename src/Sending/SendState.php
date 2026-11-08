@@ -56,7 +56,9 @@ enum SendState: string
         }
 
         // Une journée vidée après un envoi a encore des heures dans Jira : elle se renvoie.
-        if ([] === $worklogs && [] === ($send->touched ?? [])) {
+        // Vidée et envoyée, mais Jira ne trouvait plus un de ses tickets : elle reste
+        // envoyée, pour que son détail le redise.
+        if ([] === $worklogs && [] === ($send->touched ?? []) && [] === ($send?->vanished() ?? [])) {
             return self::Nothing;
         }
 

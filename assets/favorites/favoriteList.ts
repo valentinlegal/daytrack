@@ -1,4 +1,4 @@
-import type { Violation } from '../grid/daySession';
+import type { Violation } from '../serverApi';
 import { normalizeComment, normalizeTicket } from '../grid/grid';
 import { type Favorite, moved } from './favorites';
 import type { FavoritesApi, FavoritesResult } from './favoritesApi';

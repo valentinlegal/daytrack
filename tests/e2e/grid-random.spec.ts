@@ -1,9 +1,30 @@
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext, Page, Route } from '@playwright/test';
 import fc from 'fast-check';
 
-import { clearDay, writeDay } from './day';
+import { writeDay } from './day';
 import { clickSlot, doubleClickSlot, dragSlots, expectGridMatchesBase, savedDay, slots } from './editing';
 import { expect, test } from './fixtures';
+import {
+    blockOf,
+    canPause,
+    type Cell,
+    cellAt,
+    change,
+    copy,
+    cut,
+    editTitle,
+    emptyModel,
+    enterQuarters,
+    fill,
+    labelsOf,
+    type Model,
+    paste,
+    QUARTERS,
+    rangeOf,
+    retouched,
+    rewind,
+    time,
+} from './gridModel';
 
 /**
  * Des suites de gestes tirées au hasard, jouées dans Chromium comme quelqu'un qui se
@@ -11,13 +32,15 @@ import { expect, test } from './fixtures';
  * bloc, en changer le commentaire ou l'effacer par Modifier la sélection, glisser puis
  * coller ou saisir sur la plage, effacer, couper, convertir en pause,
  * copier et coller — un groupe avec ses trous compris —, supprimer, vider le ticket d'un
- * bloc, annuler et rétablir.
+ * bloc, annuler et rétablir. Et un geste fait aussitôt après avoir quitté une fenêtre que
+ * Jira retient : la fenêtre s'enregistre d'abord, le geste ensuite.
  *
- * Un modèle écrit ici, sans rien emprunter à l'application, dit ce que chaque geste doit
- * laisser. Après chaque geste, la base contient exactement ce que le modèle attend, et la
- * grille affiche exactement ce que la base contient.
+ * Un modèle écrit sans rien emprunter à l'application dit ce que chaque geste doit laisser
+ * (gridModel.ts). Après chaque geste, la base contient exactement ce que le modèle attend, et
+ * la grille affiche exactement ce que la base contient.
  *
- * Les gestes se concentrent sur une matinée, pour qu'ils se chevauchent souvent.
+ * L'ordre des gestes qui se croisent s'éprouve par milliers sans navigateur
+ * (tests/front/day/gridRandom.test.tsx) : ici, quelques tirages prouvent l'écran réel.
  * Une suite qui échoue affiche sa graine ; `-e FC_SEED=…` la rejoue à l'identique, et
  * `-e FC_RUNS=40` en tire davantage.
  */
@@ -25,96 +48,10 @@ import { expect, test } from './fixtures';
 /** Un jour à lui, à l'écart des autres parcours. */
 const DATE = '2025-12-29';
 
-/** 08:00 à 11:45 : seize quarts d'heure. */
-const QUARTERS = Array.from({ length: 16 }, (_, index) => 480 + index * 15);
-const LAST = QUARTERS.at(-1) ?? 705;
-
-function time(minutes: number): string {
-    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-}
-
 function minutesOf(hhmm: string): number {
     const [hours = 0, minutes = 0] = hhmm.split(':').map(Number);
 
     return hours * 60 + minutes;
-}
-
-/** Ce qu'un quart d'heure contient pour le modèle : « SHOP-1|Revue », « SHOP-1| », « pause », ou rien. */
-type Cell = string | null;
-
-interface Model {
-    cells: Map<number, Cell>;
-    undo: Map<number, Cell>[];
-    redo: Map<number, Cell>[];
-    clipboard: Cell[] | null;
-}
-
-function emptyModel(): Model {
-    return { cells: new Map(), undo: [], redo: [], clipboard: null };
-}
-
-function cellAt(model: Model, quarter: number): Cell {
-    return model.cells.get(quarter) ?? null;
-}
-
-/** Un geste qui change la grille se range pour être annulé ; un geste qui ne change rien, non. */
-function change(model: Model, changes: Map<number, Cell>): void {
-    const next = new Map(model.cells);
-    let changed = false;
-    for (const [quarter, cell] of changes) {
-        changed ||= cellAt(model, quarter) !== cell;
-        next.set(quarter, cell);
-    }
-    if (changed) {
-        model.undo.push(model.cells);
-        model.redo = [];
-        model.cells = next;
-    }
-}
-
-function rangeOf(at: number, length: number): number[] {
-    return QUARTERS.filter((quarter) => quarter >= at && quarter <= Math.min(at + (length - 1) * 15, LAST));
-}
-
-/** Le bloc qui couvre un quart d'heure : ses voisins au même contenu. */
-function blockOf(model: Model, quarter: number): number[] {
-    const cell = cellAt(model, quarter);
-    let start = quarter;
-    while (start > 420 && cellAt(model, start - 15) === cell) {
-        start -= 15;
-    }
-    let end = quarter;
-    while (end < 1185 && cellAt(model, end + 15) === cell) {
-        end += 15;
-    }
-    const block: number[] = [];
-    for (let minute = start; minute <= end; minute += 15) {
-        block.push(minute);
-    }
-
-    return block;
-}
-
-function fill(quarters: readonly number[], cell: Cell): Map<number, Cell> {
-    return new Map(quarters.map((quarter) => [quarter, cell]));
-}
-
-/** Ce que la liste des créneaux dit de chaque quart d'heure : « 09:30, SHOP-1, Revue ». */
-function labelsOf(cells: Map<number, Cell>): string[] {
-    const labels: string[] = [];
-    for (let minute = 420; minute < 1200; minute += 15) {
-        const cell = cells.get(minute) ?? null;
-        if (cell === null) {
-            labels.push(`${time(minute)}, vide`);
-        } else if (cell === 'pause') {
-            labels.push(`${time(minute)}, pause`);
-        } else {
-            const [ticket = '', comment = ''] = cell.split('|');
-            labels.push([time(minute), ticket, comment].filter((part) => part !== '').join(', '));
-        }
-    }
-
-    return labels;
 }
 
 const range = fc.record({ at: fc.constantFrom(...QUARTERS), length: fc.integer({ min: 1, max: 4 }) });
@@ -146,7 +83,20 @@ type Gesture =
       }
     | { type: 'clear' | 'cut' | 'pause' | 'delete' | 'empty'; at: number; length: number }
     | { type: 'paste'; at: number; length: number; to: number }
-    | { type: 'undo' | 'redo' };
+    | { type: 'undo' | 'redo' }
+    /**
+     * Une fenêtre ouverte au double-clic sur `at`, un ticket que Jira n'a jamais vu tapé
+     * dedans ; puis la sélection d'une plage, dont le premier clic la quitte pendant que Jira
+     * cherche, et aussitôt le geste.
+     */
+    | {
+          type: 'hurried';
+          at: number;
+          to: number;
+          length: number;
+          comment: string;
+          then: 'clear' | 'cut' | 'paste' | 'undo';
+      };
 
 const gesture: fc.Arbitrary<Gesture> = fc.oneof(
     fc.tuple(range, ticket, comment).map(([r, t, c]) => ({ type: 'write' as const, ...r, ticket: t, comment: c })),
@@ -178,7 +128,18 @@ const gesture: fc.Arbitrary<Gesture> = fc.oneof(
     range.map((r) => ({ type: 'empty' as const, ...r })),
     fc.tuple(range, fc.constantFrom(...QUARTERS)).map(([r, to]) => ({ type: 'paste' as const, ...r, to })),
     fc.constantFrom({ type: 'undo' as const }, { type: 'redo' as const }),
+    fc
+        .tuple(
+            fc.constantFrom(...QUARTERS),
+            range,
+            comment,
+            fc.constantFrom('clear' as const, 'cut' as const, 'paste' as const, 'undo' as const),
+        )
+        .map(([at, r, c, then]) => ({ type: 'hurried' as const, at, to: r.at, length: r.length, comment: c, then })),
 );
+
+/** Un ticket que l'écran n'a jamais vu : Jira doit le chercher, et la fenêtre l'attendre. */
+let unseen = 7000;
 
 async function select(page: Page, quarters: readonly number[]) {
     const [first] = quarters;
@@ -202,10 +163,6 @@ async function type(page: Page, title: string, step: { ticket: string; comment: 
     await expect(dialog).toHaveCount(0);
 }
 
-function editTitle(model: Model, quarter: number): string {
-    return cellAt(model, quarter) === 'pause' ? 'Modifier la pause' : 'Modifier le ticket';
-}
-
 /**
  * Entrée sur la sélection : Nouveau ticket sur toute une plage vide, sinon la fenêtre du
  * créneau où la sélection s'arrête, comme un double-clic.
@@ -218,16 +175,10 @@ async function enterOn(
     step: { ticket: string; comment: string },
 ) {
     await page.keyboard.press('Enter');
-    if (quarters.every((quarter) => cellAt(model, quarter) === null)) {
-        await type(page, 'Nouveau ticket', step);
-        change(model, fill(quarters, `${step.ticket}|${step.comment}`));
-    } else if (cellAt(model, head) === null) {
-        await type(page, 'Nouveau ticket', step);
-        change(model, fill([head], `${step.ticket}|${step.comment}`));
-    } else {
-        await type(page, editTitle(model, head), step);
-        change(model, fill(blockOf(model, head), `${step.ticket}|${step.comment}`));
-    }
+    const written = enterQuarters(model, quarters, head);
+    const empty = written.every((quarter) => cellAt(model, quarter) === null);
+    await type(page, empty ? 'Nouveau ticket' : editTitle(model, head), step);
+    change(model, fill(written, `${step.ticket}|${step.comment}`));
 }
 
 /** La première lettre du ticket tapée sur la sélection : Nouveau ticket sur la sélection exacte. */
@@ -254,18 +205,7 @@ async function typeOn(
  */
 async function pasteOn(page: Page, model: Model, quarters: readonly number[]) {
     await page.keyboard.press('ControlOrMeta+V');
-    const { clipboard } = model;
-    const [first] = quarters;
-    if (clipboard === null || first === undefined) {
-        return;
-    }
-    const [single] = clipboard;
-    change(
-        model,
-        clipboard.length === 1
-            ? fill(quarters, single ?? null)
-            : new Map(clipboard.map((cell, offset) => [first + offset * 15, cell])),
-    );
+    paste(model, quarters);
 }
 
 /** Joue un geste dans le navigateur, et dit au modèle ce qu'il doit laisser. */
@@ -297,8 +237,8 @@ async function play(page: Page, model: Model, step: Gesture) {
             // commentaire ; ailleurs, le menu la grise et F2 dit pourquoi.
             const quarters = rangeOf(step.at, step.length);
             await select(page, quarters);
-            const first = cellAt(model, quarters[0] ?? step.at);
-            const open = first !== null && first !== 'pause' && quarters.every((q) => cellAt(model, q) === first);
+            const first = retouched(model, quarters);
+            const open = first !== null;
             if (step.by === 'menu') {
                 await page.keyboard.press('Shift+F10');
                 const item = page.getByRole('menuitem', { name: 'Modifier la sélection…' });
@@ -315,7 +255,7 @@ async function play(page: Page, model: Model, step: Gesture) {
                 await page.keyboard.press('F2');
             }
             const dialog = page.getByRole('dialog', { name: 'Modifier la sélection' });
-            if (!open) {
+            if (first === null) {
                 await expect(page.getByRole('dialog')).toHaveCount(0);
                 break;
             }
@@ -367,10 +307,7 @@ async function play(page: Page, model: Model, step: Gesture) {
             const quarters = rangeOf(step.at, step.length);
             await select(page, quarters);
             await page.keyboard.press('ControlOrMeta+X');
-            if (quarters.some((quarter) => cellAt(model, quarter) !== null)) {
-                model.clipboard = quarters.map((quarter) => cellAt(model, quarter));
-                change(model, fill(quarters, null));
-            }
+            cut(model, quarters);
             break;
         }
         case 'pause': {
@@ -379,7 +316,7 @@ async function play(page: Page, model: Model, step: Gesture) {
             await page.keyboard.press('Shift+F10');
             const item = page.getByRole('menuitem', { name: 'Convertir en pause' });
             await expect(item).toBeVisible();
-            if (quarters.some((quarter) => cellAt(model, quarter) !== 'pause')) {
+            if (canPause(model, quarters)) {
                 await expect(item).not.toHaveAttribute('aria-disabled', 'true');
                 await item.click();
                 change(model, fill(quarters, 'pause'));
@@ -424,29 +361,53 @@ async function play(page: Page, model: Model, step: Gesture) {
             const quarters = rangeOf(step.at, step.length);
             await select(page, quarters);
             await page.keyboard.press('ControlOrMeta+C');
-            // Une plage vide ne se copie pas : le presse-papier garde ce qu'il tenait.
-            if (quarters.some((quarter) => cellAt(model, quarter) !== null)) {
-                model.clipboard = quarters.map((quarter) => cellAt(model, quarter));
-            }
+            copy(model, quarters);
             await clickSlot(page, time(step.to));
             await page.keyboard.press('ControlOrMeta+V');
-            // Un groupe se colle en entier à partir du créneau choisi ; il ne déborde
-            // jamais d'ici, la matinée s'arrêtant bien avant 20:00.
-            if (model.clipboard !== null) {
-                change(model, new Map(model.clipboard.map((cell, offset) => [step.to + offset * 15, cell])));
+            paste(model, [step.to]);
+            break;
+        }
+        case 'hurried': {
+            unseen += 1;
+            const typed = `ESSAI-${String(unseen)}`;
+            const slow = async (route: Route) => {
+                await new Promise((resolve) => setTimeout(resolve, 400));
+                await route.fallback();
+            };
+            await page.route('**/api/tickets/*/lookup', slow);
+            const cell = cellAt(model, step.at);
+            await doubleClickSlot(page, time(step.at));
+            const dialog = page.getByRole('dialog', {
+                name: cell === null ? 'Nouveau ticket' : editTitle(model, step.at),
+            });
+            await dialog.getByLabel('Ticket').fill(typed);
+            await dialog.getByLabel('Commentaire').fill(step.comment);
+            const quarters = rangeOf(step.to, step.length);
+            await select(page, quarters);
+            // La fenêtre s'enregistre d'abord : sur son seul quart d'heure, ou sur tout son bloc.
+            change(model, fill(cell === null ? [step.at] : blockOf(model, step.at), `${typed}|${step.comment}`));
+            if (step.then === 'clear') {
+                await page.keyboard.press('Delete');
+                change(model, fill(quarters, null));
+            } else if (step.then === 'cut') {
+                await page.keyboard.press('ControlOrMeta+X');
+                cut(model, quarters);
+            } else if (step.then === 'paste') {
+                await pasteOn(page, model, quarters);
+            } else {
+                await page.keyboard.press('ControlOrMeta+Z');
+                rewind(model, 'undo');
             }
+            await expect(dialog).toHaveCount(0);
+            // Les routes des fixtures restent : seule celle-ci s'en va.
+            await page.unroute('**/api/tickets/*/lookup', slow);
             break;
         }
         case 'undo':
         case 'redo': {
             await slots(page).focus();
             await page.keyboard.press(step.type === 'undo' ? 'ControlOrMeta+Z' : 'ControlOrMeta+Shift+Z');
-            const [from, to] = step.type === 'undo' ? [model.undo, model.redo] : [model.redo, model.undo];
-            const previous = from.pop();
-            if (previous !== undefined) {
-                to.push(model.cells);
-                model.cells = previous;
-            }
+            rewind(model, step.type);
             break;
         }
     }
@@ -501,6 +462,4 @@ test('des gestes tirés au hasard laissent la base telle que le modèle l’atte
         }),
         { numRuns: Number(process.env.FC_RUNS ?? 4), endOnFailure: true, ...(seed === undefined ? {} : { seed }) },
     );
-
-    await clearDay(request, DATE);
 });

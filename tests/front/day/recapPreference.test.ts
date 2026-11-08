@@ -1,18 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { RECAP_STORAGE_KEY, readRecapOpen, writeRecapOpen } from '../../../assets/day/recapPreference';
+import { blockedStorage, memoryStorage } from '../grid/support';
 
-function storage(initial: Record<string, string> = {}) {
-    const values = new Map(Object.entries(initial));
+/** Le stockage tel que la préférence l'ouvre : à chaque lecture, le même. */
+const storage = (initial: Record<string, string> = {}) => {
+    const kept = memoryStorage({ initial });
 
-    return () => ({
-        getItem: (key: string) => values.get(key) ?? null,
-        setItem: (key: string, value: string) => values.set(key, value),
-    });
-}
-
-const blocked = () => {
-    throw new DOMException('Accès refusé', 'SecurityError');
+    return () => kept;
 };
 
 describe('le récapitulatif ouvert ou fermé', () => {
@@ -32,9 +27,9 @@ describe('le récapitulatif ouvert ou fermé', () => {
     });
 
     it('ne lève pas quand le navigateur refuse le stockage', () => {
-        expect(readRecapOpen(blocked)).toBeNull();
+        expect(readRecapOpen(blockedStorage)).toBeNull();
         expect(() => {
-            writeRecapOpen(blocked, true);
+            writeRecapOpen(blockedStorage, true);
         }).not.toThrow();
     });
 });

@@ -4,14 +4,18 @@ namespace App\Tests\V1;
 
 use App\Day\UserCalendar;
 use App\Dev\Jira\Catalog;
+use App\Entity\EmptyDayWatch;
 use App\Jira\JiraClient;
-use App\Jira\TokenCipher;
 use App\Tests\Support\DayApi;
 use App\Tests\Support\JiraApi;
 use App\Tests\Support\V1Base;
 use App\V1\V1Importer;
 use App\V1\V1ImportResult;
 use App\V1\V1Jira;
+use Doctrine\DBAL\ParameterType;
+use Doctrine\DBAL\Schema\Schema;
+use Doctrine\Migrations\Query\Query;
+use Doctrine\Migrations\Version\Version;
 use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -29,6 +33,7 @@ final class V1ImporterTest extends WebTestCase
     use JiraApi;
 
     private const string DAY = '2026-10-05';
+    private const string EMPTY_DAY_WATCH_REPAIR = 'DoctrineMigrations\Version20261106134806';
 
     /**
      * @return iterable<string, array{string}>
@@ -337,6 +342,81 @@ final class V1ImporterTest extends WebTestCase
         self::assertSame('2026-10-06 13:20:00', $this->connection()->fetchOne('SELECT since FROM empty_day_watch'));
     }
 
+    /**
+     * Le chemin d'une installation neuve : les migrations, toutes, puis la reprise. La v2 a
+     * démarré la semaine d'avant, et la base de la v1 n'est arrivée qu'ensuite.
+     */
+    public function testLaRepriseRepousseLePointDeDepartQueLesMigrationsOntPose(): void
+    {
+        $this->watchEmptyDaysAsMigrated('2026-09-30 07:00:00');
+        $this->migrate(self::EMPTY_DAY_WATCH_REPAIR);
+
+        $this->import(self::v1WithOneFullDay());
+
+        self::assertSame(['2026-10-05' => 'unsent'], $this->marks(), 'Les jours vides d\'avant la reprise ne se signalent pas.');
+        self::assertSame('2026-10-06 13:20:00', $this->connection()->fetchOne('SELECT since FROM empty_day_watch'));
+    }
+
+    /**
+     * Une installation reprise par la 2.0.0 : sa reprise visait un identifiant que Doctrine
+     * ne retrouvait pas, et les congés de la v1 se disaient « Incomplet ». La migration lui
+     * donne l'heure que la reprise aurait écrite, et Doctrine retrouve la ligne ensuite.
+     */
+    public function testLaMigrationRepareUneRepriseFaiteParLa200(): void
+    {
+        $this->watchEmptyDaysAsMigrated('2026-09-30 07:00:00');
+        $this->import(self::v1WithOneFullDay());
+        self::assertSame(
+            ['2026-10-01' => 'incomplete', '2026-10-02' => 'incomplete', '2026-10-05' => 'unsent'],
+            $this->marks(),
+            'L\'état que la 2.0.0 laissait : le point de départ n\'avait pas bougé.',
+        );
+
+        $this->migrate(self::EMPTY_DAY_WATCH_REPAIR);
+
+        self::assertSame(['2026-10-05' => 'unsent'], $this->marks());
+        self::assertSame('2026-10-06 13:20:00', $this->connection()->fetchOne('SELECT since FROM empty_day_watch'));
+        $watch = static::getContainer()->get(EntityManagerInterface::class)->getRepository(EmptyDayWatch::class)->findOneBy([]);
+        self::assertNotNull($watch);
+        $watch->notBefore(new \DateTimeImmutable('2026-10-07 08:00:00 UTC'));
+        static::getContainer()->get(EntityManagerInterface::class)->flush();
+        self::assertSame('2026-10-07 08:00:00', $this->connection()->fetchOne('SELECT since FROM empty_day_watch'), 'Doctrine retrouve la ligne.');
+    }
+
+    /**
+     * Une installation reprise avant que le point de départ n'existe : la migration qui
+     * l'apporte l'a posé après la reprise, et il y reste.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function watchesFromTheImportOn(): iterable
+    {
+        yield 'à l\'heure de la reprise' => ['2026-10-06 13:20:00'];
+        yield 'après elle' => ['2026-10-07 07:00:00'];
+    }
+
+    #[DataProvider('watchesFromTheImportOn')]
+    public function testLaMigrationNeReculeJamaisLePointDeDepart(string $since): void
+    {
+        $this->watchEmptyDaysAsMigrated($since);
+        $this->import(self::v1WithOneFullDay());
+
+        $this->migrate(self::EMPTY_DAY_WATCH_REPAIR);
+
+        self::assertSame($since, $this->connection()->fetchOne('SELECT since FROM empty_day_watch'));
+        self::assertSame('text', $this->connection()->fetchOne('SELECT typeof(id) FROM empty_day_watch'));
+    }
+
+    public function testSansRepriseLaMigrationNeDeplacePasLePointDeDepart(): void
+    {
+        $this->watchEmptyDaysAsMigrated('2026-09-30 07:00:00');
+
+        $this->migrate(self::EMPTY_DAY_WATCH_REPAIR);
+
+        self::assertSame('2026-09-30 07:00:00', $this->connection()->fetchOne('SELECT since FROM empty_day_watch'));
+        self::assertSame('text', $this->connection()->fetchOne('SELECT typeof(id) FROM empty_day_watch'));
+    }
+
     public function testUneInstallationQuiASesDonneesNeSeMelePas(): void
     {
         $this->write(0, [self::work('09:00', '09:15', 'OPS-12')], self::DAY);
@@ -589,9 +669,57 @@ final class V1ImporterTest extends WebTestCase
         return new V1Importer($entityManager, $this->cipher(), $jira, $calendar, $clock ?? Clock::get(), $path);
     }
 
-    private function cipher(): TokenCipher
+    /** Une journée pleine le lundi : le jeudi et le vendredi d'avant restent vides, comme des congés. */
+    private static function v1WithOneFullDay(): V1Base
     {
-        return static::getContainer()->get(TokenCipher::class);
+        $v1 = new V1Base();
+        $v1->entry($v1->day(self::DAY), self::DAY, '09:00', '16:30', 'SHOP-482');
+
+        return $v1;
+    }
+
+    /**
+     * Le point de départ tel que la migration qui l'apporte l'écrit, identifiant compris, mis
+     * ensuite à l'heure dite.
+     */
+    private function watchEmptyDaysAsMigrated(string $since): void
+    {
+        $this->connection()->executeStatement('DELETE FROM empty_day_watch');
+        foreach ($this->migrationSql('DoctrineMigrations\Version20261102094431') as $query) {
+            if (str_starts_with($query->getStatement(), 'INSERT')) {
+                $this->execute($query);
+            }
+        }
+        $this->connection()->executeStatement('UPDATE empty_day_watch SET since = ?', [$since]);
+        self::assertSame('blob', $this->connection()->fetchOne('SELECT typeof(id) FROM empty_day_watch'));
+    }
+
+    private function migrate(string $migration): void
+    {
+        foreach ($this->migrationSql($migration) as $query) {
+            $this->execute($query);
+        }
+    }
+
+    /**
+     * @return array<Query>
+     */
+    private function migrationSql(string $migration): array
+    {
+        $planned = static::getContainer()->get('doctrine.migrations.dependency_factory')->getMigrationRepository()->getMigration(new Version($migration))->getMigration();
+        $planned->up(new Schema());
+
+        return $planned->getSql();
+    }
+
+    /** Une requête de migration, avec ses valeurs et leurs types, comme Doctrine Migrations la joue. */
+    private function execute(Query $query): void
+    {
+        $parameters = $query->getParameters();
+        $types = array_map(static fn (mixed $type): ParameterType|string => $type instanceof ParameterType || \is_string($type) ? $type : throw new \LogicException('Un type de valeur inattendu.'), $query->getTypes());
+        self::assertIsList($parameters);
+        self::assertIsList($types);
+        $this->connection()->executeStatement($query->getStatement(), $parameters, $types);
     }
 
     private function sendState(string $date): mixed

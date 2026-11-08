@@ -1,6 +1,7 @@
 import type { SlotChange } from '../../../assets/grid/changes';
 import { type DayState, readDay } from '../../../assets/grid/day';
-import type { DayApi, SendResult, Violation, WriteResult } from '../../../assets/grid/daySession';
+import type { DayApi, SendResult, WriteResult } from '../../../assets/grid/daySession';
+import type { Violation } from '../../../assets/serverApi';
 
 /**
  * Un serveur des journées en mémoire, aussi strict que le vrai (src/Controller/Api/
@@ -48,6 +49,7 @@ const NOTHING_TO_SEND = {
     inJira: {},
     outcomes: {},
     removed: [],
+    vanished: [],
 };
 
 const FIRST = 420;

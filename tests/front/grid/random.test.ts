@@ -289,14 +289,18 @@ describe('des suites de gestes tirées au hasard', () => {
                             break;
                         case 'copy':
                         case 'cut': {
+                            // Une plage vide ne se copie pas : le presse-papier garde ce qu'il tenait.
                             const first = selection.quarters[0];
-                            if (first !== undefined) {
+                            const filled = selection.quarters.some(
+                                (quarter) => (model().cells[index(quarter)] ?? null) !== null,
+                            );
+                            if (first !== undefined && filled) {
                                 modelClipboard = selection.quarters.map(
                                     (quarter) => [quarter - first, model().cells[index(quarter)] ?? null] as const,
                                 );
                             }
                             if (step.type === 'copy') {
-                                expect((await session.copy(selection)) === null).toBe(first === undefined);
+                                expect((await session.copy(selection)) === null).toBe(!filled);
                             } else {
                                 count(await session.cut(selection));
                                 modelApply(model(), fill(selection.quarters, null));

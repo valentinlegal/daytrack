@@ -1,27 +1,18 @@
-import { type ReactNode, type RefObject, useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/Button';
-import { Field } from '../components/Field';
-import {
-    ArrowDownIcon,
-    ArrowUpIcon,
-    ErrorIcon,
-    GearIcon,
-    GripIcon,
-    PencilIcon,
-    PlusIcon,
-    TrashIcon,
-} from '../components/icons';
+import { Field, GeneralError } from '../components/Field';
+import { ArrowDownIcon, ArrowUpIcon, GearIcon, GripIcon, PencilIcon, PlusIcon, TrashIcon } from '../components/icons';
+import { fromKeyboard } from '../components/keyboardMenu';
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from '../components/Menu';
 import { Tooltip } from '../components/Tooltip';
 import type { Favorite } from '../favorites/favorites';
 import { moved } from '../favorites/favorites';
-import { lookupWarning, TICKET_NOT_FOUND } from '../jira/lookupMessages';
 import { tintOf } from '../jira/ticketInfo';
 import { useTickets } from '../jira/TicketsContext';
-import { NO_CHECK, useTicketLookup } from '../jira/useTicketLookup';
-import { altLabel, DELETE_KEYS, deleteLabel } from './shortcuts';
+import { menuShortcut } from './shortcuts';
 import { TicketChip } from './TicketChip';
+import { ignoreHeldEnter, saveOnEnter, TicketField, useTicketField } from './TicketField';
 import type { FavoriteForm, Favorites } from './useFavorites';
 
 /**
@@ -98,6 +89,7 @@ export function FavoritesColumn({
                         aria-label="Ajouter un favori"
                         aria-expanded={adding}
                         className="aria-expanded:border-bg-press aria-expanded:bg-bg-press aria-expanded:text-ink"
+                        onKeyDown={ignoreHeldEnter}
                         onClick={favorites.openAdd}
                     >
                         <PlusIcon />
@@ -136,10 +128,7 @@ export function FavoritesColumn({
                 )}
             </FadingList>
             {snapshot.failed && (
-                <p role="alert" className="flex items-start gap-2 px-5 text-sm leading-(--lh) text-inc">
-                    <ErrorIcon />
-                    Les favoris ne se lisent pas. Rechargez la page.
-                </p>
+                <GeneralError message="Les favoris ne se lisent pas. Rechargez la page." className="px-5" />
             )}
             {calendar}
             {drag !== null && (
@@ -282,8 +271,7 @@ function FavoriteCard({
                         onContextMenu={(event) => {
                             // Le menu du clavier est déjà ouvert sous la carte (touche Menu,
                             // Maj+F10) : celui que le navigateur envoie ensuite est ignoré.
-                            const native = event.nativeEvent;
-                            if (native.isTrusted && native instanceof PointerEvent && native.pointerType === '') {
+                            if (fromKeyboard(event.nativeEvent)) {
                                 event.preventDefault();
                             }
                         }}
@@ -305,8 +293,7 @@ function FavoriteCard({
             >
                 <MenuItem
                     icon={<PencilIcon />}
-                    shortcut="F2"
-                    keyShortcuts="F2"
+                    {...menuShortcut('edit', favorites.mac)}
                     onSelect={() => {
                         renamingRef.current = true;
                         favorites.openRename(favorite);
@@ -316,8 +303,7 @@ function FavoriteCard({
                 </MenuItem>
                 <MenuItem
                     icon={<ArrowUpIcon />}
-                    shortcut={altLabel('↑', favorites.mac)}
-                    keyShortcuts="Alt+ArrowUp"
+                    {...menuShortcut('moveUp', favorites.mac)}
                     disabled={first}
                     onSelect={() => {
                         favorites.move(favorite, -1);
@@ -327,8 +313,7 @@ function FavoriteCard({
                 </MenuItem>
                 <MenuItem
                     icon={<ArrowDownIcon />}
-                    shortcut={altLabel('↓', favorites.mac)}
-                    keyShortcuts="Alt+ArrowDown"
+                    {...menuShortcut('moveDown', favorites.mac)}
                     disabled={last}
                     onSelect={() => {
                         favorites.move(favorite, 1);
@@ -339,8 +324,7 @@ function FavoriteCard({
                 <MenuSeparator />
                 <MenuItem
                     icon={<TrashIcon />}
-                    shortcut={deleteLabel(favorites.mac)}
-                    keyShortcuts={DELETE_KEYS}
+                    {...menuShortcut('delete', favorites.mac)}
                     danger
                     onSelect={() => {
                         favorites.remove(favorite);
@@ -404,40 +388,13 @@ function FavoriteCardBody({
 function FavoriteFormFrame({ form, favorites }: { form: FavoriteForm; favorites: Favorites }) {
     const renamed = form.favorite;
     const inputRef = useRef<HTMLInputElement>(null);
-    const frameRef = useRef<HTMLDivElement>(null);
     const tickets = useTickets();
     // Renommer : le titre de Jira, que rend un nom vidé, en texte indicatif.
     const title = renamed === null ? null : (tickets.get(renamed.ticket)?.title ?? null);
-    // Ajouter : ce que Jira dit du ticket tapé, sous le champ.
-    const { lookup, check } = useTicketLookup(renamed === null ? form.draft : '');
-    const { formCheckRef } = favorites;
-    useEffect(() => {
-        formCheckRef.current = check;
-
-        return () => {
-            formCheckRef.current = NO_CHECK;
-        };
-    });
-
-    // Échap ferme le formulaire d'où que le curseur y soit : du champ comme de ses
-    // boutons. L'écouteur est posé une fois, et lit l'état courant.
-    const onEscape = useEffectEvent((event: KeyboardEvent) => {
-        if (event.key === 'Escape' && !event.defaultPrevented) {
-            event.preventDefault();
-            favorites.cancel();
-        }
-    });
-    useEffect(() => {
-        const frame = frameRef.current;
-        const listener = (event: KeyboardEvent) => {
-            onEscape(event);
-        };
-        frame?.addEventListener('keydown', listener);
-
-        return () => {
-            frame?.removeEventListener('keydown', listener);
-        };
-    }, []);
+    // Ajouter : ce que Jira dit du ticket tapé, sous le champ. Échap, d'où que soit le
+    // curseur, ferme le formulaire (useGridExits).
+    const field = useTicketField(renamed === null ? form.draft : '', '', favorites.formCheckRef);
+    const { lookup } = field;
 
     // Le curseur va au champ à l'ouverture, le nom d'un favori sélectionné pour qu'on le
     // retape.
@@ -460,7 +417,6 @@ function FavoriteFormFrame({ form, favorites }: { form: FavoriteForm; favorites:
             role="group"
             aria-label={renamed === null ? 'Nouveau favori' : `Renommer le favori ${renamed.ticket}`}
             aria-busy={form.sending}
-            ref={frameRef}
             // Renommer : la pastille du favori en tête, puis le nom, à
             // --s-3 l'un de l'autre ; l'ajout, plus serré, n'a que son champ.
             className={`flex flex-col rounded-2 border border-line-strong bg-bg-raise p-3 leading-(--lh) ${
@@ -472,29 +428,33 @@ function FavoriteFormFrame({ form, favorites }: { form: FavoriteForm; favorites:
                     <TicketChip ticket={renamed.ticket} />
                 </div>
             )}
-            <Field
-                ref={inputRef}
-                label={renamed === null ? 'Nouveau favori' : 'Nom'}
-                optional={renamed !== null}
-                mono={renamed === null}
-                maxLength={renamed === null ? undefined : 255}
-                placeholder={title ?? undefined}
-                value={form.draft}
-                error={form.error ?? (lookup.status === 'not_found' ? TICKET_NOT_FOUND : null)}
-                warning={lookupWarning(lookup)}
-                onChange={(event) => {
-                    favorites.setDraft(event.target);
-                }}
-                onBlur={favorites.checkDraft}
-                onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                        event.preventDefault();
-                        if (!event.repeat) {
-                            favorites.submit();
-                        }
-                    }
-                }}
-            />
+            {renamed === null ? (
+                <TicketField
+                    ref={inputRef}
+                    label="Nouveau favori"
+                    field={field}
+                    value={form.draft}
+                    refusal={form.error}
+                    onTicket={favorites.setDraft}
+                    onLeave={favorites.checkDraft}
+                    onEnter={favorites.submit}
+                />
+            ) : (
+                // Le nom d'un favori n'est pas un ticket : il se renomme à part.
+                <Field
+                    ref={inputRef}
+                    label="Nom"
+                    optional
+                    maxLength={255}
+                    placeholder={title ?? undefined}
+                    value={form.draft}
+                    error={form.error}
+                    onChange={(event) => {
+                        favorites.setDraft(event.target.value);
+                    }}
+                    onKeyDown={saveOnEnter(favorites.submit)}
+                />
+            )}
             {lookup.status === 'found' && (
                 <div
                     data-color={tintOf(lookup.info)}

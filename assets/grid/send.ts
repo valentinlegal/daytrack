@@ -45,6 +45,12 @@ export interface SendStatus {
     readonly removed: readonly string[];
     /** Ce que la relecture a trouvé dans Jira, en minutes, sur un ticket qui n'y est pas arrivé tel quel. */
     readonly inJira: ReadonlyMap<string, number>;
+    /**
+     * Ceux des tickets retirés que Jira ne trouvait plus, à cet essai ou au dernier envoi :
+     * supprimés, ou que le compte ne voit plus. Ils ne retiennent pas la journée, mais Jira
+     * en garde peut-être des heures.
+     */
+    readonly vanished: readonly string[];
 }
 
 export const NOTHING_SENT: SendStatus = {
@@ -55,6 +61,7 @@ export const NOTHING_SENT: SendStatus = {
     outcomes: new Map(),
     removed: [],
     inJira: new Map(),
+    vanished: [],
 };
 
 const STATES: readonly string[] = [
@@ -88,10 +95,9 @@ export function readSend(json: unknown): SendStatus {
     if (json.failure !== null && (typeof json.failure !== 'string' || !FAILURES.includes(json.failure))) {
         throw new TypeError("L'envoi a échoué sans dire pourquoi.");
     }
-    // Le sérialiseur du serveur rend un objet vide en tableau vide.
-    const read = Array.isArray(json.outcomes) && json.outcomes.length === 0 ? {} : json.outcomes;
-    const held = Array.isArray(json.inJira) && json.inJira.length === 0 ? {} : json.inJira;
-    if (!isRecord(read) || !isRecord(held) || !Array.isArray(json.removed)) {
+    const read = json.outcomes;
+    const held = json.inJira;
+    if (!isRecord(read) || !isRecord(held) || !Array.isArray(json.removed) || !Array.isArray(json.vanished)) {
         throw new TypeError("L'envoi ne dit pas ce qu'il a donné.");
     }
 
@@ -102,13 +108,8 @@ export function readSend(json: unknown): SendStatus {
         }
         outcomes.set(ticket, outcome as TicketFailure | null);
     }
-    const removed = json.removed.map((ticket: unknown) => {
-        if (typeof ticket !== 'string') {
-            throw new TypeError("Un ticket retiré n'a pas d'identifiant.");
-        }
-
-        return ticket;
-    });
+    const removed = json.removed.map(ticketKey);
+    const vanished = json.vanished.map(ticketKey);
     const inJira = new Map<string, number>();
     for (const [ticket, minutes] of Object.entries(held)) {
         if (typeof minutes !== 'number') {
@@ -125,7 +126,16 @@ export function readSend(json: unknown): SendStatus {
         outcomes,
         removed,
         inJira,
+        vanished,
     };
+}
+
+function ticketKey(ticket: unknown): string {
+    if (typeof ticket !== 'string') {
+        throw new TypeError("Un ticket retiré n'a pas d'identifiant.");
+    }
+
+    return ticket;
 }
 
 function readMoment(json: unknown): SendMoment | null {

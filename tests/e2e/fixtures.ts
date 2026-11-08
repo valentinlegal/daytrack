@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs';
 
-import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { type APIRequestContext, test as base, expect, type Page, type Request, type TestInfo } from '@playwright/test';
 
+import { claimDay, collectDays, releaseDays, stopCollecting } from './day';
 import { CONNECTED, describedTickets, type JiraSetup, serveJira } from './jira';
+import { clearSentDay } from './send';
 import { SAMPLE_SETTINGS, type ServedSettings, SettingsServer } from './settings';
 
 /** Un favori servi à la page sans passer par la base : son ticket, et le nom qui tient lieu de titre. */
@@ -23,6 +26,12 @@ export const SAMPLE_FAVORITES: readonly ShownFavorite[] = [
 ];
 
 /**
+ * Les jours qu'un parcours écrit sont à lui : ceux qu'il pose par l'API (writeDay), et ceux
+ * que sa page écrit, le geste à peine parti. Ils se vident quand il s'arrête, qu'il
+ * réussisse ou non, et s'il en a envoyé un sur Jira, ses heures en sont retirées
+ * (clearSentDay). Aucun parcours ne les vide lui-même en dernière ligne : un échec
+ * l'arrêterait avant, et laisserait ses blocs dans l'application de développement.
+ *
  * Chaque parcours échoue sur une erreur de la page ou de sa console : un écran qui
  * s'affiche peut cacher un script en panne.
  *
@@ -53,6 +62,7 @@ export const SAMPLE_FAVORITES: readonly ShownFavorite[] = [
  * passe par le serveur la lit là (`'server'`), dans tests/e2e/version.spec.ts.
  */
 export const test = base.extend<{
+    ownDays: undefined;
     pageErrors: string[];
     expectedErrors: readonly RegExp[];
     favorites: 'sample' | 'none' | 'base';
@@ -66,6 +76,44 @@ export const test = base.extend<{
     available: string | null;
     availableServed: undefined;
 }>({
+    ownDays: [
+        async ({ context, request }, use) => {
+            collectDays();
+            const refused: unknown[] = [];
+            const pending = new Set<Request>();
+            const claim = (sent: Request) => {
+                const date = writtenDay(sent);
+                if (date !== null) {
+                    pending.add(sent);
+                    try {
+                        claimDay(date);
+                    } catch (error) {
+                        refused.push(error);
+                    }
+                }
+            };
+            const settle = (sent: Request) => {
+                pending.delete(sent);
+            };
+            context.on('request', claim);
+            context.on('requestfinished', settle);
+            context.on('requestfailed', settle);
+            await use(undefined);
+            context.off('request', claim);
+            // Une écriture encore en route arriverait après le ménage : elle passe d'abord,
+            // sauf si le parcours la retient lui-même.
+            for (const deadline = Date.now() + 5000; pending.size > 0 && Date.now() < deadline;) {
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            context.off('requestfinished', settle);
+            context.off('requestfailed', settle);
+            await emptyDays(request);
+            if (refused.length > 0) {
+                throw refused[0];
+            }
+        },
+        { auto: true },
+    ],
     expectedErrors: [[], { option: true }],
     favorites: ['sample', { option: true }],
     // Jira relié, et qui connaît les tickets d'exemple : servi à la page, sans
@@ -150,6 +198,31 @@ export const test = base.extend<{
     ],
 });
 
+/** Le jour qu'écrit cette requête de la page, s'il y en a un. */
+function writtenDay(request: Request): string | null {
+    if (request.method() === 'GET' || request.method() === 'HEAD') {
+        return null;
+    }
+
+    return /\/api\/days\/(\d{4}-\d{2}-\d{2})(?:[/?]|$)/.exec(new URL(request.url()).pathname)?.[1] ?? null;
+}
+
+/** Vide les jours que le parcours a pris, et les retire de Jira s'ils y sont partis. */
+async function emptyDays(request: APIRequestContext): Promise<void> {
+    const failures: unknown[] = [];
+    for (const date of releaseDays()) {
+        try {
+            await clearSentDay(request, date);
+        } catch (error) {
+            failures.push(error);
+        }
+    }
+    stopCollecting();
+    if (failures.length > 0) {
+        throw failures[0];
+    }
+}
+
 /**
  * Sert ces favoris à la page, à la place de ceux de la base, avec ce que Jira dit de leurs
  * tickets ; une écriture n'y part pas.
@@ -189,6 +262,31 @@ export function refusedWith(status: 409 | 422): RegExp {
 }
 
 export { expect };
+
+/** Les normes que chaque écran respecte : le WCAG 2.2, niveau AA, et les bonnes pratiques d'axe. */
+const ACCESSIBILITY_STANDARDS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
+
+/**
+ * Une infobulle ouverte : Radix la pose à la racine de la page, hors des repères, comme
+ * toute infobulle. Un parcours qui la laisse ouverte l'exclut du contrôle, en le disant.
+ */
+export const OPEN_TOOLTIP = '[data-radix-popper-content-wrapper]:has([role="tooltip"])';
+
+/**
+ * La page respecte les normes d'accessibilité, partout les mêmes, hors de ce qu'un parcours
+ * exclut en le nommant. Une page dont l'heure est arrêtée la fait d'abord tourner
+ * (`page.clock.resume()`) : axe attend ses propres minuteurs.
+ */
+export async function expectAccessible(
+    page: Page,
+    { exclude = [] }: { exclude?: readonly string[] } = {},
+): Promise<void> {
+    const builder = new AxeBuilder({ page }).withTags(ACCESSIBILITY_STANDARDS);
+    for (const selector of exclude) {
+        builder.exclude(selector);
+    }
+    expect((await builder.analyze()).violations).toEqual([]);
+}
 
 /** Les largeurs auxquelles chaque écran se vérifie. */
 export const VIEWPORTS = [

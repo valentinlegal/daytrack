@@ -30,6 +30,6 @@ final readonly class FavoriteNameInput
      */
     public static function constraints(): array
     {
-        return EntryText::lineConstraints(Favorite::NAME_MAX, 'Le nom tient en 255 caractères.', 'Le nom tient sur une ligne.');
+        return EntryText::lineConstraints(Favorite::NAME_MAX, 'Le nom');
     }
 }

@@ -1,19 +1,19 @@
 import { type RefObject, useEffect, useEffectEvent, useId, useRef, useState } from 'react';
 
 import { Button } from '../components/Button';
-import { FieldWarning } from '../components/Field';
+import { FieldWarning, GeneralError } from '../components/Field';
+import { UNSAVED } from '../serverApi';
 import { SettingsSection } from '../settings/SettingsSection';
 import type { CheckResult, JiraApi, JiraConnection, TokenRefusal } from './jiraApi';
+import { isTokenRefusal, TOKEN_EXPIRED } from './jiraStatus';
 import {
     ConnectedText,
     fieldErrorsOf,
     firstRefused,
-    GeneralError,
     type JiraField,
     type JiraFieldErrors,
     JiraFields,
     NO_FIELD_ERRORS,
-    UNSENT,
 } from './JiraFields';
 
 /**
@@ -24,7 +24,7 @@ const STORED_TOKEN = '0'.repeat(16);
 
 /** Ce que Jira reproche au jeton enregistré, sous son champ (src/Controller/Api/JiraController.php). */
 const STORED_TOKEN_REFUSALS: Record<TokenRefusal, string> = {
-    refused: 'Jira refuse le jeton enregistré, il a sans doute expiré. Créez-en un nouveau, puis collez-le ici.',
+    refused: `${TOKEN_EXPIRED} Créez-en un nouveau, puis collez-le ici.`,
     missing_scope:
         'Il manque à ce jeton un périmètre dont DayTrack a besoin. Créez-en un nouveau avec read:jira-work, write:jira-work et read:jira-user.',
 };
@@ -91,7 +91,7 @@ export function JiraSection({
     const [values, setValues] = useState<Record<JiraField, string>>(() => valuesOf(stored));
     const [tokenTyped, setTokenTyped] = useState(false);
     const [errors, setErrors] = useState<JiraFieldErrors>(() => errorsOf(stored));
-    const [general, setGeneral] = useState<string | null>(unread ? UNSENT : null);
+    const [general, setGeneral] = useState<string | null>(unread ? UNSAVED : null);
     // Le compte que Jira a confirmé pour ce qui est enregistré.
     const [account, setAccount] = useState<string | null>(null);
     // La ligne d'état se tait tant que les champs parlent d'autre chose que de ce compte :
@@ -149,12 +149,11 @@ export function JiraSection({
             return;
         }
         // Jira muet ne dit rien du jeton : ce qui était enregistré tient.
-        const refusal =
-            checked.status === 'refused' || checked.status === 'missing_scope'
-                ? checked.status
-                : checked.status === 'connected'
-                  ? null
-                  : stored.refusal;
+        const refusal = isTokenRefusal(checked.status)
+            ? checked.status
+            : checked.status === 'connected'
+              ? null
+              : stored.refusal;
         const connection = { ...stored, account: checked.account ?? stored.account, refusal };
         // Le champ du jeton vidé garde le curseur : un collage s'ajouterait aux points.
         const tokenCleared = tokenTyped && values.token === '';
@@ -293,7 +292,7 @@ export function JiraSection({
 
             return 'refused';
         } catch {
-            setGeneral(UNSENT);
+            setGeneral(UNSAVED);
 
             return 'failed';
         }

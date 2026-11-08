@@ -29,6 +29,12 @@ describe('la version à installer', () => {
         await expect(api.available()).rejects.toThrow('500');
     });
 
+    it('lève sur une réponse illisible : l’avis reste tel qu’il était', async () => {
+        const api = httpVersionApi(() => Promise.resolve(new Response('<html>', { status: 200 })));
+
+        await expect(api.available()).rejects.toThrow(TypeError);
+    });
+
     it('demande au serveur, jamais au registre', async () => {
         const urls: unknown[] = [];
         const api = httpVersionApi((input) => {

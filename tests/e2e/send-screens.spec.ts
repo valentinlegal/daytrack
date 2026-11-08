@@ -1,14 +1,14 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { type Entry, startTimeAt, weekday, writeDay } from './day';
-import { expect, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
+import { type Entry, startTimeAt, weekdaysFrom, writeDay } from './day';
+import { expect, expectAccessible, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
 import { SCENARIOS } from './scenarios';
 import { clearSentDay, holdSend, rewriteSend, sendButton, sendWindow } from './send';
 
 /**
  * Les écrans de l'envoi sur Jira : `envoi`, `envoi-cours`, `envoye`, `envoi-partiel`,
- * `envoi-en-partie`, `envoi-non-verifie`, `envoi-non-verifie-jeton` et `envoi-echec`,
+ * `envoi-en-partie`, `envoi-non-verifie`, `envoi-non-verifie-jeton`, `envoi-echec` et
+ * `envoye-introuvable`,
  * sur les journées d'exemple. Chacun a sa capture de référence aux trois largeurs et
  * dans les deux thèmes, et son contrôle d'accessibilité. Les heures d'envoi sont des
  * heures d'exemple, servies à la page : aucun écran n'envoie rien. La gerbe de `fete` et
@@ -20,9 +20,7 @@ const BASE = SCENARIOS.find((scenario) => scenario.name === 'en-cours')?.entries
 const ATTEINT = SCENARIOS.find((scenario) => scenario.name === 'atteint')?.entries ?? [];
 
 /** Le jour d'un écran : un jour de semaine d'octobre 2023, à l'écart des jours des autres fichiers. */
-function day(index: number): string {
-    return weekday('2023-10-02', index);
-}
+const workday = weekdaysFrom('2023-10-02');
 
 interface Screen {
     readonly name: string;
@@ -91,6 +89,21 @@ const SCREENS: Screen[] = [
 /** Le jeton refusé : `envoi-non-verifie-jeton`, avec son bandeau. */
 const REFUSED_SCREENS: Screen[] = [resultScreen('envoi-non-verifie-jeton', 'Envoi non vérifié')];
 
+/** Un ticket retiré que Jira ne trouve plus : le détail de l'envoi le dit sous lui. */
+const VANISHED_SCREENS: Screen[] = [
+    {
+        name: 'envoye-introuvable',
+        entries: ATTEINT,
+        now: '18:02',
+        reach: async (page) => {
+            await sendButton(page).click();
+            await expect(sendWindow(page, 'Envoyé sur Jira')).toContainText('Jira ne trouve plus ce ticket.');
+
+            return nothing;
+        },
+    },
+];
+
 /** Un écran qui montre la fenêtre du résultat, ouverte depuis le bouton. */
 function resultScreen(name: string, title: string): Screen {
     return {
@@ -111,6 +124,14 @@ function served(screen: string, date: string): ((send: Record<string, unknown>) 
     switch (screen) {
         case 'envoye':
             return (send) => ({ ...send, state: 'sent', sentAt: { date, time: '18:02' }, removed: [] });
+        case 'envoye-introuvable':
+            return (send) => ({
+                ...send,
+                state: 'sent',
+                sentAt: { date, time: '18:02' },
+                removed: ['OPS-7'],
+                vanished: ['OPS-7'],
+            });
         case 'envoi-partiel':
             return (send) => ({
                 ...send,
@@ -193,7 +214,7 @@ function capture(screens: readonly Screen[], offset: number): void {
     screens.forEach((screen, s) => {
         VIEWPORTS.forEach((viewport, v) => {
             THEMES.forEach(({ scheme, name }, t) => {
-                const date = day(offset + s * 6 + v * 2 + t);
+                const date = workday(offset + s * 6 + v * 2 + t);
 
                 test(`${screen.name}, ${String(viewport.width)} × ${String(viewport.height)}, ${name}`, async ({
                     page,
@@ -213,14 +234,10 @@ function capture(screens: readonly Screen[], offset: number): void {
                     await expectScreen(page, testInfo, `${screen.name}-${String(viewport.width)}-${name}.png`);
 
                     if (viewport.width === 1440) {
-                        const results = await new AxeBuilder({ page })
-                            .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                            .analyze();
-                        expect(results.violations).toEqual([]);
+                        await expectAccessible(page);
                     }
 
                     await undo();
-                    await clearSentDay(request, date);
                 });
             });
         });
@@ -235,4 +252,8 @@ test.describe('les écrans de l’envoi sur Jira, le jeton refusé', () => {
     test.use({ jira: { state: 'refused' } });
 
     capture(REFUSED_SCREENS, SCREENS.length * 6);
+});
+
+test.describe('les écrans de l’envoi sur Jira, un ticket retiré introuvable', () => {
+    capture(VANISHED_SCREENS, (SCREENS.length + REFUSED_SCREENS.length) * 6);
 });

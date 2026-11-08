@@ -3,6 +3,7 @@
 namespace App\Tests\Favorite;
 
 use App\Repository\FavoriteRepository;
+use App\Tests\Support\PurgesDatabase;
 use Doctrine\DBAL\Connection;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -13,6 +14,8 @@ use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
  */
 final class SimultaneousFavoriteWritesTest extends KernelTestCase
 {
+    use PurgesDatabase;
+
     private Connection $connection;
 
     private \PDO $other;
@@ -21,7 +24,7 @@ final class SimultaneousFavoriteWritesTest extends KernelTestCase
     {
         self::bootKernel();
         $this->connection = self::getContainer()->get('doctrine.dbal.default_connection');
-        $this->connection->executeStatement('DELETE FROM favorite');
+        self::purgeDatabase();
 
         // L'autre geste, par sa propre connexion au même fichier. Il n'attend pas : un
         // verrou se voit tout de suite.

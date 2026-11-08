@@ -34,6 +34,23 @@ export function format(minutes: number): string {
     return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 }
 
+/**
+ * Le début du quart d'heure où tombe cette heure : 10:07 donne 10:00, 10:15 reste 10:15.
+ * L'heure peut avoir des secondes, en fraction de minute.
+ */
+export function floor(minutes: number): number {
+    return Math.floor(minutes / MINUTES) * MINUTES;
+}
+
+/**
+ * Le premier quart d'heure qui commence à cette heure ou après : 10:07 donne 10:15, 10:15
+ * reste 10:15. L'heure peut avoir des secondes, en fraction de minute.
+ */
+export function ceil(minutes: number): number {
+    // « + 0 » : un arrondi vers le haut d'une heure négative rendrait -0.
+    return Math.ceil(minutes / MINUTES) * MINUTES + 0;
+}
+
 /** Une heure où un quart d'heure de la grille commence ou finit : 07:00 à 20:00. */
 export function isBoundary(minutes: number): boolean {
     return Number.isInteger(minutes) && minutes >= FIRST && minutes <= DAY_END && minutes % MINUTES === 0;

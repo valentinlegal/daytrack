@@ -1,7 +1,6 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { expect, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
+import { expect, expectAccessible, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
 
 /**
  * Le passage de la v1 à la v2, vu de l'écran : le bandeau de l'ancien docker-compose.yml,
@@ -23,9 +22,10 @@ const NOTHING = { entries: [], objectives: [], favorites: [] };
 const DOWNLOAD = 'curl -fO https://raw.githubusercontent.com/valentinlegal/daytrack/main/docker-compose.yml';
 const COMMANDS = `${DOWNLOAD} &&\ndocker compose up -d`;
 const CUSTOM_COMMANDS = `cp docker-compose.yml docker-compose.v1.yml &&\n${DOWNLOAD}`;
+const PROXY_LINES = '      SERVER_NAME: ":80"\n      TRUSTED_PROXIES: "private_ranges"';
 
 interface Served {
-    readonly oldCompose?: 'default' | 'custom';
+    readonly oldCompose?: 'default' | 'custom' | 'proxy';
     readonly leftOut?: typeof LEFT_OUT;
     readonly jira?: string;
 }
@@ -177,6 +177,100 @@ test('un fichier modifié garde une copie et ne relance pas DayTrack, le temps d
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(CUSTOM_COMMANDS);
 });
 
+test('derrière un proxy, le fichier se garde et ses lignes se copient', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await open(page, { oldCompose: 'proxy' });
+
+    const banner = page.getByRole('alert');
+    await expect(banner).toContainText('Votre fichier docker-compose.yml date de la v1.');
+    // Un port lié à 127.0.0.1, ou un proxy joint par un réseau Docker, n'ouvrent pas DayTrack.
+    await expect(banner).toContainText('Il peut contenir votre jeton Jira en clair, et ouvrir DayTrack au réseau.');
+    await expect(banner.getByRole('button', { name: 'Voir comment le remplacer' })).toHaveCount(0);
+
+    const button = banner.getByRole('button', { name: "Voir comment l'adapter" });
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    await button.click();
+    await expect(button).toHaveAttribute('aria-expanded', 'true');
+
+    const window = page.getByRole('dialog', { name: 'Adapter docker-compose.yml' });
+    await expect(window).toContainText('Votre fichier sert DayTrack derrière un proxy : gardez-le.');
+    // Collées par-dessus le seul texte de la ligne, la première doublerait son indentation.
+    await expect(window).toContainText(
+        'remplacez toute la ligne SERVER_NAME, espaces du début compris, par ces deux lignes.',
+    );
+    await expect(window.locator('pre')).toHaveText(PROXY_LINES);
+    // Rien ne remplace le fichier, et rien ne le relance avant qu'il soit changé.
+    await expect(window.locator('pre')).not.toContainText('curl');
+    await expect(window).toContainText('votre connexion à Jira est déjà dans DayTrack');
+    await expect(window).toContainText('mettez 127.0.0.1 devant');
+    await expect(window).toContainText("quiconque l'atteint agit en votre nom, jusque dans Jira.");
+    await expect(window).toContainText("puis rechargez cette page. L'adresse ne change pas.");
+    await expect(window.locator('code')).toHaveText(['environment:', 'SERVER_NAME', 'JIRA_…', 'docker compose up -d']);
+    await expect(window).not.toContainText('Votre fichier avait été modifié');
+
+    await expect(window.getByRole('button', { name: 'Copier les commandes' })).toHaveCount(0);
+    await window.getByRole('button', { name: 'Copier les lignes' }).click();
+    await expect(window.getByRole('button', { name: 'Lignes copiées' })).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(PROXY_LINES);
+
+    // Fermée puis rouverte, la fenêtre a oublié la copie.
+    await window.getByRole('button', { name: 'Plus tard' }).click();
+    await expect(window).toHaveCount(0);
+    await expect(button).toBeFocused();
+    await button.click();
+    await expect(window.getByRole('button', { name: 'Copier les lignes' })).toBeVisible();
+});
+
+test('recopier pendant « Lignes copiées » relance ses deux secondes', async ({ page }) => {
+    // Un presse-papier qui répond tout de suite, et compte : le temps ne s'avance qu'une
+    // fois la copie faite, sinon le test jouerait la course qu'il vérifie.
+    await page.addInitScript(() => {
+        const copies: string[] = [];
+        Object.defineProperty(window, 'copies', { value: copies });
+        Object.defineProperty(navigator, 'clipboard', {
+            value: {
+                writeText: (text: string) => {
+                    copies.push(text);
+
+                    return Promise.resolve();
+                },
+            },
+        });
+    });
+    const copies = () => page.evaluate(() => (window as unknown as { copies: string[] }).copies.length);
+    await page.clock.install();
+    await open(page, { oldCompose: 'proxy' });
+    await page.getByRole('button', { name: "Voir comment l'adapter" }).click();
+
+    const window = page.getByRole('dialog', { name: 'Adapter docker-compose.yml' });
+    await window.getByRole('button', { name: 'Copier les lignes' }).click();
+    await expect(window.getByRole('button', { name: 'Lignes copiées' })).toBeVisible();
+
+    await page.clock.runFor(1500);
+    await window.getByRole('button', { name: 'Lignes copiées' }).click();
+    await expect.poll(copies).toBe(2);
+    await page.clock.runFor(1000);
+    await expect(window.getByRole('button', { name: 'Lignes copiées' })).toBeVisible();
+
+    await page.clock.runFor(1100);
+    await expect(window.getByRole('button', { name: 'Copier les lignes' })).toBeVisible();
+});
+
+test('derrière un proxy, une copie refusée le dit sous les lignes, qui restent à sélectionner', async ({ page }) => {
+    await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText: () => Promise.reject(new Error('refusé')) },
+        });
+    });
+    await open(page, { oldCompose: 'proxy' });
+    await page.getByRole('button', { name: "Voir comment l'adapter" }).click();
+
+    const window = page.getByRole('dialog', { name: 'Adapter docker-compose.yml' });
+    await window.getByRole('button', { name: 'Copier les lignes' }).click();
+    await expect(window).toContainText('Copie impossible : sélectionnez les lignes à la main.');
+    await expect(window.locator('pre')).toHaveText(PROXY_LINES);
+});
+
 test.describe('avec un jeton refusé', () => {
     test.use({ jira: { state: 'refused' } });
 
@@ -257,6 +351,10 @@ test.describe('quand le serveur ne répond pas', () => {
         await window.getByRole('button', { name: "Ne plus l'afficher" }).click();
 
         await expect(window).toContainText('Le serveur ne répond pas.');
+        // Dit au lecteur d'écran : la région était là avant le message.
+        await expect(window.locator('[aria-live="polite"]')).toHaveText(
+            'Le serveur ne répond pas. Réessayez dans un instant.',
+        );
         await expect(window.getByRole('listitem')).toHaveCount(4);
         await expect(page.getByRole('alert')).toBeVisible();
     });
@@ -267,17 +365,17 @@ for (const { width, height } of VIEWPORTS) {
         test.describe(`à ${String(width)} px, thème ${theme.name}`, () => {
             test.use({ viewport: { width, height }, colorScheme: theme.scheme });
 
-            for (const { kind, name } of [
-                { kind: 'default', name: 'v1-fichier' },
-                { kind: 'custom', name: 'v1-modifie' },
+            for (const { kind, name, action } of [
+                { kind: 'default', name: 'v1-fichier', action: 'Voir comment le remplacer' },
+                { kind: 'custom', name: 'v1-modifie', action: 'Voir comment le remplacer' },
+                { kind: 'proxy', name: 'v1-proxy', action: "Voir comment l'adapter" },
             ] as const) {
                 test(`l’ancien fichier, ${name}`, async ({ page }, testInfo) => {
                     await open(page, { oldCompose: kind });
-                    await page.getByRole('button', { name: 'Voir comment le remplacer' }).click();
+                    await page.getByRole('button', { name: action }).click();
                     await expect(page.getByRole('dialog')).toBeVisible();
 
-                    const results = await new AxeBuilder({ page }).analyze();
-                    expect(results.violations).toEqual([]);
+                    await expectAccessible(page);
                     await expectScreen(page, testInfo, `${name}-${String(width)}-${theme.name}.png`);
                 });
             }
@@ -287,8 +385,7 @@ for (const { width, height } of VIEWPORTS) {
                 await page.getByRole('button', { name: 'Voir la liste' }).click();
                 await expect(page.getByRole('dialog')).toBeVisible();
 
-                const results = await new AxeBuilder({ page }).analyze();
-                expect(results.violations).toEqual([]);
+                await expectAccessible(page);
                 await expectScreen(page, testInfo, `v1-liste-${String(width)}-${theme.name}.png`);
             });
 

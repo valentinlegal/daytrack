@@ -3,6 +3,7 @@
 namespace App\Entity;
 
 use App\Api\Input\EntryText;
+use App\Day\UserCalendar;
 use App\Repository\TicketRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
@@ -54,7 +55,7 @@ class Ticket
     {
         $this->title = mb_substr($title, 0, self::TITLE_MAX);
         $this->type = $type;
-        $this->readAt = self::universal($at);
+        $this->readAt = UserCalendar::universal($at);
     }
 
     /** Le titre que la v1 gardait : il s'affiche en attendant que Jira le redise. */
@@ -66,13 +67,7 @@ class Ticket
     /** Jira l'a cherché sans le trouver : il garde ce qu'il avait, et n'est pas redemandé tout de suite. */
     public function checked(\DateTimeImmutable $at): void
     {
-        $this->readAt = self::universal($at);
-    }
-
-    /** À relire dans Jira, son titre gardé d'ici là : le site de Jira a changé. */
-    public function forget(): void
-    {
-        $this->readAt = null;
+        $this->readAt = UserCalendar::universal($at);
     }
 
     /** Le Jira relié ne le connaît pas, et ce qu'on en savait venait d'un autre : rien n'en reste. */
@@ -80,12 +75,6 @@ class Ticket
     {
         $this->title = null;
         $this->type = null;
-    }
-
-    /** La base garde l'heure sans son fuseau : elle s'y écrit, et s'en relit, en heure universelle. */
-    private static function universal(\DateTimeImmutable $at): \DateTimeImmutable
-    {
-        return $at->setTimezone(new \DateTimeZone('UTC'));
     }
 
     /**

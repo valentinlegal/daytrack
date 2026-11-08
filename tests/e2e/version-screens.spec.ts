@@ -1,8 +1,7 @@
-import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { freezeTime, startTimeAt, weekday, writeDay } from './day';
-import { expect, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
+import { freezeTime, startTimeAt, weekdaysFrom, writeDay } from './day';
+import { expect, expectAccessible, expectScreen, test, THEMES, VIEWPORTS } from './fixtures';
 import { SCENARIOS } from './scenarios';
 import { AVAILABLE, updateButton, updateWindow } from './version';
 
@@ -17,9 +16,7 @@ import { AVAILABLE, updateButton, updateWindow } from './version';
 const BASE = SCENARIOS.find((scenario) => scenario.name === 'en-cours')?.entries ?? [];
 
 /** Le jour d'un écran : un jour de semaine de mai 2023, avant ceux des autres fichiers. */
-function day(index: number): string {
-    return weekday('2023-05-01', index);
-}
+const workday = weekdaysFrom('2023-05-01');
 
 interface Screen {
     readonly name: string;
@@ -59,7 +56,7 @@ test.describe('les écrans de la nouvelle version', () => {
     SCREENS.forEach((screen, s) => {
         VIEWPORTS.forEach((viewport, v) => {
             THEMES.forEach(({ scheme, name }, t) => {
-                const date = day(s * 6 + v * 2 + t);
+                const date = workday(s * 6 + v * 2 + t);
 
                 test(`${screen.name}, ${String(viewport.width)} × ${String(viewport.height)}, ${name}`, async ({
                     page,
@@ -89,10 +86,7 @@ test.describe('les écrans de la nouvelle version', () => {
                         if (screen.frozen === true) {
                             await page.clock.resume();
                         }
-                        const results = await new AxeBuilder({ page })
-                            .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
-                            .analyze();
-                        expect(results.violations).toEqual([]);
+                        await expectAccessible(page);
                     }
                 });
             });

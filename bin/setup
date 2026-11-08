@@ -13,7 +13,14 @@
 # rien que personne n'ait écrit, et la laisser en retard casse les tests sans dire
 # pourquoi.
 #
+# Il finit par relancer l'application : elle garde le code en mémoire d'une requête à
+# l'autre, et sa surveillance des fichiers ne voit pas toujours qu'il a changé. Sans
+# relance, elle peut servir l'ancien code sans rien dire. « --restart » ne fait que
+# cette relance, en quelques secondes : avant d'essayer l'application après une
+# modification.
+#
 #   bin/setup
+#   bin/setup --restart
 #
 set -euo pipefail
 
@@ -21,19 +28,24 @@ cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 COMPOSE="docker compose"
 
+restart_only=false
+
 # Pas de « for argument in "$@" » : sous « set -u », le bash 3.2 livré avec macOS
 # traite « $@ » sans argument comme une variable non définie.
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
             cat <<'USAGE'
-Met l'environnement de développement à niveau : conteneurs, dépendances, migrations.
+Met l'environnement de développement à niveau : conteneurs, dépendances, migrations,
+puis relance l'application pour qu'elle serve le code de ce dossier.
 À lancer après un clone, un « git pull », et après chaque changement de branche.
 
   bin/setup
+  bin/setup --restart    relance seulement l'application, avant de l'essayer
 USAGE
             exit 0
             ;;
+        --restart) restart_only=true ;;
         *) echo "Option inconnue : $1" >&2; exit 2 ;;
     esac
     shift
@@ -54,6 +66,34 @@ unavailable_migrations() {
     console doctrine:migrations:status --no-ansi 2>/dev/null \
         | awk -F'|' '/Executed Unavailable/ { gsub(/[^0-9]/, "", $4); print $4; exit }' || true
 }
+
+# La relance passe par l'interface d'administration du serveur, qui n'écoute que dans
+# le conteneur. Elle refuse quand l'application sert le code d'un autre dossier — un
+# autre clone, un autre dossier de travail du même dépôt : relancée, elle servirait
+# toujours celui-là.
+restart_app() {
+    local container served
+    container="$($COMPOSE ps -q app 2>/dev/null || true)"
+    if [ -z "$container" ]; then
+        warn "L'application ne tourne pas : lancez bin/setup."
+        return 1
+    fi
+    served="$(docker inspect "$container" \
+        --format '{{range .Mounts}}{{if eq .Destination "/app"}}{{.Source}}{{end}}{{end}}')"
+    if [ "$served" != "$PWD" ]; then
+        warn "L'application sert le code de $served, pas celui de ce dossier.
+  Lancez bin/setup ici pour qu'elle serve celui-ci."
+        return 1
+    fi
+    $COMPOSE exec -T app curl -fsS -X POST http://localhost:2019/frankenphp/workers/restart > /dev/null
+    echo "Relancée : elle sert le code de ce dossier, $PWD."
+}
+
+if [ "$restart_only" = true ]; then
+    step 'Application'
+    restart_app
+    exit 0
+fi
 
 step 'Images'
 $COMPOSE build app
@@ -113,6 +153,9 @@ $COMPOSE exec -T app php -r '
     }
     echo "Joint en HTTPS par l’application.\n";
 '
+
+step 'Application'
+restart_app
 
 printf '\nPrêt.\n'
 printf '  Application    https://localhost:8443\n'

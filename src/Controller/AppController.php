@@ -48,8 +48,7 @@ final class AppController extends AbstractController
     #[Route('/{date}', name: 'app_day', requirements: ['date' => '\d[^/]*'], methods: ['GET'])]
     public function day(string $date): Response
     {
-        $day = UserCalendar::date($date);
-        if (null === $day || !$this->calendar->isOpen($day)) {
+        if (null === $this->calendar->open($date)) {
             return $this->toToday();
         }
 
@@ -98,15 +97,21 @@ final class AppController extends AbstractController
     }
 
     /**
-     * Le démarrage ne lit que SERVER_NAME : un fichier de la v1 dont seuls les ports ont
-     * changé y passe pour intact, et « Rechargez ensuite cette page » serait faux. La page,
-     * elle, sait sur quel port elle est servie.
+     * Le démarrage ne lit que SERVER_NAME. La page, elle, sait comment elle est servie :
+     *  - un fichier de la v1 dont seuls les ports ont changé y passe pour intact, et
+     *    « Rechargez ensuite cette page » serait faux ;
+     *  - « :80 » sert aussi à couper le HTTPS sans proxy. Servi en HTTP, sans proxy qui
+     *    annonce du HTTPS, le fichier ne se garde pas : remplacé, DayTrack repasse en HTTPS.
      */
     private function oldCompose(): string
     {
-        $port = $this->requests->getCurrentRequest()?->getPort();
+        $request = $this->requests->getCurrentRequest();
 
-        return 'default' === $this->oldCompose && !\in_array($port, [80, 443], true) ? 'custom' : $this->oldCompose;
+        return match ($this->oldCompose) {
+            'default' => \in_array($request?->getPort(), [80, 443], true) ? 'default' : 'custom',
+            'proxy' => true === $request?->isSecure() ? 'proxy' : 'custom',
+            default => $this->oldCompose,
+        };
     }
 
     /** Aujourd'hui change à minuit : la redirection ne se garde pas en cache. */

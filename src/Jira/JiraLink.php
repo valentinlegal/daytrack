@@ -2,6 +2,7 @@
 
 namespace App\Jira;
 
+use App\Database\LockedTransaction;
 use App\Entity\JiraConnection;
 use App\Repository\DaySendRepository;
 use App\Repository\IssueTypeRepository;
@@ -28,6 +29,7 @@ final readonly class JiraLink
         private IssueTypeRepository $types,
         private DaySendRepository $sends,
         private EntityManagerInterface $entityManager,
+        private LockedTransaction $transaction,
         private JiraClient $jira,
         private TokenCipher $cipher,
     ) {
@@ -221,31 +223,13 @@ final readonly class JiraLink
     }
 
     /**
-     * Une écriture de la connexion, d'un seul tenant.
+     * Une écriture de la connexion, d'un seul tenant : la connexion lue ensuite est la
+     * dernière.
      *
      * @param \Closure(): void $change
      */
     private function write(\Closure $change): void
     {
-        // Pas de wrapInTransaction() : il ferme le gestionnaire d'entités au premier
-        // refus, et la requête doit encore répondre.
-        $connection = $this->entityManager->getConnection();
-        $connection->beginTransaction();
-
-        try {
-            // La première instruction est une écriture : elle verrouille la base
-            // jusqu'à la fin de la transaction, et la connexion lue ensuite est la dernière.
-            $connection->executeStatement('UPDATE jira_connection SET single = single WHERE single = 0');
-            $change();
-            $this->entityManager->flush();
-            $connection->commit();
-        } catch (\Throwable $exception) {
-            if ($connection->isTransactionActive()) {
-                $connection->rollBack();
-            }
-            $this->entityManager->clear();
-
-            throw $exception;
-        }
+        $this->transaction->run($this->connections, $change);
     }
 }

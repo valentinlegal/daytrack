@@ -2,6 +2,8 @@
 
 namespace App\Jira;
 
+use App\Api\Input\EntryText;
+
 /**
  * Une saisie d'heures de l'utilisateur, telle que Jira la rend : son identifiant, son
  * début, son temps et le texte de son commentaire.
@@ -19,7 +21,8 @@ final readonly class JiraWorklog
 
     /**
      * Le texte d'un commentaire au format des documents d'Atlassian, comme DayTrack le
-     * garde : une ligne, les espaces répétées réduites à une ; null s'il est vide.
+     * garde (EntryText::line()) : la relecture compare les deux à l'identique, et le
+     * moindre écart dirait « Écart » à chaque envoi d'un ticket commenté. Null s'il est vide.
      */
     public static function textOf(mixed $document): ?string
     {
@@ -66,10 +69,9 @@ final readonly class JiraWorklog
         }
     }
 
+    /** Un commentaire écrit dans Jira peut tenir sur plusieurs lignes : DayTrack n'en garde qu'une. */
     private static function line(string $text): ?string
     {
-        $text = trim(preg_replace('/[\p{Zs}\s]+/u', ' ', $text) ?? $text);
-
-        return '' === $text ? null : $text;
+        return EntryText::line(preg_replace('/[\p{Cc}\p{Zl}\p{Zp}]+/u', ' ', $text) ?? $text);
     }
 }
