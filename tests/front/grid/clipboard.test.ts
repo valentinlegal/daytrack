@@ -6,11 +6,16 @@ import {
     type Clipboard,
     clipboardOf,
     copy,
+    copyQuarters,
+    cutRecurrence,
+    type CutSource,
     paste,
     storedClipboard,
+    withoutRecurrence,
 } from '../../../assets/grid/clipboard';
-import { Grid, PAUSE, work } from '../../../assets/grid/grid';
+import { Grid, linkedTo, PAUSE, unlinked, work } from '../../../assets/grid/grid';
 import * as Quarter from '../../../assets/grid/quarter';
+import { LAST_WEEK, monthlyDate, monthlyWeekday, type RecurrenceRule, weekly } from '../../../assets/grid/recurrence';
 import {
     EMPTY_SELECTION,
     type Selection,
@@ -19,7 +24,15 @@ import {
     selectQuarters,
     toggleQuarter,
 } from '../../../assets/grid/selection';
-import { gridArbitrary, gridOf, memoryStorage, minutes, quarterArbitrary, rangesOf } from './support';
+import {
+    gridArbitrary,
+    gridOf,
+    linkedGridArbitrary,
+    memoryStorage,
+    minutes,
+    quarterArbitrary,
+    rangesOf,
+} from './support';
 
 const day = gridOf([
     ['09:00', '10:00', 'work', 'SHOP-482', 'Mapping'],
@@ -268,5 +281,266 @@ describe('le presse-papier de l’onglet', () => {
         store.write(clipboardOf(PAUSE));
 
         expect(store.read()).toEqual(clipboardOf(PAUSE));
+    });
+});
+
+describe('copier un bloc qui revient', () => {
+    const linked = gridOf([
+        ['09:00', '09:30', 'work', 'OPS-12', 'Daily', 'a'],
+        ['12:30', '13:00', 'pause', null, null, 'b'],
+    ]);
+
+    it('ne garde pas la récurrence : ce qu’on colle est une saisie ordinaire', () => {
+        const selection = selectQuarters([minutes('09:15'), minutes('12:30')]);
+
+        expect(copied(linked, selection)).toEqual({
+            cells: [
+                { offset: 0, content: work('OPS-12', 'Daily') },
+                { offset: 13, content: PAUSE },
+            ],
+        });
+    });
+
+    it('ne garde pas celle d’un contenu copié d’un clic, comme un favori', () => {
+        expect(clipboardOf(work('OPS-12', 'Daily', 'a'))).toEqual(clipboardOf(work('OPS-12', 'Daily')));
+        expect(clipboardOf(linkedTo(PAUSE, 'b'))).toEqual(clipboardOf(PAUSE));
+    });
+
+    it('recollé au même endroit, le bloc garde ce qu’il montre et perd son lien', () => {
+        fc.assert(
+            fc.property(linkedGridArbitrary, fc.array(quarterArbitrary, { minLength: 1 }), (grid, quarters) => {
+                const selection = selectQuarters(quarters);
+                fc.pre(quarters.some((quarter) => grid.at(quarter) !== null));
+                const result = paste(copied(grid, selection), selection);
+                if (result.kind !== 'paste') {
+                    throw new Error(`Le collage a rendu ${result.kind}.`);
+                }
+                for (const [quarter, cell] of result.changes) {
+                    const before = grid.at(quarter);
+                    expect(cell === null ? before : unlinked(before ?? cell)).toEqual(cell);
+                    expect(cell?.recurrence ?? null).toBeNull();
+                }
+            }),
+        );
+    });
+
+    it('ne range jamais une récurrence dans l’onglet, ni n’en relit une écrite d’ailleurs', () => {
+        const storage = memoryStorage();
+        storedClipboard(storage).write(copied(linked, selectQuarters([minutes('09:00'), minutes('12:30')])));
+
+        expect(storage.items.get(CLIPBOARD_STORAGE_KEY)).not.toMatch(/"recurrence":"[ab]"/);
+
+        storage.items.set(
+            CLIPBOARD_STORAGE_KEY,
+            JSON.stringify({
+                cells: [
+                    { offset: 0, content: { kind: 'work', ticket: 'OPS-12', comment: 'Daily', recurrence: 'a' } },
+                    { offset: 1, content: { kind: 'pause', recurrence: 'b' } },
+                ],
+            }),
+        );
+        expect(storedClipboard(storage).read()).toEqual({
+            cells: [
+                { offset: 0, content: work('OPS-12', 'Daily') },
+                { offset: 1, content: PAUSE },
+            ],
+        });
+
+        storage.items.set(
+            CLIPBOARD_STORAGE_KEY,
+            JSON.stringify({ cells: [{ offset: 0, content: { kind: 'pause', recurrence: 7 } }] }),
+        );
+        expect(storedClipboard(storage).read()).toBeNull();
+    });
+});
+
+describe('couper un bloc qui revient avec les suivantes', () => {
+    /** Le Daily de 09:00 à 09:30, un mardi sur deux ; et la pause de 12:30 à 13:00. */
+    const day = gridOf([
+        ['09:00', '09:30', 'work', 'OPS-12', 'Daily', 'a'],
+        ['12:30', '13:00', 'pause', null, null, 'b'],
+    ]);
+    const RULE: RecurrenceRule = { ...weekly([2], 2), until: '2026-11-04' };
+    const DAILY = [minutes('09:00'), minutes('09:15')];
+    /** Coupée le mardi 6 octobre. */
+    const SOURCE: CutSource = { id: '01900000-0000-7000-8000-000000000001', date: '2026-10-06' };
+
+    function cut(grid: Grid, quarters: readonly number[], rule: RecurrenceRule = RULE): Clipboard {
+        const clipboard = cutRecurrence(grid, quarters, rule, SOURCE);
+        if (clipboard === null) {
+            throw new Error('La fois ne se coupe pas.');
+        }
+
+        return clipboard;
+    }
+
+    it('emporte la fois, sans son lien, avec son rythme et sa fin, la récurrence coupée et le jour de la coupe', () => {
+        expect(cut(day, DAILY)).toEqual({
+            cells: [
+                { offset: 0, content: work('OPS-12', 'Daily') },
+                { offset: 1, content: work('OPS-12', 'Daily') },
+            ],
+            recurrence: RULE,
+            source: SOURCE,
+        });
+    });
+
+    it('n’emporte pas une fois qui a un trou', () => {
+        expect(cutRecurrence(day, [minutes('09:00'), minutes('09:15'), minutes('09:30')], RULE, SOURCE)).toBeNull();
+        expect(cutRecurrence(day, [minutes('08:45')], RULE, SOURCE)).toBeNull();
+        expect(cutRecurrence(day, [], RULE, SOURCE)).toBeNull();
+    });
+
+    it('copier ne garde jamais la récurrence ; le premier collage la quitte, et d’où elle vient', () => {
+        expect(copyQuarters(day, DAILY)).toEqual({ cells: cut(day, DAILY).cells });
+        expect(withoutRecurrence(cut(day, DAILY))).toEqual({ cells: cut(day, DAILY).cells });
+    });
+
+    it('se colle à sa longueur, à partir du premier quart d’heure choisi, sans remplir la sélection', () => {
+        const short = cut(day, [minutes('12:30')], { ...monthlyDate(16), until: null });
+        const selection = extendTo(selectQuarter(minutes('15:00')), minutes('16:00'));
+
+        expect(paste(short, selection)).toEqual({
+            kind: 'paste',
+            changes: new Map([[minutes('15:00'), PAUSE]]),
+            quarters: [minutes('15:00')],
+        });
+        // Le même bloc, sans sa récurrence, remplit la sélection.
+        expect(paste(withoutRecurrence(short), selection)).toMatchObject({
+            quarters: Quarter.between(minutes('15:00'), minutes('16:15')),
+        });
+        expect(paste(cut(day, DAILY), selectQuarters([minutes('16:00'), minutes('18:00')]))).toEqual({
+            kind: 'paste',
+            changes: new Map([
+                [minutes('16:00'), work('OPS-12', 'Daily')],
+                [minutes('16:15'), work('OPS-12', 'Daily')],
+            ]),
+            quarters: [minutes('16:00'), minutes('16:15')],
+        });
+    });
+
+    it('ne se colle pas s’il dépasse 20:00, et se colle jusqu’au bout de la journée', () => {
+        expect(paste(cut(day, DAILY), selectQuarter(minutes('19:45')))).toEqual({ kind: 'overflow' });
+        expect(paste(cut(day, DAILY), selectQuarter(minutes('19:30')))).toMatchObject({
+            kind: 'paste',
+            quarters: [minutes('19:30'), minutes('19:45')],
+        });
+        expect(paste(cut(day, DAILY), selectQuarter(Quarter.FIRST))).toMatchObject({
+            quarters: [Quarter.FIRST, Quarter.FIRST + Quarter.MINUTES],
+        });
+    });
+
+    it('se relit dans l’onglet comme le même objet, tant que rien d’autre n’y est écrit', () => {
+        const store = storedClipboard(memoryStorage());
+        const clipboard = cut(day, DAILY);
+        store.write(clipboard);
+        expect(store.read()).toBe(clipboard);
+        // Le même contenu, copié de nouveau, est une autre écriture.
+        store.write(cut(day, DAILY));
+        expect(store.read()).not.toBe(clipboard);
+    });
+
+    it('se garde dans l’onglet avec son rythme, et se relit tel quel', () => {
+        for (const rule of [
+            RULE,
+            { ...weekly([1, 2, 3, 4, 5]), until: null },
+            { ...monthlyWeekday(5, 3), until: null },
+            { ...monthlyWeekday(4, LAST_WEEK), until: '2027-01-31' },
+            { ...monthlyDate(31), until: null },
+        ]) {
+            const storage = memoryStorage();
+            const clipboard = cut(day, DAILY, rule);
+            storedClipboard(storage).write(clipboard);
+
+            expect(storedClipboard(storage).read()).toEqual(clipboard);
+        }
+    });
+
+    it.each([
+        ['un rythme d’une nature inconnue', { kind: 'daily' }],
+        ['un jour 8', { weekdays: [8] }],
+        ['aucun jour à la semaine', { weekdays: [] }],
+        ['une semaine sur 5', { everyWeeks: 5 }],
+        ['une semaine sur 1,5', { everyWeeks: 1.5 }],
+        ['une fin qui n’existe pas', { until: '2026-02-30' }],
+        ['une fin absente', { until: undefined }],
+        ['un rang du mois sur une semaine', { monthWeek: 2 }],
+        ['un rang 5', { kind: 'monthly_weekday', weekdays: [5], monthWeek: 5 }],
+        ['deux jours au rang du mois', { kind: 'monthly_weekday', weekdays: [4, 5], monthWeek: 2 }],
+        ['un rang une semaine sur deux', { kind: 'monthly_weekday', weekdays: [5], monthWeek: 2, everyWeeks: 2 }],
+        ['un 32 du mois', { kind: 'monthly_date', weekdays: [], monthDay: 32 }],
+        ['une date du mois avec des jours', { kind: 'monthly_date', weekdays: [1], monthDay: 3 }],
+        ['un rythme qui n’est pas un objet', 'chaque mardi'],
+    ])('se relit vide, plutôt qu’à moitié, avec %s', (_, broken) => {
+        const storage = memoryStorage();
+        const kept = JSON.parse(JSON.stringify(cut(day, DAILY))) as { recurrence: Record<string, unknown> };
+        storage.items.set(
+            CLIPBOARD_STORAGE_KEY,
+            JSON.stringify({
+                ...kept,
+                recurrence: typeof broken === 'string' ? broken : { ...kept.recurrence, ...broken },
+            }),
+        );
+
+        expect(storedClipboard(storage).read()).toBeNull();
+    });
+
+    it.each([
+        ['sans la récurrence coupée ni le jour de la coupe', undefined],
+        ['sans la récurrence coupée', { date: SOURCE.date }],
+        ['sans le jour de la coupe', { id: SOURCE.id }],
+        ['un identifiant qui n’est pas un UUID', { ...SOURCE, id: 'daily' }],
+        ['un jour qui n’existe pas', { ...SOURCE, date: '2026-02-30' }],
+        ['une source qui n’est pas un objet', SOURCE.id],
+    ])('se relit vide, plutôt qu’à moitié, %s', (_, source) => {
+        const storage = memoryStorage();
+        const kept = JSON.parse(JSON.stringify(cut(day, DAILY))) as Record<string, unknown>;
+        storage.items.set(CLIPBOARD_STORAGE_KEY, JSON.stringify({ ...kept, source }));
+
+        expect(storedClipboard(storage).read()).toBeNull();
+    });
+
+    it('se relit vide avec la source d’une coupe, mais sans son rythme', () => {
+        const storage = memoryStorage();
+        storage.items.set(CLIPBOARD_STORAGE_KEY, JSON.stringify({ cells: cut(day, DAILY).cells, source: SOURCE }));
+
+        expect(storedClipboard(storage).read()).toBeNull();
+    });
+
+    it.each([
+        ['un trou', [0, 2]],
+        ['un départ décalé', [1, 2]],
+    ])('se relit vide, avec %s dans son bloc', (_, offsets) => {
+        const storage = memoryStorage();
+        const daily = { kind: 'work', ticket: 'OPS-12', comment: 'Daily' };
+        storage.items.set(
+            CLIPBOARD_STORAGE_KEY,
+            JSON.stringify({
+                cells: offsets.map((offset) => ({ offset, content: daily })),
+                recurrence: RULE,
+                source: SOURCE,
+            }),
+        );
+
+        expect(storedClipboard(storage).read()).toBeNull();
+    });
+
+    it('se relit vide, avec deux contenus ou un créneau vide dans son bloc', () => {
+        const storage = memoryStorage();
+        for (const second of [{ kind: 'pause' }, null]) {
+            storage.items.set(
+                CLIPBOARD_STORAGE_KEY,
+                JSON.stringify({
+                    cells: [
+                        { offset: 0, content: { kind: 'work', ticket: 'OPS-12', comment: 'Daily' } },
+                        { offset: 1, content: second },
+                    ],
+                    recurrence: RULE,
+                    source: SOURCE,
+                }),
+            );
+
+            expect(storedClipboard(storage).read()).toBeNull();
+        }
     });
 });

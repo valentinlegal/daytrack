@@ -21,12 +21,13 @@ final class DayFiguresTest extends TestCase
 
     /**
      * @param list<array<mixed>>   $blocks
+     * @param list<array<mixed>>   $planned
      * @param array<string, mixed> $expected
      */
     #[DataProvider('cases')]
-    public function testLesChiffresDuJour(array $blocks, int $objective, ?string $now, array $expected): void
+    public function testLesChiffresDuJour(array $blocks, array $planned, int $objective, ?string $now, array $expected): void
     {
-        $figures = DayFigures::of(self::grid($blocks), $objective, null === $now ? null : Quarter::parse($now));
+        $figures = DayFigures::of(self::grid($blocks)->withPlanned(self::planned($planned)), $objective, null === $now ? null : Quarter::parse($now));
 
         self::assertSame($expected, [
             'worked' => $figures->worked,
@@ -37,7 +38,7 @@ final class DayFiguresTest extends TestCase
     }
 
     /**
-     * @return iterable<string, array{list<array<mixed>>, int, ?string, array<string, mixed>}>
+     * @return iterable<string, array{list<array<mixed>>, list<array<mixed>>, int, ?string, array<string, mixed>}>
      */
     public static function cases(): iterable
     {
@@ -53,7 +54,7 @@ final class DayFiguresTest extends TestCase
             /** @var array<string, mixed> $expected */
             $expected = self::arrayAt($case, 'expected');
 
-            yield self::stringAt($case, 'name') => [self::listAt($case, 'blocks'), $objective, $now, $expected];
+            yield self::stringAt($case, 'name') => [self::listAt($case, 'blocks'), \array_key_exists('planned', $case) ? self::listAt($case, 'planned') : [], $objective, $now, $expected];
         }
     }
 
@@ -76,5 +77,27 @@ final class DayFiguresTest extends TestCase
         }
 
         return Grid::of($quarters);
+    }
+
+    /**
+     * Les fois prévues, chacune d'une récurrence à part, dans l'ordre.
+     *
+     * @param list<array<mixed>> $planned
+     *
+     * @return list<array{SlotContent, int, int, string}>
+     */
+    private static function planned(array $planned): array
+    {
+        $occurrences = [];
+        foreach ($planned as $index => $occurrence) {
+            $start = Quarter::parse(self::stringAt($occurrence, 0));
+            $end = Quarter::parse(self::stringAt($occurrence, 1));
+            self::assertNotNull($start);
+            self::assertNotNull($end);
+            $content = 'pause' === self::stringAt($occurrence, 2) ? SlotContent::pause() : SlotContent::work('OPS-12', null);
+            $occurrences[] = [$content, $start, $end, 'récurrence '.$index];
+        }
+
+        return $occurrences;
     }
 }

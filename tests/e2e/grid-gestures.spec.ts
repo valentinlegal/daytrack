@@ -204,7 +204,7 @@ test.describe('un bloc qu’on vide', () => {
 
         await expect(window).toHaveCount(0);
         await expect(blocks(page)).toHaveCount(0);
-        await expect(message(page)).toHaveText(/SHOP-482 supprimé/);
+        await expect(message(page)).toHaveText(/SHOP-482 effacé/);
         await expectGridMatchesBase(page, request, date);
 
         await slots(page).focus();

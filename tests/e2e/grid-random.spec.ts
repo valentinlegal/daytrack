@@ -15,6 +15,7 @@ import {
     editTitle,
     emptyModel,
     enterQuarters,
+    entersBlock,
     fill,
     labelsOf,
     type Model,
@@ -164,8 +165,8 @@ async function type(page: Page, title: string, step: { ticket: string; comment: 
 }
 
 /**
- * Entrée sur la sélection : Nouveau ticket sur toute une plage vide, sinon la fenêtre du
- * créneau où la sélection s'arrête, comme un double-clic.
+ * Entrée sur la sélection : la fenêtre du bloc quand toute la sélection y tient, comme un
+ * double-clic ; sinon Nouveau ticket sur toute la sélection.
  */
 async function enterOn(
     page: Page,
@@ -175,9 +176,8 @@ async function enterOn(
     step: { ticket: string; comment: string },
 ) {
     await page.keyboard.press('Enter');
-    const written = enterQuarters(model, quarters, head);
-    const empty = written.every((quarter) => cellAt(model, quarter) === null);
-    await type(page, empty ? 'Nouveau ticket' : editTitle(model, head), step);
+    const written = enterQuarters(model, quarters);
+    await type(page, entersBlock(model, quarters) ? editTitle(model, head) : 'Nouveau ticket', step);
     change(model, fill(written, `${step.ticket}|${step.comment}`));
 }
 
@@ -334,7 +334,7 @@ async function play(page: Page, model: Model, step: Gesture) {
                 await page.keyboard.press('Escape');
             } else {
                 const dialog = page.getByRole('dialog', { name: editTitle(model, step.at) });
-                await dialog.getByRole('button', { name: 'Supprimer' }).click();
+                await dialog.getByRole('button', { name: 'Effacer' }).click();
                 change(model, fill(blockOf(model, step.at), null));
             }
             await expect(page.getByRole('dialog')).toHaveCount(0);

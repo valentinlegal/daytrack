@@ -15,6 +15,8 @@ interface SavedBlock {
     readonly kind: 'work' | 'pause';
     readonly ticket: string | null;
     readonly comment: string | null;
+    /** La récurrence qui l'a posé ; absente pour une saisie ordinaire. */
+    readonly recurrence?: string;
 }
 
 /** La grille défilée jusqu'à ce que cette heure soit en haut de la vue, ou aussi près que possible. */
@@ -59,6 +61,23 @@ export function figures(page: Page): Locator {
 export async function openDay(page: Page, date: string): Promise<void> {
     await page.goto(`/${date}`);
     await expect(figures(page)).toBeVisible();
+}
+
+/**
+ * La page y revient : la journée affichée se relit, à son tour dans sa file, derrière ce
+ * qu'un geste vient d'y mettre. Sa réponse arrivée, ce geste est parti, s'il devait partir.
+ * La journée est d'abord lue : un geste tapé pendant qu'elle s'ouvrait l'attendait, et ne
+ * prend sa place dans la file qu'à son arrivée.
+ */
+export async function rereadBehindGestures(page: Page, date: string): Promise<void> {
+    await expect(figures(page)).toHaveCount(1);
+    const reread = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === `/api/days/${date}` && response.request().method() === 'GET',
+    );
+    await page.evaluate(() => {
+        window.dispatchEvent(new Event('focus'));
+    });
+    await reread;
 }
 
 export function openAnyway(page: Page): Locator {
@@ -192,26 +211,44 @@ export function message(page: Page): Locator {
 /** La journée telle que la base la contient. */
 export async function savedDay(request: APIRequestContext, date: string): Promise<SavedBlock[]> {
     const response = await request.get(`/api/days/${date}`);
+    const { blocks } = (await response.json()) as {
+        blocks: (Omit<SavedBlock, 'recurrence'> & { recurrence: string | null })[];
+    };
 
-    return ((await response.json()) as { blocks: SavedBlock[] }).blocks;
+    // Une saisie ordinaire se compare sans sa récurrence, qu'elle n'a pas.
+    return blocks.map(({ recurrence, ...block }) => (recurrence === null ? block : { ...block, recurrence }));
 }
 
-/** Ce que la liste des créneaux dit de chacun, tel que la base le contient : « 09:30, SHOP-482, Tests ». */
-function labelsOf(blocks: readonly SavedBlock[]): string[] {
+/**
+ * Ce que la liste des créneaux dit de chacun, tel que la base le contient : « 09:30, SHOP-482,
+ * Tests ». Un bloc qui revient y ajoute son rythme, « …, revient chaque mardi », que la grille
+ * écrit elle-même : seul son début se compare.
+ */
+function labelsOf(blocks: readonly SavedBlock[], revives: ReadonlySet<string>): string[] {
     const labels: string[] = [];
     for (let minutes = 420; minutes < 1200; minutes += 15) {
         const time = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
         const block = blocks.find((candidate) => candidate.start <= time && time < candidate.end);
-        labels.push(
+        const label =
             block === undefined
                 ? `${time}, vide`
                 : block.kind === 'pause'
                   ? `${time}, pause`
-                  : [time, block.ticket, block.comment].filter((part) => part !== null).join(', '),
-        );
+                  : [time, block.ticket, block.comment].filter((part) => part !== null).join(', ');
+        labels.push(block?.recurrence !== undefined && revives.has(block.recurrence) ? `${label}, revient ` : label);
     }
 
     return labels;
+}
+
+/** Les récurrences de la journée qui vont encore jusqu'à elle : leurs blocs portent une flèche. */
+async function revivingOn(request: APIRequestContext, date: string): Promise<Set<string>> {
+    const response = await request.get(`/api/days/${date}`);
+    const { recurrences } = (await response.json()) as { recurrences: Record<string, { until: string | null }> };
+
+    return new Set(
+        Object.entries(recurrences).flatMap(([id, { until }]) => (until === null || until >= date ? [id] : [])),
+    );
 }
 
 /**
@@ -226,19 +263,33 @@ export async function expectGridMatchesBase(page: Page, request: APIRequestConte
     await expect
         .poll(
             async () => {
-                const [shown, blocks, saved] = await Promise.all([
+                const list = page.getByRole('list', { name: 'Saisies du jour' });
+                const [shown, blocks, arrows, saved, revives] = await Promise.all([
                     slots(page).getByRole('option').allTextContents(),
-                    page.getByRole('list', { name: 'Saisies du jour' }).getByRole('listitem').count(),
+                    list.getByRole('listitem').count(),
+                    list.getByRole('img', { name: /^Revient / }).count(),
                     savedDay(request, date),
+                    revivingOn(request, date),
                 ]);
-                const expected = labelsOf(saved);
-                const gaps = shown.flatMap((label, index) =>
-                    label === expected[index] ? [] : [`écran « ${label} », base « ${expected[index] ?? ''} »`],
-                );
+                const expected = labelsOf(saved, revives);
+                const gaps = shown.flatMap((label, index) => {
+                    const wanted = expected[index] ?? '';
 
-                return blocks === saved.length
-                    ? gaps
-                    : [...gaps, `${String(blocks)} blocs pour ${String(saved.length)}`];
+                    return label === wanted || (wanted.endsWith(', revient ') && label.startsWith(wanted))
+                        ? []
+                        : [`écran « ${label} », base « ${wanted} »`];
+                });
+                const linked = saved.filter(
+                    (block) => block.recurrence !== undefined && revives.has(block.recurrence),
+                ).length;
+
+                return [
+                    ...gaps,
+                    ...(blocks === saved.length ? [] : [`${String(blocks)} blocs pour ${String(saved.length)}`]),
+                    ...(arrows === linked
+                        ? []
+                        : [`${String(arrows)} flèches pour ${String(linked)} blocs qui reviennent`]),
+                ];
             },
             { message: 'La grille et la base diffèrent' },
         )

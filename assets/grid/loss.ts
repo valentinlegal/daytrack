@@ -1,4 +1,4 @@
-import { sameCell, type SlotContent } from './grid';
+import { sameContent, type SlotContent } from './grid';
 import type { Step } from './history';
 import * as Quarter from './quarter';
 
@@ -16,11 +16,17 @@ export interface Loss {
     readonly span: { readonly start: number; readonly end: number } | null;
 }
 
+/**
+ * Un quart d'heure seulement délié de sa récurrence garde ce qu'on lit : il n'a rien perdu.
+ * Un geste qui en prend un détache la fois entière (recurrence.ts, detach), et le message ne
+ * nomme que ce qu'il a changé.
+ */
 export function lossOf(step: Step): Loss {
     const lost: [number, SlotContent][] = [];
     step.quarters.forEach((quarter, index) => {
         const before = step.before[index] ?? null;
-        if (before !== null && !sameCell(before, step.after[index] ?? null)) {
+        const after = step.after[index] ?? null;
+        if (before !== null && (after === null || !sameContent(before, after))) {
             lost.push([quarter, before]);
         }
     });

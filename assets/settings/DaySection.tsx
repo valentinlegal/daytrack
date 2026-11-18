@@ -1,5 +1,6 @@
 import { type RefObject, useEffect, useRef, useState } from 'react';
 
+import { DayToggle } from '../components/DayToggle';
 import { GeneralError } from '../components/Field';
 import { Stepper } from '../components/Stepper';
 import { duration } from '../day/format';
@@ -77,18 +78,15 @@ export function DaySection({
                                     const worked = settings.workingDays.includes(day);
 
                                     return (
-                                        <button
+                                        <DayToggle
                                             key={day}
-                                            type="button"
-                                            aria-pressed={worked}
-                                            aria-label={name}
-                                            className="size-ctl cursor-pointer rounded-2 border border-line-strong bg-bg-raise text-sm font-semibold text-ink-2 transition-colors hover:bg-bg-hover aria-pressed:border-btn aria-pressed:bg-btn aria-pressed:text-on-btn aria-pressed:hover:border-btn-hover aria-pressed:hover:bg-btn-hover"
+                                            letter={letter}
+                                            name={name}
+                                            pressed={worked}
                                             onClick={() => {
                                                 editor.setWorkingDay(day, !worked);
                                             }}
-                                        >
-                                            {letter}
-                                        </button>
+                                        />
                                     );
                                 })}
                             </div>

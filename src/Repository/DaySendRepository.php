@@ -5,6 +5,7 @@ namespace App\Repository;
 use App\Database\Lockable;
 use App\Database\LocksItsTable;
 use App\Day\UserCalendar;
+use App\Entity\Day;
 use App\Entity\DaySend;
 use App\Entity\JiraConnection;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
@@ -22,6 +23,85 @@ final class DaySendRepository extends ServiceEntityRepository implements Lockabl
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, DaySend::class);
+    }
+
+    /**
+     * Un envoi de cette journée en reste, réussi ou non, sous n'importe quel compte : son envoi
+     * y a posé ses récurrences pour de bon. Comme un jour venu, aucune ne s'y prévoit ni ne s'y
+     * pose plus, qu'elle naisse, change ou s'étende ensuite (RecurrenceForecast,
+     * RecurrencePoser). Seul un envoi qui a encore quelque chose à dire la ferme (closes) :
+     * vidée de ses tickets, une journée que ses envois laissent sans heures dans Jira — renvoyée
+     * vide, ou dont l'envoi a échoué sans rien écrire — redevient un jour comme un autre.
+     */
+    public function closesToRecurrences(Day $day): bool
+    {
+        foreach ($this->findBy(['day' => $day]) as $send) {
+            if (self::closes($send, $day)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Les jours après celui-ci qu'un envoi ferme aux récurrences (closesToRecurrences),
+     * « AAAA-MM-JJ », dans l'ordre : la fenêtre d'une récurrence ne les annonce pas, et aucune
+     * n'y prend de créneau (RecurrenceClash).
+     *
+     * @return list<string>
+     */
+    public function closedAfter(\DateTimeImmutable $today): array
+    {
+        /** @var list<DaySend> $sends */
+        $sends = $this->createQueryBuilder('send')
+            ->addSelect('day', 'slot')
+            ->join('send.day', 'day')
+            ->leftJoin('day.slots', 'slot')
+            ->where('day.date > :today')
+            ->setParameter('today', $today, Types::DATE_IMMUTABLE)
+            ->getQuery()
+            ->getResult();
+
+        $closed = [];
+        foreach ($sends as $send) {
+            if (self::closes($send, $send->day)) {
+                $closed[$send->day->date->format('Y-m-d')] = true;
+            }
+        }
+        ksort($closed);
+
+        return array_map('strval', array_keys($closed));
+    }
+
+    /**
+     * Oublie les envois de cette journée qui n'ont plus rien à dire (closes), sous n'importe quel
+     * compte : sans eux, rien ne change de ce qu'elle montre ni de son état d'envoi, mais un
+     * ticket saisi ensuite ne la refermerait pas aux récurrences qu'elle montre déjà. Jamais un
+     * envoi en cours. Sous le verrou de l'écriture qui l'appelle.
+     */
+    public function forgetMute(Day $day, \DateTimeImmutable $now): void
+    {
+        $forgotten = false;
+        foreach ($this->findBy(['day' => $day]) as $send) {
+            if (!self::closes($send, $day) && !$send->isSending($now)) {
+                $this->getEntityManager()->remove($send);
+                $forgotten = true;
+            }
+        }
+        if ($forgotten) {
+            // Relu ensuite dans la même écriture, il ne doit plus fermer la journée qui se remplit.
+            $this->getEntityManager()->flush();
+        }
+    }
+
+    /**
+     * Cet envoi a encore quelque chose à dire de sa journée, et la ferme aux récurrences : elle a
+     * des tickets, ou il y a laissé des heures dans Jira.
+     */
+    private static function closes(DaySend $send, Day $day): bool
+    {
+        return !$send->leavesNoHours() || [] !== $day->grid()->tickets();
     }
 
     /** L'envoi de ce jour vers ce Jira, sous ce compte ; aucun sans Jira relié. */

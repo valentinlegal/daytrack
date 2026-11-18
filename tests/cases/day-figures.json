@@ -1,5 +1,5 @@
 {
-  "about": "Les chiffres du jour : travaillé, reste, solde et fin prévue, en minutes ; la fin prévue part du début du créneau en cours, qui compte comme travaillé saisi ou non, sauf pause, et tombe au quart d'heure supérieur. Le serveur (tests/Day/DayFiguresTest.php) et le navigateur rejouent ces mêmes cas : un écart entre eux est un bug. « now » est l'heure qu'il est quand le jour est aujourd'hui, null pour tout autre jour. Chaque bloc : début, fin, « work » ou « pause ».",
+  "about": "Les chiffres du jour : travaillé, reste, solde et fin prévue, en minutes ; la fin prévue part du début du créneau en cours, qui compte comme travaillé saisi ou non, sauf pause, et tombe au quart d'heure supérieur. Le serveur (tests/Day/DayFiguresTest.php) et le navigateur rejouent ces mêmes cas : un écart entre eux est un bug. « now » est l'heure qu'il est quand le jour est aujourd'hui, null pour tout autre jour. Chaque bloc : début, fin, « work » ou « pause ». Un jour à venir a aussi ses fois prévues, « planned », dans l'ordre de leurs récurrences : chacune se pose sur les quarts d'heure que les saisies et les précédentes laissent libres, et compte comme les autres blocs.",
   "cases": [
     {
       "name": "la journée d'exemple en cours, à 15:20 : le créneau en cours compte, même vide",
@@ -354,6 +354,59 @@
       "objective": 30,
       "now": "12:00",
       "expected": { "worked": 15, "remaining": 15, "balance": -15, "projectedEnd": "13:00" }
+    },
+    {
+      "name": "un jour à venir : ses récurrences prévues comptent comme les autres blocs",
+      "blocks": [["10:00", "11:00", "work"]],
+      "planned": [
+        ["09:15", "09:30", "work"],
+        ["12:30", "13:30", "pause"],
+        ["14:00", "15:00", "work"]
+      ],
+      "objective": 450,
+      "now": null,
+      "expected": { "worked": 135, "remaining": 315, "balance": -315, "projectedEnd": null }
+    },
+    {
+      "name": "une récurrence prévue cède à ce qui est saisi, quart d'heure par quart d'heure",
+      "blocks": [["09:30", "09:45", "work"], ["12:45", "13:00", "work"]],
+      "planned": [
+        ["09:00", "10:00", "work"],
+        ["12:30", "13:30", "pause"]
+      ],
+      "objective": 450,
+      "now": null,
+      "expected": { "worked": 75, "remaining": 375, "balance": -375, "projectedEnd": null }
+    },
+    {
+      "name": "deux récurrences prévues sur la même plage : la première l'emporte",
+      "blocks": [],
+      "planned": [
+        ["12:00", "13:00", "pause"],
+        ["12:30", "14:00", "work"]
+      ],
+      "objective": 60,
+      "now": null,
+      "expected": { "worked": 60, "remaining": 0, "balance": 0, "projectedEnd": null }
+    },
+    {
+      "name": "aux bornes de la grille, 07:00 et 20:00",
+      "blocks": [["07:00", "07:15", "pause"]],
+      "planned": [
+        ["07:00", "07:30", "work"],
+        ["19:45", "20:00", "work"]
+      ],
+      "objective": 0,
+      "now": null,
+      "expected": { "worked": 30, "remaining": 0, "balance": 30, "projectedEnd": null }
+    },
+    {
+      "name": "une journée entière prévue",
+      "blocks": [],
+      "planned": [["07:00", "20:00", "work"]],
+      "objective": 780,
+      "now": null,
+      "expected": { "worked": 780, "remaining": 0, "balance": 0, "projectedEnd": null }
     }
   ]
 }

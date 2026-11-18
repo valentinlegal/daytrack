@@ -9,6 +9,7 @@ import { minuteOn } from '../grid/clock';
 import type { DayApi } from '../grid/daySession';
 import { tabMemory } from '../grid/daySession';
 import { DaySessions } from '../grid/daySessions';
+import type { Recurrence } from '../grid/recurrence';
 import { dayFigures } from '../grid/figures';
 import { recap } from '../grid/recap';
 import type { SendFailure } from '../grid/send';
@@ -43,9 +44,13 @@ import { useRecapPanel } from './useRecapPanel';
 import { useSendToJira } from './useSendToJira';
 import { useSideWidth } from './useSideWidth';
 import { useTicketTitles } from './useTicketTitles';
+import { initialRecurrence, linkedRecurrence } from './recurrenceDraft';
 import { useUserMoment } from './useUserMoment';
 import { useOpenWindows, useWindowFlush } from './useWindowFlush';
 import { useWorkingDays } from './workingDays';
+
+/** Une journée pas encore lue ne connaît aucune récurrence. */
+const NO_RECURRENCES: ReadonlyMap<string, Recurrence> = new Map();
 
 /** Ce que le serveur dit à la page (templates/app.html.twig). */
 export interface DayConfig {
@@ -170,6 +175,8 @@ export function DayScreen({
         blockDropRef,
         beforeWindowRef: windows.beforeTicketWindowRef,
         closed: closure.closed,
+        today: moment.date,
+        openingDay: shown === null ? date : null,
     });
     const { offDay, openAnywayRef, returnFocus } = useOffDayFocus(closure, editing.focusGrid);
     const favoriteGestures = useFavorites({
@@ -308,6 +315,7 @@ export function DayScreen({
                             scrollerRef={scrollerRef}
                             laneRef={laneRef}
                             listboxRef={listboxRef}
+                            date={day?.date ?? null}
                             grid={day?.grid ?? null}
                             loading={shown === null}
                             busy={snapshot?.busy ?? false}
@@ -320,6 +328,8 @@ export function DayScreen({
                             }}
                             openAnywayRef={openAnywayRef}
                             offDay={offDay}
+                            recurrences={day?.recurrences}
+                            recurrencesHeld={day?.recurrencesHeld === true}
                             menu={
                                 <GridMenu
                                     selection={editing.selection}
@@ -391,7 +401,17 @@ export function DayScreen({
             )}
             <TicketWindow
                 date={date}
+                today={moment.date}
+                workingDays={day?.workingDays ?? []}
                 window={editing.window}
+                recurrence={editing.windowRecurrence}
+                initialRecurrence={
+                    editing.window === null || day === null ? null : initialRecurrence(editing.window.target, day)
+                }
+                linked={editing.window === null || day === null ? null : linkedRecurrence(editing.window.target, day)}
+                ongoing={day?.ongoing ?? NO_RECURRENCES}
+                settledAhead={day?.settledAhead}
+                onRecurrence={editing.setRecurrence}
                 note={editing.windowNote}
                 place={editing.placeWindow}
                 gridRef={laneRef}
@@ -401,6 +421,7 @@ export function DayScreen({
                 onCancel={editing.cancelWindow}
                 onPause={editing.pauseWindow}
                 onDelete={editing.deleteWindow}
+                onChooseScope={editing.chooseScope}
                 onCheckTicket={editing.checkTicket}
                 returnFocus={returnFocus}
             />

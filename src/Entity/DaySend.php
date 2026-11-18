@@ -213,6 +213,16 @@ class DaySend
     }
 
     /**
+     * DayTrack n'a laissé aucune heure de ce jour dans Jira, à sa connaissance : aucun ticket où
+     * il ait pu écrire, ni retiré que Jira ne trouvait plus. Sur une journée sans ticket, cet
+     * envoi n'a plus rien à dire (SendState::Nothing, DaySendRepository::closesToRecurrences).
+     */
+    public function leavesNoHours(): bool
+    {
+        return [] === $this->touched && [] === $this->vanished();
+    }
+
+    /**
      * Ce que la relecture a trouvé dans Jira sur un ticket qui n'y est pas arrivé tel quel.
      *
      * @return array<string, int> en secondes

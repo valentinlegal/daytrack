@@ -14,6 +14,7 @@ import {
     objectiveButton,
     openAnyway,
     recordWrites,
+    rereadBehindGestures,
     rightClickSlot,
     savedDay,
     slotPoint,
@@ -789,6 +790,8 @@ test.describe('le jour non travaillé', () => {
         await cell(page, date).click();
         await expect(openAnyway(page)).toBeVisible();
         await page.keyboard.press('ControlOrMeta+Z');
+        // Ce que Ctrl+Z aurait envoyé est parti avant la relecture : la base se lit après lui.
+        await rereadBehindGestures(page, date);
         await expect(openAnyway(page)).toBeVisible();
         await expect(blocks(page)).toHaveCount(0);
         expect(await savedDay(request, date)).toEqual([]);

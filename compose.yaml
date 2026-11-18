@@ -111,6 +111,9 @@ services:
     ipc: host
     environment:
       CI: ${CI:-}
+      # La langue du navigateur lui-même : un champ date s'y écrit jour, mois, année.
+      LANG: fr_FR.UTF-8
+      LANGUAGE: fr_FR:fr
 
 volumes:
   caddy_data:

@@ -2,10 +2,17 @@ import * as Quarter from './quarter';
 
 /**
  * Ce qu'un quart d'heure contient : un ticket et son commentaire, ou une pause, qui
- * n'entre jamais dans le temps travaillé (src/Day/SlotContent.php).
+ * n'entre jamais dans le temps travaillé (src/Day/SlotContent.php) ; et la récurrence qui
+ * l'a posé, tant qu'aucun geste ne l'en a détaché (src/Entity/Slot.php).
  */
 export type SlotContent =
-    { readonly kind: 'work'; readonly ticket: string; readonly comment: string | null } | { readonly kind: 'pause' };
+    | {
+          readonly kind: 'work';
+          readonly ticket: string;
+          readonly comment: string | null;
+          readonly recurrence: string | null;
+      }
+    | { readonly kind: 'pause'; readonly recurrence: string | null };
 
 /** Ce qu'un quart d'heure contient, ou null s'il est vide. */
 export type Cell = SlotContent | null;
@@ -17,10 +24,20 @@ export interface Block {
     readonly content: SlotContent;
 }
 
-export const PAUSE: SlotContent = { kind: 'pause' };
+export const PAUSE: SlotContent = { kind: 'pause', recurrence: null };
 
-export function work(ticket: string, comment: string | null = null): SlotContent {
-    return { kind: 'work', ticket, comment };
+export function work(ticket: string, comment: string | null = null, recurrence: string | null = null): SlotContent {
+    return { kind: 'work', ticket, comment, recurrence };
+}
+
+/** Le même contenu, posé par cette récurrence, ou par aucune. */
+export function linkedTo(content: SlotContent, recurrence: string | null): SlotContent {
+    return content.recurrence === recurrence ? content : { ...content, recurrence };
+}
+
+/** Le même contenu, sans la récurrence qui l'a posé : ce qu'un geste en copie ou y écrit. */
+export function unlinked(content: SlotContent): SlotContent {
+    return linkedTo(content, null);
 }
 
 /** Ce qui entoure un texte sans se voir : espaces de toute sorte, sauts de ligne, caractères de mise en forme. */
@@ -54,17 +71,23 @@ export function normalizeComment(comment: string | null): string | null {
 
 /** Le contenu tel que le serveur l'enregistrera. Un ticket vide reste vide : le serveur le refusera. */
 export function normalizeCell(cell: Cell): Cell {
-    return cell?.kind === 'work' ? work(normalizeTicket(cell.ticket) ?? '', normalizeComment(cell.comment)) : cell;
+    return cell?.kind === 'work'
+        ? work(normalizeTicket(cell.ticket) ?? '', normalizeComment(cell.comment), cell.recurrence)
+        : cell;
 }
 
 /**
- * Deux contenus identiques. Deux quarts d'heure voisins au même contenu forment un
- * seul bloc : c'est cette égalité-là, et aucune autre, qui découpe la journée.
+ * Deux contenus identiques, posés par la même récurrence ou par aucune. Deux quarts
+ * d'heure voisins au même contenu forment un seul bloc : c'est cette égalité-là, et
+ * aucune autre, qui découpe la journée. Deux contenus égaux de récurrences différentes
+ * restent deux blocs : chacun a sa flèche, ou n'en a pas.
  */
 export function sameCell(a: Cell, b: Cell): boolean {
-    if (a === null || b === null) {
-        return a === b;
-    }
+    return a === null || b === null ? a === b : a.recurrence === b.recurrence && sameContent(a, b);
+}
+
+/** Le même ticket et le même commentaire, ou deux pauses, d'où qu'ils viennent : ce qu'on lit. */
+export function sameContent(a: SlotContent, b: SlotContent): boolean {
     if (a.kind === 'pause' || b.kind === 'pause') {
         return a.kind === b.kind;
     }

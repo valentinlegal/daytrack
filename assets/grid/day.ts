@@ -1,6 +1,8 @@
-import { type Block, Grid, PAUSE, work } from './grid';
+import { isDate } from '../day/calendar';
+import { type Block, Grid, linkedTo, PAUSE, work } from './grid';
 import { isRecord } from './json';
 import * as Quarter from './quarter';
+import { readRecurrences, type Recurrence } from './recurrence';
 import { readSend, type SendStatus } from './send';
 
 /**
@@ -27,6 +29,21 @@ export interface DayState {
     readonly workingDays: readonly number[];
     readonly grid: Grid;
     readonly send: SendStatus;
+    /** Celles qui ont posé un bloc ce jour-là, par leur identifiant : la flèche du bloc et sa fenêtre les disent. */
+    readonly recurrences: ReadonlyMap<string, Recurrence>;
+    /** Fermé et vide, alors qu'une récurrence y serait tombée : la journée vide le dit. */
+    readonly recurrencesHeld: boolean;
+    /**
+     * Toutes celles qui vont encore jusqu'à ce jour, ou au-delà : une récurrence qu'on y crée
+     * ou qu'on y change ne doit tomber sur aucune (firstClash). Le serveur en décide, sur les
+     * siennes du moment : celles-ci datent de la lecture de la journée.
+     */
+    readonly ongoing: ReadonlyMap<string, Recurrence>;
+    /**
+     * Les jours à venir déjà envoyés, « AAAA-MM-JJ » : leurs récurrences ne les changent plus,
+     * et la fenêtre d'une récurrence ne les annonce pas dans ses prochaines fois.
+     */
+    readonly settledAhead: ReadonlySet<string>;
 }
 
 /**
@@ -59,7 +76,21 @@ export function readDay(json: unknown): DayState {
         workingDays: readWeekdays(day.workingDays),
         grid: Grid.fromBlocks(day.blocks.map(readBlock)),
         send: readSend(day.send),
+        // Une journée d'avant les récurrences n'en a pas.
+        recurrences: day.recurrences === undefined ? new Map() : readRecurrences(day.recurrences),
+        recurrencesHeld: day.recurrencesHeld === true,
+        ongoing: day.ongoing === undefined ? new Map() : readRecurrences(day.ongoing),
+        settledAhead: day.settledAhead === undefined ? new Set() : readDates(day.settledAhead),
     };
+}
+
+/** Des dates « AAAA-MM-JJ » du calendrier. */
+function readDates(value: unknown): Set<string> {
+    if (!Array.isArray(value) || !value.every((date: unknown) => typeof date === 'string' && isDate(date))) {
+        throw new TypeError('« settledAhead » ne sont pas des dates.');
+    }
+
+    return new Set(value as string[]);
 }
 
 /** Des jours de la semaine ISO, chacun une fois : les flèches de la barre s'y fient. */
@@ -82,8 +113,12 @@ function readBlock(json: unknown): Block {
     if (start === null || end === null) {
         throw new TypeError("Un bloc n'a pas d'heures.");
     }
+    const recurrence = block.recurrence ?? null;
+    if (recurrence !== null && typeof recurrence !== 'string') {
+        throw new TypeError("La récurrence d'un bloc n'est pas un identifiant.");
+    }
     if (block.kind === 'pause') {
-        return { start, end, content: PAUSE };
+        return { start, end, content: linkedTo(PAUSE, recurrence) };
     }
     if (block.kind !== 'work' || typeof block.ticket !== 'string') {
         throw new TypeError('Un bloc ne porte ni ticket ni pause.');
@@ -92,7 +127,7 @@ function readBlock(json: unknown): Block {
         throw new TypeError("Le commentaire d'un bloc n'est pas un texte.");
     }
 
-    return { start, end, content: work(block.ticket, block.comment) };
+    return { start, end, content: work(block.ticket, block.comment, recurrence) };
 }
 
 function record(json: unknown, what: string): Record<string, unknown> {

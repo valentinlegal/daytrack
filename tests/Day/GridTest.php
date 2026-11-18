@@ -30,6 +30,7 @@ final class GridTest extends TestCase
     public function testLesBlocsDesCasPartagesAvecLeNavigateur(array $slots, array $expected): void
     {
         $quarters = [];
+        $links = [];
         foreach ($slots as $slot) {
             $start = Quarter::parse(self::stringAt($slot, 0));
             $end = Quarter::parse(self::stringAt($slot, 1));
@@ -39,6 +40,10 @@ final class GridTest extends TestCase
             $content = self::content($slot);
             foreach (Quarter::between($start, $end) as $quarter) {
                 $quarters[$quarter] = $content;
+                // En sixième, la récurrence qui a posé la plage, s'il y en a une.
+                if (\array_key_exists(5, $slot)) {
+                    $links[$quarter] = self::stringAt($slot, 5);
+                }
             }
         }
 
@@ -48,7 +53,24 @@ final class GridTest extends TestCase
             $block->content->kind->value,
             $block->content->ticket,
             $block->content->comment,
-        ], Grid::of($quarters)->blocks()));
+            ...(null === $block->recurrence ? [] : [$block->recurrence]),
+        ], Grid::of($quarters, $links)->blocks()));
+    }
+
+    public function testUneRecurrenceNePoseRienSurUnQuartDHeureVide(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Grid::of([540 => SlotContent::pause()], [540 => 'a', 555 => 'a']);
+    }
+
+    public function testLesRecurrencesDUneJourneeSontCiteesUneFoisChacune(): void
+    {
+        $daily = SlotContent::work('OPS-12', 'Daily');
+        $grid = Grid::of([540 => $daily, 555 => $daily, 600 => SlotContent::pause(), 615 => $daily], [540 => 'a', 555 => 'a', 615 => 'b']);
+
+        self::assertSame(['a', 'b'], $grid->recurrences());
+        self::assertSame([], Grid::of([540 => $daily])->recurrences());
     }
 
     /**

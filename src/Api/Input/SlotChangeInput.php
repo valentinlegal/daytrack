@@ -9,7 +9,9 @@ use Symfony\Component\Validator\Constraints as Assert;
 use Symfony\Component\Validator\Context\ExecutionContextInterface;
 
 /**
- * Un créneau que le geste remplit d'un ticket ou d'une pause, ou qu'il vide.
+ * Un créneau que le geste remplit d'un ticket ou d'une pause, ou qu'il vide. Il porte la
+ * récurrence qui le pose quand annuler ou rétablir la lui rend (LinksMatchRecurrences) ;
+ * tout autre geste l'en détache.
  */
 final readonly class SlotChangeInput
 {
@@ -28,6 +30,8 @@ final readonly class SlotChangeInput
         public string $kind,
         ?string $ticket = null,
         ?string $comment = null,
+        #[Assert\Uuid(message: 'Récurrence inconnue.')]
+        public ?string $recurrence = null,
     ) {
         $this->ticket = EntryText::ticket($ticket);
         $this->comment = EntryText::line($comment);

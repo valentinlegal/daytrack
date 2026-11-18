@@ -4,7 +4,7 @@ import { fill } from '../../../assets/grid/changes';
 import { DaySession, tabMemory } from '../../../assets/grid/daySession';
 import { work } from '../../../assets/grid/grid';
 import { FakeDayServer, type Request, type Transport } from './fakeDayServer';
-import { memoryStorage, minutes } from './support';
+import { memoryStorage, minutes, rangesOf, weeklyRule } from './support';
 
 const TODAY = '2026-10-06';
 
@@ -54,6 +54,56 @@ describe('DaySession, l’envoi sur Jira', () => {
 
         await expect(session.sendToJira()).resolves.toEqual({ kind: 'failed' });
         expect(session.current().day.send.state).toBe('sent');
+    });
+
+    it('écrit d’un jour à venir ses fois prévues, liées, avant de l’envoyer : la journée envoyée est celle qu’on voyait', async () => {
+        // Lundi, le Daily naît, chaque jour ouvré : mardi, à venir, le prévoit.
+        const monday = '2026-10-05';
+        const server = new FakeDayServer(monday);
+        server.saveRecurrence(
+            monday,
+            0,
+            [{ start: '09:00', end: '09:30', kind: 'work', ticket: 'OPS-12', comment: 'Daily' }],
+            weeklyRule([1, 2, 3, 4, 5]),
+            null,
+        );
+        const id = server.allRecurrences()[0]?.id;
+        const session = open(server);
+        await session.apply(fill([minutes('14:00')], work('SHOP-482')));
+        const shown = rangesOf(session.current().day.grid);
+        expect(shown).toEqual([
+            ['09:00', '09:30', 'work', 'OPS-12', 'Daily', id],
+            ['14:00', '14:15', 'work', 'SHOP-482', null],
+        ]);
+        expect(rangesOf(server.saved(TODAY).grid)).toEqual([['14:00', '14:15', 'work', 'SHOP-482', null]]);
+
+        await expect(session.sendToJira()).resolves.toEqual({ kind: 'done' });
+        expect(rangesOf(server.saved(TODAY).grid)).toEqual(shown);
+        expect(rangesOf(session.current().day.grid)).toEqual(shown);
+        expect(session.current().day.send.state).toBe('sent');
+        expect(server.writes.filter((request) => request.date === TODAY).map((request) => request.kind)).toEqual([
+            'changeSlots',
+            'pose',
+            'send',
+        ]);
+    });
+
+    it('ne part pas d’un jour à venir dont un autre onglet a arrêté la récurrence', async () => {
+        const monday = '2026-10-05';
+        const server = new FakeDayServer(monday);
+        const daily = { start: '09:00', end: '09:30', kind: 'work', ticket: 'OPS-12', comment: 'Daily' } as const;
+        server.saveRecurrence(monday, 0, [daily], weeklyRule([1, 2, 3, 4, 5]), null);
+        const id = server.allRecurrences()[0]?.id ?? '';
+        const session = open(server);
+        server.saveRecurrence(monday, server.read(monday).version, [daily], null, {
+            id,
+            weekdays: [1, 2, 3, 4, 5],
+            until: null,
+        });
+
+        await expect(session.sendToJira()).resolves.toEqual({ kind: 'stale' });
+        expect(rangesOf(session.current().day.grid)).toEqual([]);
+        expect(server.writes.filter((request) => request.date === TODAY)).toEqual([]);
     });
 
     it('relit la journée qu’un autre onglet envoie', async () => {

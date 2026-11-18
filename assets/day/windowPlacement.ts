@@ -18,9 +18,9 @@ export interface Room {
 }
 
 /**
- * Comment la fenêtre de ticket s'est accrochée à son ouverture. Cela ne change plus tant
- * qu'elle reste ouverte : en défilant, elle ne change ni de côté ni de morceau, ce qui la
- * ferait sauter.
+ * Comment la fenêtre de ticket s'est accrochée à son ouverture. En défilant, elle ne change
+ * ni de côté ni de morceau, ce qui la ferait sauter ; seul un écran réduit, ou une fenêtre
+ * ouverte sur la barre qui rapetisse, la replace (reattachWindow).
  */
 export interface Attachment {
     /** Le morceau de la sélection auquel elle s'accroche. */
@@ -36,6 +36,11 @@ export interface Anchor {
     readonly span: Span;
     /** Arrêtée, elle ne désigne plus le créneau : sa flèche disparaît. */
     readonly stopped: boolean;
+    /**
+     * Sa hauteur au plus, quand elle a grandi : de son bord haut à sa marge du bas de l'écran,
+     * son contenu défilant au-delà. Null : la place que l'écran lui laisse.
+     */
+    readonly maxHeight: number | null;
 }
 
 /** Où la fenêtre se pose en largeur : son bord gauche, et l'horizontale que désigne sa flèche. */
@@ -82,10 +87,52 @@ export function attachWindow(
         return { run: index, edge: side, tight: null };
     }
     const first = Math.min(shown.top + row, shown.bottom);
+    if (view.bottom - first >= need) {
+        return { run: index, edge: 'first', tight: null };
+    }
 
-    return view.bottom - first >= need
-        ? { run: index, edge: 'first', tight: null }
-        : { run: index, edge: 'above', tight: shown.top };
+    // Entière nulle part : du côté où elle se voit le plus. Au-dessus, elle mord sur la
+    // barre, jusqu'en haut de l'écran ; dessous, elle reste sous son premier quart d'heure.
+    // Plus haute que cette place, elle fait défiler son contenu (Popover.tsx).
+    return shown.top > view.bottom - first
+        ? { run: index, edge: 'above', tight: shown.top }
+        : { run: index, edge: 'first', tight: first };
+}
+
+/** Ce qui a changé depuis la dernière mesure : sa hauteur seule, en plus ou en moins, ou la partie visible de la grille. */
+export type Change = 'grown' | 'shrunk' | 'view';
+
+/**
+ * Comment la fenêtre reste accrochée quand sa hauteur, ou la partie visible de la grille,
+ * change. Une fenêtre qui grandit — une case cochée qui la déplie, un refus apparu sous un
+ * champ — garde son accroche, et grandit vers le bas sans bouger (windowAnchor). Qui
+ * rapetisse se recolle à son créneau, du même côté ; ouverte sur la barre faute de place,
+ * elle reprend une accroche ordinaire dès qu'elle tient entière quelque part. Seul un écran
+ * réduit la replace : entière nulle part, elle se pose comme à l'ouverture, du côté où elle
+ * se voit le plus, et fait défiler son contenu, sans quoi elle sortirait de l'écran par son
+ * pied.
+ *
+ * @param kept   comment elle s'était accrochée
+ * @param change ce qui a changé depuis la dernière mesure
+ */
+export function reattachWindow(
+    runs: readonly Span[],
+    view: Span,
+    room: Room,
+    row: number,
+    prefer: 'above' | 'below',
+    kept: Attachment,
+    change: Change,
+): Attachment {
+    if (change === 'grown') {
+        return kept;
+    }
+    const fresh = attachWindow(runs, view, room, row, prefer);
+    if (change === 'shrunk') {
+        return kept.tight !== null && fresh.tight === null ? fresh : kept;
+    }
+
+    return fresh.tight === null ? kept : fresh;
 }
 
 /**
@@ -93,10 +140,18 @@ export function attachWindow(
  * créneau, du côté pris à l'ouverture. Sorti de la partie visible, il la laisse au bord
  * qu'il a passé, entière et à sa marge de ce bord.
  *
+ * Plus haute qu'à sa plus petite hauteur depuis son accroche (`opened`) — une case cochée qui
+ * déplie sa suite, un refus sous un champ —, elle grandit vers le bas et ne déplace jamais ce
+ * qu'on vient de cliquer, quelle que soit son accroche : elle garde le bord haut qu'elle avait
+ * à cette hauteur, s'allonge jusqu'à sa marge du bas de l'écran, et son contenu défile
+ * au-delà. Posée au-dessus de son créneau, elle passe sur lui, sans sa flèche.
+ *
  * Radix pose la fenêtre au-dessus de ce rectangle tant qu'elle tient dans l'écran, et
  * dessous sinon. Pour qu'elle passe dessous alors qu'elle tiendrait encore au-dessus,
  * sur la barre, le rectangle rendu monte jusqu'au haut de l'écran : au-dessus, elle
  * n'y tient plus.
+ *
+ * @param opened sa plus petite hauteur depuis qu'elle s'est accrochée : là où elle se recolle
  */
 export function windowAnchor(
     runs: readonly Span[],
@@ -104,8 +159,37 @@ export function windowAnchor(
     room: Room,
     row: number,
     attachment: Attachment,
+    opened = room.height,
 ): Anchor {
     const run = runs[attachment.run] ?? runs[0] ?? view;
+    // Une mesure au pixel près : une hauteur fractionnaire ne la fait pas grandir.
+    if (room.height - opened < 1) {
+        return { ...resting(run, view, room, row, attachment), maxHeight: null };
+    }
+    const rest = resting(run, view, { ...room, height: opened }, row, attachment);
+    // Son bord haut à sa hauteur d'avant. Au-dessus, Radix la pose sous le haut de l'écran, à
+    // sa marge : plus haute que la place, elle y défilait déjà.
+    const top =
+        attachment.edge === 'above'
+            ? Math.max(room.margin, rest.span.top - room.gap - opened)
+            : rest.span.bottom + room.gap;
+    const bottom = top - room.gap;
+
+    return {
+        span: { top: Math.min(bottom, 0), bottom },
+        stopped: attachment.edge === 'above' || rest.stopped,
+        maxHeight: Math.max(0, view.bottom - room.margin - top),
+    };
+}
+
+/** Là où elle se pose à cette hauteur, sans rien avoir gagné depuis son accroche. */
+function resting(
+    run: Span,
+    view: Span,
+    room: Room,
+    row: number,
+    attachment: Attachment,
+): Pick<Anchor, 'span' | 'stopped'> {
     const need = needOf(room);
     if (attachment.edge === 'above') {
         // Ouverte sur la barre faute de place, elle ne monte pas plus ; sorti de la vue, son
@@ -120,7 +204,10 @@ export function windowAnchor(
         };
     }
     const wanted = attachment.edge === 'below' ? run.bottom : Math.min(Math.max(run.top, view.top) + row, run.bottom);
-    const bottom = between(wanted, view.top + room.margin - room.gap, view.bottom - need);
+    // Ouverte sans la place entière dessous, elle n'en demande que ce qu'elle a eu : son
+    // contenu défile, au lieu qu'elle remonte sur son créneau.
+    const fit = attachment.tight === null ? need : Math.min(need, view.bottom - attachment.tight);
+    const bottom = between(wanted, view.top + room.margin - room.gap, view.bottom - fit);
 
     return {
         span: { top: Math.min(bottom, 0), bottom },

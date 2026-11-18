@@ -1,4 +1,5 @@
 import type { DayState } from '../grid/day';
+import { reaches } from '../grid/recurrence';
 import { isWorkingDay, weekdayName } from './calendar';
 
 /** Ce qui décide si la grille d'un jour est fermée à la saisie. */
@@ -35,8 +36,21 @@ export function closureReason({ date, day, workingDays, daysOff, openedAnyway }:
 
 /**
  * Vu avec une saisie, un jour reste ouvert tant qu'on y est, même mis à 0h00 ensuite :
- * effacer la dernière ne le ferme pas sous le curseur, et Ctrl+Z la rend.
+ * effacer la dernière ne le ferme pas sous le curseur, et Ctrl+Z la rend. Un jour encore
+ * travaillé ne compte pas les blocs posés ou prévus par ses récurrences — leur flèche le
+ * dit — : un 0h00 les retire, et le jour qui n'avait qu'eux se ferme sur place, comme
+ * rechargé. Un jour déjà fermé, lui, les compte : y effacer le dernier ne le referme pas.
  */
 export function staysOpen(day: DayState | null): boolean {
-    return day !== null && day.grid.blocks().length > 0;
+    if (day === null) {
+        return false;
+    }
+    const closed = !day.working || day.declaredOff;
+
+    return day.grid.blocks().some((block) => {
+        const id = block.content.recurrence;
+        const recurrence = id === null ? undefined : day.recurrences.get(id);
+
+        return closed || recurrence === undefined || !reaches(recurrence, day.date);
+    });
 }

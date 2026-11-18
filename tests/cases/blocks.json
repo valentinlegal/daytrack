@@ -1,5 +1,5 @@
 {
-  "about": "Le découpage d'une journée en blocs : les quarts d'heure voisins au même contenu forment un bloc, et rien d'autre ne les regroupe. Le serveur (tests/Day/GridTest.php) et le navigateur (tests/front/grid/grid.test.ts) rejouent ces mêmes cas : un écart entre eux est un bug. « slots » pose chaque plage quart d'heure par quart d'heure ; « blocks » est ce que la grille doit afficher. Chaque plage : début, fin, « work » ou « pause », ticket, commentaire.",
+  "about": "Le découpage d'une journée en blocs : les quarts d'heure voisins au même contenu forment un bloc, et rien d'autre ne les regroupe. Le serveur (tests/Day/GridTest.php) et le navigateur (tests/front/grid/grid.test.ts) rejouent ces mêmes cas : un écart entre eux est un bug. « slots » pose chaque plage quart d'heure par quart d'heure ; « blocks » est ce que la grille doit afficher. Chaque plage : début, fin, « work » ou « pause », ticket, commentaire, et en sixième, s'il y en a une, la récurrence qui l'a posée — « a », « b » : deux noms, deux récurrences. Deux contenus égaux de récurrences différentes, ou l'un posé par une récurrence et l'autre à la main, ne forment pas un bloc : chacun a sa flèche, ou n'en a pas.",
   "cases": [
     {
       "name": "une journée vide n'a aucun bloc",
@@ -108,6 +108,49 @@
         ["13:00", "20:00", "work", "OPS-7", "Astreinte"]
       ],
       "blocks": [["07:00", "20:00", "work", "OPS-7", "Astreinte"]]
+    },
+    {
+      "name": "même contenu, deux récurrences différentes : deux blocs",
+      "slots": [
+        ["09:00", "09:15", "work", "OPS-12", "Daily", "a"],
+        ["09:15", "09:30", "work", "OPS-12", "Daily", "b"]
+      ],
+      "blocks": [
+        ["09:00", "09:15", "work", "OPS-12", "Daily", "a"],
+        ["09:15", "09:30", "work", "OPS-12", "Daily", "b"]
+      ]
+    },
+    {
+      "name": "même contenu, l'un posé par une récurrence et l'autre à la main : deux blocs",
+      "slots": [
+        ["12:30", "13:00", "pause", null, null, "a"],
+        ["13:00", "13:30", "pause", null, null]
+      ],
+      "blocks": [
+        ["12:30", "13:00", "pause", null, null, "a"],
+        ["13:00", "13:30", "pause", null, null]
+      ]
+    },
+    {
+      "name": "un quart d'heure à la main entre deux d'une même récurrence la coupe en trois blocs",
+      "slots": [
+        ["09:00", "09:30", "work", "OPS-12", "Daily", "a"],
+        ["09:30", "09:45", "work", "OPS-12", "Daily"],
+        ["09:45", "10:00", "work", "OPS-12", "Daily", "a"]
+      ],
+      "blocks": [
+        ["09:00", "09:30", "work", "OPS-12", "Daily", "a"],
+        ["09:30", "09:45", "work", "OPS-12", "Daily"],
+        ["09:45", "10:00", "work", "OPS-12", "Daily", "a"]
+      ]
+    },
+    {
+      "name": "deux plages voisines d'une même récurrence forment un seul bloc",
+      "slots": [
+        ["09:00", "09:15", "work", "OPS-12", "Daily", "a"],
+        ["09:15", "09:45", "work", "OPS-12", "Daily", "a"]
+      ],
+      "blocks": [["09:00", "09:45", "work", "OPS-12", "Daily", "a"]]
     }
   ]
 }

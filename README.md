@@ -75,6 +75,20 @@ Le calendrier marque les jours envoyés, ceux modifiés depuis l'envoi et ceux r
 </td>
 </tr>
 </tbody>
+<tbody>
+<tr>
+<td colspan="2" align="center">
+
+<img src=".github/assets/carte-recurrences-clair.png#gh-light-mode-only" width="48%" alt="La fenêtre du Daily, case Récurrence cochée : chaque semaine, du lundi au vendredi, et ses cinq prochaines fois. Au-dessus, le bloc du Daily porte sa flèche circulaire.">
+<img src=".github/assets/carte-recurrences-sombre.png#gh-dark-mode-only" width="48%" alt="La fenêtre du Daily, case Récurrence cochée : chaque semaine, du lundi au vendredi, et ses cinq prochaines fois. Au-dessus, le bloc du Daily porte sa flèche circulaire.">
+
+**Ce qui revient se pose tout seul**
+
+Le Daily, le déjeuner, le point d'un mardi sur deux : réglés une fois dans leur fenêtre, comme dans un agenda, ils se posent seuls le jour venu. Pour les déplacer, les allonger ou les effacer, vous choisissez : cette fois seulement, ou avec les suivantes.
+
+</td>
+</tr>
+</tbody>
 </table>
 
 <p align="center">

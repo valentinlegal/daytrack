@@ -45,7 +45,7 @@ function savingWhileJiraSearches(bench: Bench, ticket = 'ESSAI-1'): void {
 }
 
 describe('le bouton « Annuler » du message', () => {
-    it('après Supprimer dans Modifier le ticket, rend le bloc sans rouvrir la fenêtre', async () => {
+    it('après Effacer dans Modifier le ticket, rend le bloc sans rouvrir la fenêtre', async () => {
         const bench = mountGrid({ blocks: [REPRO], top: 690 });
         bench.press('ArrowDown');
         bench.press('Enter');
@@ -63,7 +63,7 @@ describe('le bouton « Annuler » du message', () => {
         expect(bench.windows).toEqual(['-']);
     });
 
-    it('fait comme Ctrl+Z après Supprimer', async () => {
+    it('fait comme Ctrl+Z après Effacer', async () => {
         const bench = mountGrid({ blocks: [REPRO], top: 690 });
         bench.press('ArrowDown');
         bench.press('Enter');
@@ -789,6 +789,9 @@ describe('le chemin d’enregistrement du champ Ticket', () => {
         expect(bench.editing.window?.errors).toEqual({
             ticket: TICKET_NOT_FOUND,
             comment: null,
+            weekdays: null,
+            until: null,
+            rhythm: null,
             general: null,
             focus: true,
         });
@@ -834,7 +837,15 @@ describe('la journée relue au retour sur la page', () => {
         const shown = bench.editing.window;
         expect(shown?.target).toEqual({ kind: 'new', quarters: [840, 855, 870, 885] });
         expect(shown?.draft).toEqual({ ticket: 'ESSAI-1', comment: 'Revue' });
-        expect(shown?.errors).toEqual({ ticket: null, comment: null, general: STALE, focus: false });
+        expect(shown?.errors).toEqual({
+            ticket: null,
+            comment: null,
+            weekdays: null,
+            until: null,
+            rhythm: null,
+            general: STALE,
+            focus: false,
+        });
         expect(bench.editing.windowNote).toBe('Remplace OPS-3 sur ces 60 minutes.');
         expect(bench.editing.selection.quarters).toEqual([840, 855, 870, 885]);
 
@@ -947,7 +958,15 @@ describe('la journée relue au retour sur la page', () => {
         expect(shown?.sending).toBe(false);
         expect(shown?.target).toEqual({ kind: 'new', quarters: [840, 855, 870, 885] });
         expect(shown?.draft).toEqual({ ticket: 'SHOP-999', comment: 'Mapping' });
-        expect(shown?.errors).toEqual({ ticket: TICKET_NOT_FOUND, comment: null, general: STALE, focus: true });
+        expect(shown?.errors).toEqual({
+            ticket: TICKET_NOT_FOUND,
+            comment: null,
+            weekdays: null,
+            until: null,
+            rhythm: null,
+            general: STALE,
+            focus: true,
+        });
         expect(bench.editing.windowNote).toBe('Remplace OPS-3 sur ces 60 minutes.');
         expect(writes(bench)).toBe(before);
         expect(bench.slow.ranges()).toEqual([['14:00', '15:00', 'work', 'OPS-3', null]]);
@@ -966,6 +985,9 @@ describe('la journée relue au retour sur la page', () => {
         expect(bench.editing.window?.errors).toEqual({
             ticket: TICKET_NOT_FOUND,
             comment: null,
+            weekdays: null,
+            until: null,
+            rhythm: null,
             general: null,
             focus: true,
         });

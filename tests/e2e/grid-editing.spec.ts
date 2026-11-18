@@ -398,6 +398,96 @@ test.describe('un glisser sur la grille', () => {
         ]);
     });
 
+    test('un glisser et un collage faits pendant que le jour suivant s’ouvre attendent qu’il soit lu', async ({
+        page,
+        request,
+    }) => {
+        // Un jeudi et un vendredi d'avant ceux du fichier : après eux, les jours qui se suivent sont tous pris.
+        const before = day(-4);
+        const date = day(-3);
+        await writeDay(request, before, [{ start: '09:00', end: '10:00', ticket: 'SHOP-482', comment: 'Revue' }]);
+        await writeDay(request, date, []);
+        await openDay(page, before);
+        await clickSlot(page, '09:15');
+        await page.keyboard.press('ControlOrMeta+C');
+
+        // La lecture du jour suivant tarde, le temps de glisser et de coller.
+        let answer: () => void = () => undefined;
+        const answered = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        await page.route(`**/api/days/${date}`, async (route) => {
+            if (route.request().method() === 'GET') {
+                await answered;
+            }
+            await route.fallback();
+        });
+        await page.getByRole('button', { name: 'Jour suivant' }).click();
+        await expect(page).toHaveURL(`/${date}`);
+        await expect(page.getByRole('region', { name: 'Grille de la journée' })).toHaveAttribute('aria-busy', 'true');
+        await dragSlots(page, '15:30', '15:00');
+        await expect(selectedSlots(page)).toHaveText([/^15:00/, /^15:15/, /^15:30/]);
+        await page.keyboard.press('ControlOrMeta+V');
+        expect(await savedDay(request, date)).toEqual([]);
+
+        // Lu, le jour reçoit le collage, sur la plage glissée.
+        answer();
+        await expect(blocks(page)).toHaveText([/De 15:00 à 15:45.*SHOP-482.*Revue.*0h45/]);
+        await expect(message(page)).toHaveCount(0);
+        await expect(selectedSlots(page)).toHaveText([/^15:00/, /^15:15/, /^15:30/]);
+        await expect
+            .poll(() => savedDay(request, date))
+            .toMatchObject([{ start: '15:00', end: '15:45', ticket: 'SHOP-482', comment: 'Revue' }]);
+        await expectGridMatchesBase(page, request, date);
+    });
+
+    test('un ticket tapé pendant que le jour suivant s’ouvre s’écrit dans Nouveau ticket : F2, Maj+F10 et Ctrl/⌘+V n’agissent pas derrière lui', async ({
+        page,
+        request,
+    }) => {
+        // Un jeudi et un vendredi d'août, avant ceux du fichier, après ceux de l'écran en lecture.
+        const before = day(-18);
+        const date = day(-17);
+        await writeDay(request, before, [{ start: '09:00', end: '10:00', ticket: 'SHOP-482', comment: 'Revue' }]);
+        await writeDay(request, date, []);
+        await openDay(page, before);
+        await clickSlot(page, '09:15');
+        await page.keyboard.press('ControlOrMeta+C');
+
+        let answer: () => void = () => undefined;
+        const answered = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        await page.route(`**/api/days/${date}`, async (route) => {
+            if (route.request().method() === 'GET') {
+                await answered;
+            }
+            await route.fallback();
+        });
+        await page.getByRole('button', { name: 'Jour suivant' }).click();
+        await expect(page).toHaveURL(`/${date}`);
+        await expect(page.getByRole('region', { name: 'Grille de la journée' })).toHaveAttribute('aria-busy', 'true');
+        await dragSlots(page, '15:15', '15:00');
+        await expect(selectedSlots(page)).toHaveText([/^15:00/, /^15:15/]);
+        await page.keyboard.type('shop-519');
+        await page.keyboard.press('F2');
+        await page.keyboard.press('Shift+F10');
+        await page.keyboard.press('ControlOrMeta+V');
+
+        // Lu, le jour ouvre Nouveau ticket avec le ticket tapé, seul : ni Modifier, ni menu, ni collage.
+        answer();
+        const window = ticketWindow(page);
+        await expect(window.getByLabel('Ticket')).toHaveValue('SHOP-519');
+        await expect(page.getByRole('dialog')).toHaveCount(1);
+        await expect(menu(page)).toHaveCount(0);
+        await expect(selectedSlots(page)).toHaveText([/^15:00/, /^15:15/]);
+        expect(await savedDay(request, date)).toEqual([]);
+
+        await window.getByRole('button', { name: 'Enregistrer' }).click();
+        await expect(blocks(page)).toHaveText([/De 15:00 à 15:30.*SHOP-519/]);
+        await expectGridMatchesBase(page, request, date);
+    });
+
     test('colle en entier un groupe du matin sur un glisser de l’après-midi, et dit ce qu’il remplace', async ({
         page,
         request,
@@ -460,9 +550,9 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await openDay(page, date);
 
         await doubleClickSlot(page, '11:30');
-        await ticketWindow(page, 'Modifier le ticket').getByRole('button', { name: 'Supprimer' }).click();
+        await ticketWindow(page, 'Modifier le ticket').getByRole('button', { name: 'Effacer' }).click();
         await expect(blocks(page).filter({ hasText: 'SHOP-519' })).toHaveCount(0);
-        await expect(message(page)).toHaveText(/SHOP-519 supprimé/);
+        await expect(message(page)).toHaveText(/SHOP-519 effacé/);
         await expectGridMatchesBase(page, request, date);
 
         // Le message a vu la fenêtre ouverte : son « Annuler » n'en enregistre pas une seconde
@@ -496,7 +586,7 @@ test.describe('la fenêtre Modifier le ticket', () => {
         await window.getByLabel('Commentaire').fill('');
         await window.getByLabel('Commentaire').press('Enter');
         await expect(blocks(page).filter({ hasText: 'OPS-12' })).toHaveCount(0);
-        await expect(message(page)).toHaveText(/OPS-12 supprimé/);
+        await expect(message(page)).toHaveText(/OPS-12 effacé/);
         await expectGridMatchesBase(page, request, date);
     });
 
@@ -529,13 +619,13 @@ test.describe('la fenêtre Modifier le ticket', () => {
         const window = ticketWindow(page, 'Modifier le ticket');
         expect(await buttonNames(window)).toEqual([
             'Fermer',
-            'Supprimer',
+            'Effacer',
             'Convertir en pause',
             'Annuler',
             'Enregistrer',
         ]);
         // Chaque icône se nomme dans son infobulle, au survol, sans « title » du navigateur.
-        for (const name of ['Supprimer', 'Convertir en pause']) {
+        for (const name of ['Effacer', 'Convertir en pause']) {
             const icon = window.getByRole('button', { name });
             await expect(icon).toHaveText('');
             await expect(icon).not.toHaveAttribute('title');
@@ -559,7 +649,7 @@ test.describe('la fenêtre Modifier le ticket', () => {
         const pause = ticketWindow(page, 'Modifier la pause');
         const save = pause.getByRole('button', { name: 'Enregistrer' });
         await expect(pause).toHaveAccessibleDescription('Vendredi 14 novembre de 12:30 à 13:30');
-        expect(await buttonNames(pause)).toEqual(['Fermer', 'Supprimer', 'Annuler', 'Enregistrer']);
+        expect(await buttonNames(pause)).toEqual(['Fermer', 'Effacer', 'Annuler', 'Enregistrer']);
         await expect(save).toHaveAttribute('aria-disabled', 'true');
 
         // Grisé, il ne fait rien : ni au clic — que Playwright retiendrait, d'où « force » —,
@@ -1485,6 +1575,47 @@ test.describe('remplacer une sélection par un nouveau ticket', () => {
         await expectGridMatchesBase(page, request, date);
     });
 
+    test('Entrée ouvre Nouveau ticket sur toute une sélection en morceaux ou à cheval sur un bloc', async ({
+        page,
+        request,
+    }) => {
+        // Un mercredi d'avant ceux du fichier, et d'avant les jours fixes des autres fichiers.
+        const date = day(-12);
+        await writeDay(request, date, MORNING);
+        await openDay(page, date);
+
+        // En morceaux, sur des créneaux vides : les deux, pas le dernier.
+        await clickSlot(page, '13:45');
+        await clickSlot(page, '14:15', ['ControlOrMeta']);
+        await page.keyboard.press('Enter');
+        const window = ticketWindow(page);
+        await expect(window).toContainText(/, 2 créneaux, 0h30/);
+        await window.getByLabel('Ticket').fill('OPS-5');
+        await page.keyboard.press('Enter');
+        await expect(window).toBeHidden();
+        await expect(slot(page, '13:45')).toHaveText('13:45, OPS-5');
+        await expect(slot(page, '14:00')).toHaveText('14:00, vide');
+        await expect(slot(page, '14:15')).toHaveText('14:15, OPS-5');
+        await expectGridMatchesBase(page, request, date);
+
+        // À cheval sur la pause : toute la sélection, et Échap la garde entière.
+        await clickSlot(page, '12:15');
+        await clickSlot(page, '12:45', ['Shift']);
+        await page.keyboard.press('Enter');
+        await expect(window).toContainText(/de 12:15 à 13:00/);
+        await expect(note(window)).toHaveText('Remplace la pause sur 30 minutes.');
+        await page.keyboard.press('Escape');
+        await expect(window).toBeHidden();
+        await expect(selectedSlots(page)).toHaveCount(3);
+        await expectGridMatchesBase(page, request, date);
+
+        // Tout entière dans un bloc : le bloc entier, comme un double-clic.
+        await clickSlot(page, '10:00');
+        await clickSlot(page, '10:30', ['ControlOrMeta']);
+        await page.keyboard.press('Enter');
+        await expect(ticketWindow(page, 'Modifier le ticket')).toContainText(/de 09:30 à 11:15/);
+    });
+
     test('« Pause » convertit la sélection, et le dit', async ({ page, request }) => {
         const date = day(76);
         await writeDay(request, date, MORNING);
@@ -2056,6 +2187,44 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await expectGridMatchesBase(page, request, date);
     });
 
+    test('dit le refus d’un geste qui revient après qu’on a changé de jour, le jour du geste devant', async ({
+        page,
+        request,
+    }) => {
+        // Un jeudi et un vendredi d'avant ceux du fichier, et d'avant les jours fixes des autres
+        // fichiers : après eux, les jours qui se suivent sont tous pris.
+        const date = day(-11);
+        const next = day(-10);
+        await writeDay(request, date, MORNING);
+        await writeDay(request, next, []);
+        await openDay(page, date);
+        await writeDay(request, date, [{ start: '09:15', end: '09:30', ticket: 'OPS-99', comment: 'Ailleurs' }]);
+
+        // L'effacement tarde à partir : on passe au jour suivant pendant ce temps.
+        let answer: () => void = () => undefined;
+        const answered = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        await page.route(`**/api/days/${date}/slots`, async (route) => {
+            await answered;
+            await route.fallback();
+        });
+        await clickSlot(page, '11:15');
+        await page.keyboard.press('Delete');
+        await page.getByRole('button', { name: 'Jour suivant' }).click();
+        await expect(page).toHaveURL(`/${next}`);
+        await expect(page.getByRole('region', { name: 'Grille de la journée' })).toHaveAttribute('aria-busy', 'false');
+
+        answer();
+        await expect(message(page)).toHaveText(
+            "Jeudi 28 août\u{a0}: la journée a changé entre-temps. Rien n'a été modifié.",
+        );
+        await expect(message(page).getByRole('button', { name: 'Annuler' })).toHaveCount(0);
+        await expect(blocks(page)).toHaveCount(0);
+        expect(await savedDay(request, next)).toEqual([]);
+        expect(await savedDay(request, date)).toMatchObject([{ start: '09:15', end: '09:30', ticket: 'OPS-99' }]);
+    });
+
     test('ne colle rien sur un glisser, le dit, puis colle en disant ce qu’il remplace désormais', async ({
         page,
         request,
@@ -2178,6 +2347,10 @@ test.describe('un onglet resté ouvert pendant qu’on changeait la journée ail
         await page.keyboard.press('Enter');
         const window = ticketWindow(page);
         await expect(window).toContainText('La journée a changé entre-temps. Vérifiez, puis enregistrez de nouveau.');
+        // Plus haute d'un message et de « Remplace… », elle a grandi vers le bas : le refus se voit.
+        await expect(
+            window.getByText('La journée a changé entre-temps. Vérifiez, puis enregistrez de nouveau.'),
+        ).toBeInViewport({ ratio: 1 });
         await expect(window.getByText(/^Remplace /)).toHaveText('Remplace OPS-1 sur ces 60 minutes.');
         await expect(window.getByLabel('Ticket')).toHaveValue('SHOP-482');
 
@@ -2509,7 +2682,7 @@ test('le pied d’une fenêtre reste dedans, même avec des libellés plus large
     await doubleClickSlot(page, '10:00');
     const window = ticketWindow(page, 'Modifier le ticket');
     const frame = await window.boundingBox();
-    for (const name of ['Convertir en pause', 'Supprimer', 'Annuler', 'Enregistrer']) {
+    for (const name of ['Convertir en pause', 'Effacer', 'Annuler', 'Enregistrer']) {
         const box = await window.getByRole('button', { name, exact: true }).boundingBox();
         expect(box !== null && frame !== null && box.x + box.width <= frame.x + frame.width).toBe(true);
         expect(box !== null && box.x + box.width <= 1024).toBe(true);
@@ -2945,6 +3118,9 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
         }) => {
             const date = day(109);
             await writeDay(request, date, BLOCK);
+            // Assez haut pour que Nouveau ticket, grandi de son refus et de « Remplace… », tienne
+            // encore sous 11:00 avec sa case « Récurrence » : sinon son contenu défile, et c'est un autre cas.
+            await page.setViewportSize({ width: 1440, height: 1000 });
             await openDay(page, date);
             await showMorning(page);
             const point = await slotPoint(page, '11:00', 300);
@@ -2964,7 +3140,10 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
             expect(await savedDay(request, date)).toMatchObject([{ start: '09:30', end: '11:15', ticket: 'OPS-1' }]);
         });
 
-        test('garde son côté quand elle grandit sans place dessous, sans flèche', async ({ page, request }) => {
+        test('reste sous son quart d’heure quand elle grandit sans place, son contenu défile', async ({
+            page,
+            request,
+        }) => {
             const date = day(114);
             await writeDay(request, date, BLOCK);
             await page.setViewportSize({ width: 1440, height: 720 });
@@ -3000,12 +3179,18 @@ test.describe('où s’ouvre une fenêtre de ticket', () => {
             await page.keyboard.press('Enter');
             const window = ticketWindow(page);
             await expect(window).toContainText('La journée a changé entre-temps.');
+            // Plus haute d'un message et de « Remplace… », elle ne tient plus entière ni dessous
+            // ni au-dessus : elle reste du côté où elle se voit le plus, sous son quart d'heure,
+            // sans le recouvrir ni sortir de l'écran, et son contenu défile.
             await expect(window).toHaveAttribute('data-side', 'bottom');
-            await expect(window.locator('svg[viewBox="0 0 16 8"]')).toBeHidden();
+            await expect(window.locator('svg[viewBox="0 0 16 8"]')).toBeVisible();
+            await expectUnder(page, window, '11:00');
             await expect(async () => {
                 const box = await boxOf(window);
                 expect(Math.abs(box.y + box.height - (bottom - 8))).toBeLessThanOrEqual(1);
             }).toPass();
+            const body = window.locator('.popover-body');
+            expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
             await page.keyboard.press('Escape');
         });
     });

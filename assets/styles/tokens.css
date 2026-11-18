@@ -106,7 +106,7 @@
   --now: #E03A2F;  /* ligne « maintenant » */
   --ok: #1F9D55;   /* Envoyé */
   --warn: #D06F05; /* Non envoyé, Modifié depuis l'envoi */
-  --inc: #D2382F;  /* Incomplet, Supprimer ; 4,5:1 sur --bg-side */
+  --inc: #D2382F;  /* Incomplet, Effacer ; 4,5:1 sur --bg-side */
   --inc-bg: #FDF2F1;   /* bandeau d'alerte */
   --inc-line: #F2D2CE;
 

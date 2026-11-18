@@ -1093,7 +1093,7 @@ test.describe('la fenêtre Nouveau ticket', () => {
             window = ticketWindow(page, 'Modifier le ticket');
             await window.getByLabel('Ticket').fill('SHOP-512');
             await window.getByLabel('Ticket').press('Enter');
-            await window.getByRole('button', { name: 'Supprimer' }).click();
+            await window.getByRole('button', { name: 'Effacer' }).click();
             await window.getByRole('button', { name: 'Convertir en pause' }).click();
             await expect(window).toHaveCount(0);
 

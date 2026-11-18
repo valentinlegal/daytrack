@@ -35,19 +35,22 @@ export function GridMenu({
     onNewTicket: () => void;
     onEditSelection: () => void;
     onCopy: () => void;
-    onCut: () => void;
-    onPaste: () => void;
+    /** Vrai s'il ouvre une question, qui prend le curseur. */
+    onCut: () => boolean;
+    /** Vrai s'il ouvre une question, qui prend le curseur. */
+    onPaste: () => boolean;
     onPause: () => void;
     /** Ajouter aux favoris le ticket que porte la sélection. */
     onFavorite: (ticket: string) => void;
-    onClear: () => void;
+    /** Vrai s'il ouvre la question « quelles fois », qui prend le curseur. */
+    onClear: () => boolean;
     /** La zone principale de l'écran, où le menu se pose. */
     container: HTMLElement | null;
     returnFocus: () => void;
 }) {
-    // La fenêtre ouverte par « Nouveau ticket… » ou « Modifier la sélection… » a pris le
-    // curseur : le menu, qui le rend après s'être fermé, le lui volerait, et elle
-    // s'enregistrerait aussitôt.
+    // La fenêtre ouverte par « Nouveau ticket… », « Modifier la sélection… », ou la question
+    // d'« Effacer » sur un bloc qui revient, a pris le curseur : le menu, qui le rend après
+    // s'être fermé, le lui volerait, et elle s'enregistrerait aussitôt.
     const windowOpenedRef = useRef(false);
 
     return (
@@ -89,10 +92,24 @@ export function GridMenu({
             <MenuItem icon={<CopyIcon />} {...menuShortcut('copy', mac)} disabled={!actions.copy} onSelect={onCopy}>
                 Copier
             </MenuItem>
-            <MenuItem icon={<CutIcon />} {...menuShortcut('cut', mac)} disabled={!actions.cut} onSelect={onCut}>
+            <MenuItem
+                icon={<CutIcon />}
+                {...menuShortcut('cut', mac)}
+                disabled={!actions.cut}
+                onSelect={() => {
+                    windowOpenedRef.current = onCut();
+                }}
+            >
                 Couper
             </MenuItem>
-            <MenuItem icon={<PasteIcon />} {...menuShortcut('paste', mac)} disabled={!actions.paste} onSelect={onPaste}>
+            <MenuItem
+                icon={<PasteIcon />}
+                {...menuShortcut('paste', mac)}
+                disabled={!actions.paste}
+                onSelect={() => {
+                    windowOpenedRef.current = onPaste();
+                }}
+            >
                 Coller
             </MenuItem>
             <MenuSeparator />
@@ -116,7 +133,9 @@ export function GridMenu({
                 {...menuShortcut('delete', mac)}
                 danger
                 disabled={!actions.clear}
-                onSelect={onClear}
+                onSelect={() => {
+                    windowOpenedRef.current = onClear();
+                }}
             >
                 Effacer
             </MenuItem>

@@ -1,7 +1,9 @@
 import type { QuarterChanges } from './changes';
-import type { Cell, Grid, SlotContent } from './grid';
-import { isRecord, readCell } from './json';
+import { type Cell, type Grid, sameCell, type SlotContent, unlinked } from './grid';
+import { isDate } from '../day/calendar';
+import { isRecord, isUuid, readCell } from './json';
 import * as Quarter from './quarter';
+import { LAST_WEEK, type RecurrenceRule } from './recurrence';
 import type { Selection } from './selection';
 import { type TabStorage, TabValues } from './tabStore';
 
@@ -13,6 +15,24 @@ import { type TabStorage, TabValues } from './tabStore';
  */
 export interface Clipboard {
     readonly cells: readonly ClipboardCell[];
+    /**
+     * Une récurrence coupée avec les suivantes : son rythme et sa fin, que son bloc emporte. Le
+     * premier collage qui la fait repartir la quitte (daySession.ts) ; ses cellules sont alors
+     * celles d'un seul bloc, d'un seul tenant.
+     */
+    readonly recurrence?: RecurrenceRule;
+    /** La récurrence coupée, et le jour de la coupe : toujours avec `recurrence`, jamais sans. */
+    readonly source?: CutSource;
+}
+
+/**
+ * D'où vient une récurrence coupée : collée, la nouvelle reprend ses fois effacées ou détachées
+ * (src/Day/DayWriter.php, saveRecurrence), et elle ne repart pas d'avant le jour de la coupe.
+ */
+export interface CutSource {
+    readonly id: string;
+    /** « AAAA-MM-JJ ». */
+    readonly date: string;
 }
 
 export interface ClipboardCell {
@@ -33,22 +53,54 @@ export type Paste =
  * vides : une plage vide ne se copie pas, et le presse-papier garde ce qu'il tenait.
  */
 export function copy(grid: Grid, selection: Selection): Clipboard | null {
-    const first = selection.quarters.at(0);
-    if (first === undefined || selection.quarters.every((quarter) => grid.at(quarter) === null)) {
+    return copyQuarters(grid, selection.quarters);
+}
+
+/** Copier ces quarts d'heure, dans l'ordre : ce que copie une sélection. */
+export function copyQuarters(grid: Grid, quarters: readonly number[]): Clipboard | null {
+    const first = quarters.at(0);
+    if (first === undefined || quarters.every((quarter) => grid.at(quarter) === null)) {
         return null;
     }
 
     return {
-        cells: selection.quarters.map((quarter) => ({
-            offset: (quarter - first) / Quarter.MINUTES,
-            content: grid.at(quarter),
-        })),
+        // Copier ne garde pas la récurrence : ce qu'on colle est une saisie ordinaire.
+        cells: quarters.map((quarter) => {
+            const content = grid.at(quarter);
+
+            return {
+                offset: (quarter - first) / Quarter.MINUTES,
+                content: content === null ? null : unlinked(content),
+            };
+        }),
     };
+}
+
+/**
+ * Ce que coupe « Cette fois et les suivantes » : la fois du jour, d'un seul tenant, son
+ * rythme, que le collage emporte (followRhythm), et d'où elle vient.
+ */
+export function cutRecurrence(
+    grid: Grid,
+    occurrence: readonly number[],
+    rule: RecurrenceRule,
+    source: CutSource,
+): Clipboard | null {
+    const copied = copyQuarters(grid, occurrence);
+
+    return copied === null || copied.cells.some(({ content }) => content === null)
+        ? null
+        : { cells: copied.cells, recurrence: rule, source };
+}
+
+/** Le même presse-papier, sans la récurrence coupée : son bloc seul. */
+export function withoutRecurrence(clipboard: Clipboard): Clipboard {
+    return { cells: clipboard.cells };
 }
 
 /** Un seul ticket à coller : ce que copie un clic sur un favori. */
 export function clipboardOf(content: SlotContent): Clipboard {
-    return { cells: [{ offset: 0, content }] };
+    return { cells: [{ offset: 0, content: unlinked(content) }] };
 }
 
 /**
@@ -64,7 +116,8 @@ export function clipboardOf(content: SlotContent): Clipboard {
  */
 export function paste(clipboard: Clipboard, selection: Selection): Paste {
     const first = selection.quarters.at(0);
-    const single = clipboard.cells.length === 1 ? clipboard.cells[0] : undefined;
+    // Une récurrence coupée se déplace avec son bloc, à sa longueur : elle ne remplit pas la sélection.
+    const single = clipboard.cells.length === 1 && clipboard.recurrence === undefined ? clipboard.cells[0] : undefined;
     if (first === undefined) {
         return { kind: 'nothing' };
     }
@@ -90,6 +143,10 @@ export function paste(clipboard: Clipboard, selection: Selection): Paste {
 
 /** Le presse-papier de l'onglet : il survit à un rechargement et à un changement de jour. */
 export interface ClipboardStore {
+    /**
+     * Ce qu'il tient : le même objet que la dernière écriture de l'onglet, tant que rien d'autre
+     * n'y a été écrit — un collage en route sait ainsi si l'on a copié ou coupé depuis.
+     */
     read(): Clipboard | null;
     write(clipboard: Clipboard): void;
 }
@@ -114,7 +171,9 @@ function readClipboard(json: unknown): Clipboard | null {
     }
     const cells: ClipboardCell[] = [];
     for (const cell of json.cells as unknown[]) {
-        const content = isRecord(cell) ? readCell(cell.content) : undefined;
+        const read = isRecord(cell) ? readCell(cell.content) : undefined;
+        // Un presse-papier gardé ne porte jamais de récurrence, même écrit d'ailleurs.
+        const content = read === undefined || read === null ? read : unlinked(read);
         const offset = isRecord(cell) ? cell.offset : undefined;
         if (
             content === undefined ||
@@ -128,6 +187,75 @@ function readClipboard(json: unknown): Clipboard | null {
         }
         cells.push({ offset, content });
     }
+    // Une récurrence coupée part avec ce dont elle vient, l'une jamais sans l'autre.
+    if (json.recurrence === undefined && json.source === undefined) {
+        return { cells };
+    }
+    const recurrence = readRule(json.recurrence);
+    const source = readSource(json.source);
+    // Une récurrence ne part qu'avec un seul bloc, sans trou ni créneau vide.
+    const first = cells[0]?.content ?? null;
+    const offsets = cells.map(({ offset }) => offset).sort((a, b) => a - b);
+    const whole =
+        first !== null &&
+        offsets.every((offset, index) => offset === index) &&
+        cells.every(({ content }) => sameCell(content, first));
 
-    return { cells };
+    return recurrence === null || source === null || !whole ? null : { cells, recurrence, source };
+}
+
+/** La récurrence coupée et le jour de la coupe, tous deux là ; null sinon. */
+function readSource(json: unknown): CutSource | null {
+    if (!isRecord(json)) {
+        return null;
+    }
+    const { id, date } = json;
+
+    return typeof id === 'string' && isUuid(id) && typeof date === 'string' && isDate(date) ? { id, date } : null;
+}
+
+/** Un rythme et une fin gardés avec une coupe ; null s'ils n'en ont pas la forme. */
+function readRule(json: unknown): RecurrenceRule | null {
+    if (!isRecord(json)) {
+        return null;
+    }
+    const { kind, weekdays, everyWeeks, monthWeek, monthDay, until } = json;
+    const weekday = (day: unknown) => typeof day === 'number' && Number.isInteger(day) && day >= 1 && day <= 7;
+    if (
+        !Array.isArray(weekdays) ||
+        !weekdays.every(weekday) ||
+        typeof everyWeeks !== 'number' ||
+        !Number.isInteger(everyWeeks) ||
+        everyWeeks < 1 ||
+        everyWeeks > 4 ||
+        (until !== null && (typeof until !== 'string' || !isDate(until)))
+    ) {
+        return null;
+    }
+    const days = weekdays as number[];
+    switch (kind) {
+        case 'weekly':
+            return days.length > 0 && monthWeek === null && monthDay === null
+                ? { kind, weekdays: days, everyWeeks, monthWeek: null, monthDay: null, until }
+                : null;
+        case 'monthly_weekday':
+            return days.length === 1 &&
+                everyWeeks === 1 &&
+                (monthWeek === LAST_WEEK || (typeof monthWeek === 'number' && [1, 2, 3, 4].includes(monthWeek))) &&
+                monthDay === null
+                ? { kind, weekdays: days, everyWeeks, monthWeek, monthDay: null, until }
+                : null;
+        case 'monthly_date':
+            return days.length === 0 &&
+                everyWeeks === 1 &&
+                monthWeek === null &&
+                typeof monthDay === 'number' &&
+                Number.isInteger(monthDay) &&
+                monthDay >= 1 &&
+                monthDay <= 31
+                ? { kind, weekdays: days, everyWeeks, monthWeek: null, monthDay, until }
+                : null;
+        default:
+            return null;
+    }
 }

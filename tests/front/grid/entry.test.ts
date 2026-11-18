@@ -50,15 +50,32 @@ describe('ce que la fenêtre de ticket modifie', () => {
         expect(targetAt(GRID, minutes('15:15'))).toEqual({ kind: 'new', quarters: at('15:15') });
     });
 
-    it('ouvre à Entrée toute une plage vide, sinon le quart d’heure où la sélection s’arrête', () => {
+    it('ouvre à Entrée le bloc qui porte toute la sélection, sinon Nouveau ticket sur toute la sélection', () => {
         const range = extendTo(selectQuarter(minutes('14:00')), minutes('14:30'));
         expect(targetOfSelection(GRID, range)).toEqual({ kind: 'new', quarters: at('14:00', '14:15', '14:30') });
 
-        const overBlock = extendTo(selectQuarter(minutes('11:15')), minutes('10:45'));
-        expect(targetOfSelection(GRID, overBlock)).toEqual({ kind: 'edit', block: SHOP_482 });
+        const inBlock = extendTo(selectQuarter(minutes('10:00')), minutes('10:30'));
+        expect(targetOfSelection(GRID, inBlock)).toEqual({ kind: 'edit', block: SHOP_482 });
+        expect(targetOfSelection(GRID, selectQuarter(minutes('12:45')))).toEqual({ kind: 'edit', block: LUNCH });
 
+        // À cheval sur un bloc, ou sur deux : toute la sélection, pas le bloc où elle s'arrête.
+        const overBlock = extendTo(selectQuarter(minutes('11:15')), minutes('10:45'));
+        expect(targetOfSelection(GRID, overBlock)).toEqual({ kind: 'new', quarters: at('10:45', '11:00', '11:15') });
+        const twoBlocks = extendTo(selectQuarter(minutes('11:00')), minutes('12:45'));
+        expect(targetOfSelection(GRID, twoBlocks)).toEqual(selectionTarget(twoBlocks));
+
+        // En morceaux, vides ou non : tous les morceaux, pas le dernier quart d'heure.
         const scattered = toggleQuarter(selectQuarter(minutes('14:00')), minutes('15:00'));
-        expect(targetOfSelection(GRID, scattered)).toEqual({ kind: 'new', quarters: at('15:00') });
+        expect(targetOfSelection(GRID, scattered)).toEqual({ kind: 'new', quarters: at('14:00', '15:00') });
+        const inBlockPieces = toggleQuarter(selectQuarter(minutes('10:00')), minutes('10:30'));
+        expect(targetOfSelection(GRID, inBlockPieces)).toEqual({ kind: 'edit', block: SHOP_482 });
+        // Le curseur retiré de la sélection par Ctrl/⌘+clic : c'est elle qui décide, pas lui.
+        const headOutside = toggleQuarter(
+            toggleQuarter(selectQuarter(minutes('10:00')), minutes('12:45')),
+            minutes('12:45'),
+        );
+        expect(headOutside.head).toBe(minutes('12:45'));
+        expect(targetOfSelection(GRID, headOutside)).toEqual({ kind: 'edit', block: SHOP_482 });
 
         expect(targetOfSelection(GRID, EMPTY_SELECTION)).toBeNull();
         // Le curseur resté sur un bloc après Échap ne s'ouvre pas : rien ne le montre.
@@ -459,6 +476,9 @@ describe('Modifier la sélection', () => {
 
                         return;
                     }
+                    if (action.kind !== 'write') {
+                        throw new Error(`Modifier la sélection ne rend pas « ${action.kind} ».`);
+                    }
                     const after = grid.with(action.changes);
                     for (const quarter of Quarter.all()) {
                         const selected = selection.quarters.includes(quarter);
@@ -467,5 +487,77 @@ describe('Modifier la sélection', () => {
                 },
             ),
         );
+    });
+});
+
+describe('la fenêtre sur un bloc qui revient', () => {
+    /** Le Daily de la récurrence « a », suivi du même ticket posé à la main. */
+    const linked = gridOf([
+        ['09:00', '09:30', 'work', 'OPS-12', 'Daily', 'a'],
+        ['09:30', '10:00', 'work', 'OPS-12', 'Daily'],
+        ['12:30', '13:30', 'pause', null, null, 'b'],
+    ]);
+    const daily = work('OPS-12', 'Daily', 'a');
+
+    it('ouvre le bloc de la récurrence seul, sans le même ticket posé à la main', () => {
+        expect(targetAt(linked, minutes('09:15'))).toEqual({
+            kind: 'edit',
+            block: { start: minutes('09:00'), end: minutes('09:30'), content: daily },
+        });
+        expect(targetAt(linked, minutes('09:30'))).toEqual({
+            kind: 'edit',
+            block: { start: minutes('09:30'), end: minutes('10:00'), content: work('OPS-12', 'Daily') },
+        });
+        expect(draftOf(targetAt(linked, minutes('09:15')))).toEqual({ ticket: 'OPS-12', comment: 'Daily' });
+    });
+
+    it('écrit sans lien ce que la fenêtre enregistre, supprime ou convertit en pause', () => {
+        const target = targetAt(linked, minutes('09:00'));
+        const quarters = at('09:00', '09:15');
+
+        expect(saveEntry(target, { ticket: 'OPS-13', comment: 'Daily' })).toEqual({
+            kind: 'write',
+            changes: new Map(quarters.map((quarter) => [quarter, work('OPS-13', 'Daily')])),
+            gesture: null,
+        });
+        expect(pauseEntry(target)).toEqual({
+            kind: 'write',
+            changes: new Map(quarters.map((quarter) => [quarter, PAUSE])),
+            gesture: null,
+        });
+        expect(deleteEntry(targetAt(linked, minutes('12:45')))).toMatchObject({ gesture: 'delete' });
+    });
+
+    it('ne suit plus un bloc qu’un autre onglet a détaché : il le dirait remplacé', () => {
+        const target = targetAt(linked, minutes('09:00'));
+        const detached = linked.with(
+            new Map(at('09:00', '09:15').map((quarter) => [quarter, work('OPS-12', 'Daily')])),
+        );
+
+        expect(retarget(linked, target)).toBe(target);
+        expect(retarget(detached, target)).toEqual({ kind: 'new', quarters: at('09:00', '09:15') });
+    });
+
+    it('n’enregistre rien sous Modifier la sélection quand rien n’a changé', () => {
+        const part = partTarget(linked, selectQuarters(at('09:15')));
+        if (part === null) {
+            throw new Error('Modifier la sélection ne s’ouvre pas sur le Daily.');
+        }
+
+        expect(part.content).toEqual(daily);
+        expect(saveEntry(part, draftOf(part))).toEqual({ kind: 'close' });
+    });
+
+    it('détache la fois entière sous Modifier la sélection, dès qu’on change le commentaire', () => {
+        const part = partTarget(linked, selectQuarters(at('09:15')));
+        if (part === null) {
+            throw new Error('Modifier la sélection ne s’ouvre pas sur le Daily.');
+        }
+
+        expect(saveEntry(part, { ticket: 'OPS-12', comment: 'Rétro' })).toEqual({
+            kind: 'write',
+            changes: new Map([[minutes('09:15'), work('OPS-12', 'Rétro')]]),
+            gesture: 'modify',
+        });
     });
 });

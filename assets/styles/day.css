@@ -185,6 +185,103 @@
         }
     }
 
+    /*
+     * Les prochaines fois d'une récurrence, à la façon d'un bloc, à la teinte du ticket
+     * (RecurrenceSection.tsx) : grises tant que Jira ne l'a pas dite, aux couleurs de la
+     * pause pour une pause. Une semaine sans, en pointillé, a un bord gauche fin comme les
+     * autres, et son texte s'aligne sur celui des tuiles pleines.
+     */
+    .recurrence-times {
+        --recurrence-pad-thin: calc(var(--s-2) + var(--b-ty) - var(--s-half) / 2);
+    }
+
+    .recurrence-times:not([data-color]) {
+        --ty-bar: var(--line-strong);
+        --ty-bg: var(--bg-sel);
+        --ty-line: var(--line-strong);
+        --ty-id: var(--ink);
+    }
+
+    .recurrence-times > [data-state='none'] {
+        --ty-id: var(--ink-3);
+    }
+
+    /* Une fois qu'une autre récurrence prend déjà : marquée « Pris », en --inc. */
+    .recurrence-times > [data-state='taken'] {
+        --ty-bar: var(--inc);
+        --ty-bg: var(--inc-bg);
+        --ty-line: var(--inc-line);
+        --ty-id: var(--inc);
+    }
+
+    /*
+     * Une carte du rythme (RecurrenceSection.tsx) : le bouton radio la couvre, invisible, et
+     * l'anneau du clavier entoure la carte.
+     */
+    .rhythm-card > input {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        opacity: 0;
+        cursor: pointer;
+    }
+
+    .rhythm-card:has(> input:focus-visible) {
+        outline: var(--ring) solid var(--focus);
+        outline-offset: var(--ring);
+    }
+
+    /* Son petit schéma : cinq semaines pleines, une sur deux en creux, ou un mois de quatre semaines. */
+    .rhythm-scheme {
+        --rhythm-thin: calc(var(--s-half) / 2);
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--s-1);
+        height: var(--s-5);
+    }
+
+    .rhythm-scheme > i {
+        display: block;
+        flex: none;
+        width: var(--s-2);
+        height: var(--s-4);
+        border-radius: var(--r-1);
+        background: var(--ink-2);
+    }
+
+    .rhythm-scheme > i[data-off] {
+        border: var(--rhythm-thin) solid var(--line-strong);
+        background: transparent;
+    }
+
+    .rhythm-scheme.is-month {
+        display: grid;
+        grid-template-columns: repeat(7, var(--s-1));
+        gap: var(--s-half);
+        align-content: center;
+    }
+
+    .rhythm-scheme.is-month > i {
+        width: var(--s-1);
+        height: var(--s-1);
+        border-radius: 0;
+        background: var(--line-strong);
+    }
+
+    .rhythm-scheme.is-month > i[data-on] {
+        outline: var(--rhythm-thin) solid var(--ink);
+        background: var(--ink);
+    }
+
+    .recurrence-times.is-pause {
+        --ty-bar: var(--pause-hatch);
+        --ty-bg: var(--pause-bg);
+        --ty-line: var(--pause-hatch);
+        --ty-id: var(--pause-ink);
+    }
+
     /* La liste des favoris qui défile. */
     .favorites-scroll {
         scrollbar-width: thin;

@@ -3,9 +3,13 @@
 namespace App\Sending;
 
 use App\Database\LockedTransaction;
+use App\Day\DayVersion;
+use App\Day\SlotContent;
 use App\Day\StaleDay;
 use App\Day\UserCalendar;
+use App\Entity\Day;
 use App\Entity\DaySend;
+use App\Entity\Recurrence;
 use App\Jira\JiraClient;
 use App\Jira\JiraCredentials;
 use App\Jira\JiraFailure;
@@ -13,8 +17,12 @@ use App\Jira\JiraLink;
 use App\Jira\JiraWorklog;
 use App\Jira\WorklogWrite;
 use App\Jira\WriteOutcome;
+use App\Recurrence\RecurrenceForecast;
+use App\Recurrence\RecurrencePoser;
 use App\Repository\DayRepository;
 use App\Repository\DaySendRepository;
+use App\Repository\RecurrenceRepository;
+use App\Settings\UserSettings;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Clock\ClockInterface;
 
@@ -45,6 +53,11 @@ final readonly class DaySender
         private JiraClient $jira,
         private UserCalendar $calendar,
         private ClockInterface $clock,
+        private RecurrencePoser $poser,
+        private RecurrenceForecast $forecast,
+        private UserSettings $settings,
+        private SendClosure $closure,
+        private RecurrenceRepository $recurrences,
     ) {
     }
 
@@ -59,6 +72,8 @@ final readonly class DaySender
      */
     public function send(\DateTimeImmutable $date, int $version): void
     {
+        // Ce qui part est ce que la journée montre, ce qu'elle a reçu le jour venu compris.
+        $this->poser->pose();
         // Repris de la v1, le compte n'est pas encore connu, et les heures à remplacer se
         // reconnaissent à lui : Jira doit le dire avant que quoi que ce soit parte.
         $confirmation = null;
@@ -99,7 +114,7 @@ final readonly class DaySender
 
         $now = $this->clock->now();
         $delivery = self::withWhatJiraMayHold($delivery, $send, $worklogs, $before, $now);
-        $this->finish($send, function (DaySend $send) use ($delivery, $worklogs, $before, $now): void {
+        $this->finish($send, function (DaySend $send) use ($date, $delivery, $worklogs, $before, $now): void {
             if (!$delivery->isComplete()) {
                 $send->fail(
                     $delivery->result(),
@@ -115,12 +130,20 @@ final readonly class DaySender
                     $delivery->vanished,
                     $now,
                 );
-            } elseif ([] === $worklogs && [] === $delivery->vanished) {
-                // Une journée vidée, et Jira vidé avec elle : il n'y a plus rien à en dire.
-                $this->entityManager->remove($send);
             } else {
                 // Une journée vidée dont Jira ne trouve plus un ticket garde de quoi le dire.
                 $send->succeed($worklogs, $delivery->retired($worklogs), $delivery->vanished, $now);
+            }
+            // Une journée vidée, et Jira vidé avec elle — ou qu'un essai sans rien écrire a laissée
+            // vide, pendant qu'on la vidait ailleurs — : son envoi n'a plus rien à en dire. Sans
+            // envoi sous aucun compte, elle redevient une journée comme une autre (SendClosure).
+            $day = $this->days->findWithSlots($date);
+            if (null !== $day) {
+                $this->entityManager->refresh($day);
+                // Lues avant l'appel à Jira, leurs fins ont pu changer depuis dans un autre onglet.
+                $this->recurrences->refreshAll();
+                // L'envoi en cours la fermait : il avait au moins un ticket où écrire.
+                $this->closure->reopen($day, true, true);
             }
         });
 
@@ -131,7 +154,11 @@ final readonly class DaySender
 
     /**
      * Prend l'envoi de la journée, d'un seul tenant : la journée est celle qu'a vue
-     * l'écran, et aucun autre envoi ne part en même temps.
+     * l'écran, et aucun autre envoi ne part en même temps. Un jour à venir y reçoit ses
+     * fois prévues pour de bon : ce qui part est ce que la journée montre, et ce que la
+     * relecture comparera. Il les a reçues pour de bon, comme le jour venu : une récurrence
+     * qui naît, change ou s'étend ensuite ne le change plus, que l'envoi aboutisse ou non, tant
+     * qu'un envoi y a quelque chose à dire (DaySendRepository::closesToRecurrences).
      *
      * @return array{DaySend, list<Worklog>, list<string>} l'envoi, les saisies de la journée, et les tickets touchés avant lui
      */
@@ -144,13 +171,21 @@ final readonly class DaySender
 
         return $this->transaction->run($this->days, function () use ($date, $version, $jira): array {
             $day = $this->days->findWithSlots($date);
-            if (null === $day) {
-                throw 0 === $version ? new NothingToSend() : new StaleDay();
+            if (null !== $day) {
+                $this->entityManager->refresh($day);
             }
-
-            $this->entityManager->refresh($day);
-            if ($day->version !== $version) {
+            // Les récurrences aussi : ce que la journée prévoit, et les flèches qu'elle montre, se
+            // jugent sur leurs fins du moment.
+            $this->recurrences->refreshAll();
+            $planned = $this->forecast->on($day, $date);
+            if (DayVersion::of($day, $planned) !== $version) {
                 throw new StaleDay();
+            }
+            if ([] !== $planned) {
+                $day = $this->pose($day, $date, $planned);
+            }
+            if (null === $day) {
+                throw new NothingToSend();
             }
 
             $worklogs = Worklog::ofDay($day->grid(), $day->date, $this->calendar);
@@ -180,6 +215,31 @@ final readonly class DaySender
 
             return [$send, $worklogs, $before];
         });
+    }
+
+    /**
+     * Pose les fois prévues d'un jour à venir, liées à leur récurrence, comme le poseur le
+     * jour venu : la journée change, et l'onglet qui ne l'a pas vue reçoit le refus habituel.
+     *
+     * @param array<int, Recurrence> $planned
+     */
+    private function pose(?Day $day, \DateTimeImmutable $date, array $planned): Day
+    {
+        if (null === $day) {
+            // Lu sous le verrou, comme à la naissance de toute journée.
+            $day = new Day($date, $this->settings->habitualObjective());
+            $this->entityManager->persist($day);
+        } else {
+            $this->days->advance($date);
+            $this->entityManager->refresh($day);
+            if ($day->followsHabitual()) {
+                // Vide et sans objectif choisi, elle reprend l'habituel du moment avant de se remplir.
+                $day->objective = $this->settings->habitualObjective();
+            }
+        }
+        $day->change(array_map(static fn (Recurrence $recurrence): SlotContent => $recurrence->content(), $planned), $planned);
+
+        return $day;
     }
 
     /**

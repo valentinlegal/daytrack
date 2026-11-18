@@ -1,25 +1,57 @@
-import { act, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import {
+    act,
+    type ReactNode,
+    type RefObject,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useSyncExternalStore,
+} from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { DayGrid } from '../../../assets/day/DayGrid';
 import { GridMenu } from '../../../assets/day/GridMenu';
+import {
+    initialRecurrence,
+    linkedRecurrence,
+    type RecurrenceDraft,
+    saveBlocked,
+} from '../../../assets/day/recurrenceDraft';
 import { useTicketField } from '../../../assets/day/TicketField';
 import { TicketWindow } from '../../../assets/day/TicketWindow';
 import { type FavoriteDrag, useFavorites } from '../../../assets/day/useFavorites';
-import { type BlockDropTarget, type GridEditing, useGridEditing } from '../../../assets/day/useGridEditing';
+import {
+    type BlockDropTarget,
+    type GridEditing,
+    type PlacedWindow,
+    type ScopeChoice,
+    useGridEditing,
+    type WindowQuestion,
+} from '../../../assets/day/useGridEditing';
 import { FavoriteList } from '../../../assets/favorites/favoriteList';
-import type { SlotChange } from '../../../assets/grid/changes';
-import { type DayApi, DaySession, type SessionSnapshot, tabMemory } from '../../../assets/grid/daySession';
-import { draftOf, saveDisabled } from '../../../assets/grid/entry';
+import { type SlotChange, toSlotChanges } from '../../../assets/grid/changes';
+import {
+    type DayApi,
+    DaySession,
+    type SendOutcome,
+    type SessionSnapshot,
+    type TabMemory,
+    tabMemory,
+} from '../../../assets/grid/daySession';
+import { draftOf } from '../../../assets/grid/entry';
+import { unlinked } from '../../../assets/grid/grid';
 import * as Quarter from '../../../assets/grid/quarter';
+import type { RecurrenceRule } from '../../../assets/grid/recurrence';
 import type { JiraApi, LookupResult } from '../../../assets/jira/jiraApi';
 import { JiraStatus } from '../../../assets/jira/jiraStatus';
 import { TicketBook } from '../../../assets/jira/ticketBook';
 import { TicketsProvider } from '../../../assets/jira/TicketsContext';
+import type { Tint } from '../../../assets/settings/tints';
 import type { TicketCheck } from '../../../assets/jira/useTicketLookup';
 import { FakeFavoritesServer } from '../favorites/fakeFavoritesServer';
 import { FakeDayServer, type Request } from '../grid/fakeDayServer';
-import { memoryStorage, type Range, rangesOf } from '../grid/support';
+import { memoryStorage, type Range, rangesOf, weeklyRule } from '../grid/support';
 
 /**
  * Les gestes de la grille, sans navigateur : useGridEditing monté sur une vraie
@@ -159,6 +191,8 @@ export class Held {
 export class SlowServer extends Held {
     readonly server: FakeDayServer;
     readonly api: DayApi;
+    /** Chaque requête partie de l'écran, dans l'ordre : celles que le serveur refuse comprises. */
+    readonly requests: Request[] = [];
     private lost = 0;
 
     constructor(server = new FakeDayServer()) {
@@ -178,7 +212,8 @@ export class SlowServer extends Held {
     }
 
     private send<T>(request: Request, handle: () => T): Promise<T> {
-        if (this.lost > 0 && request.kind === 'changeSlots') {
+        this.requests.push(request);
+        if (this.lost > 0 && (request.kind === 'changeSlots' || request.kind === 'saveRecurrence')) {
             this.lost -= 1;
 
             return Promise.reject(new TypeError('Failed to fetch'));
@@ -197,6 +232,8 @@ export class SlowJira extends Held {
     readonly book: TicketBook;
     /** Les tickets que Jira ne connaît pas. */
     readonly missing = new Set(['SHOP-999']);
+    /** La teinte du type de chaque ticket : vert, sauf ceux qu'on lui dit. */
+    readonly colors = new Map<string, Tint>();
     lookups = 0;
 
     constructor() {
@@ -214,7 +251,10 @@ export class SlowJira extends Held {
         return this.carry(() =>
             this.missing.has(ticket)
                 ? { status: 'not_found' }
-                : { status: 'found', ticket: { title: `Titre de ${ticket}`, type: 'Story', color: 'vert' } },
+                : {
+                      status: 'found',
+                      ticket: { title: `Titre de ${ticket}`, type: 'Story', color: this.colors.get(ticket) ?? 'vert' },
+                  },
         );
     }
 }
@@ -223,26 +263,35 @@ export class SlowJira extends Held {
  * Ce que la fenêtre de ticket fait des gestes, sans son apparence ni Radix (TicketWindow.tsx,
  * Popover.tsx) : elle dit au crochet ce que Jira sait du ticket tapé, Entrée l'enregistre
  * quand elle le permet, un appui à côté l'enregistre sauf pendant un envoi, et Échap, d'où
- * que soit le curseur, est pour elle : il la ferme sauf pendant un envoi, et ne vide pas la
- * sélection de la grille.
+ * que soit le curseur, est pour elle : il la ferme sauf pendant un envoi — ou, sur la
+ * question posée par ses champs, les rend —, et ne vide pas la sélection de la grille. Sur la
+ * question « quelles fois », Entrée valide le choix, comme le bouton de droite.
  */
 interface WindowGestures {
     enter(): void;
     outside(): void;
+    /** Le bouton de droite du pied : Enregistrer, Arrêter ou Effacer. */
+    save(): void;
 }
 
-const NO_WINDOW: WindowGestures = { enter: () => undefined, outside: () => undefined };
+const NO_WINDOW: WindowGestures = { enter: () => undefined, outside: () => undefined, save: () => undefined };
 
 function WindowStandIn({
+    session,
     editing,
     checkRef,
     gesturesRef,
 }: {
+    session: DaySession;
     editing: GridEditing;
     checkRef: RefObject<TicketCheck>;
     gesturesRef: RefObject<WindowGestures>;
 }) {
     const shown = editing.window;
+    const day = useSyncExternalStore(
+        (listener) => session.subscribe(listener),
+        () => session.current().day,
+    );
     // Le même champ Ticket que TicketWindow : un bloc qui garde son ticket n'attend Jira que
     // s'il le cherche encore.
     const { check } = useTicketField(
@@ -250,9 +299,15 @@ function WindowStandIn({
         shown === null ? '' : draftOf(shown.target).ticket,
         checkRef,
     );
+    // Comme TicketWindow : une pause sans ticket s'enregistre quand sa case « Récurrence » a
+    // changé, mais pas avec un commentaire, et une récurrence sans jour ne s'enregistre pas
+    // par Entrée.
+    const initial = shown === null ? null : initialRecurrence(shown.target, day);
     useEffect(() => {
+        // Sur la question, c'est le crochet qui juge si la réponse attend Jira : effacer n'écrit
+        // pas de ticket.
         const save = () => {
-            if (!check.refused) {
+            if (shown?.question !== undefined || !check.refused) {
                 editing.saveWindow(check);
             }
         };
@@ -261,7 +316,21 @@ function WindowStandIn({
                 ? NO_WINDOW
                 : {
                       enter: () => {
-                          if (!saveDisabled(shown.target, shown.draft) && !check.refused) {
+                          // Sur la question, Entrée valide le choix, sans rien juger des champs.
+                          if (shown.question !== undefined) {
+                              save();
+
+                              return;
+                          }
+                          const blocked = saveBlocked(
+                              shown.target,
+                              shown.draft,
+                              editing.windowRecurrence,
+                              initial,
+                              day.date,
+                              day.workingDays,
+                          );
+                          if (!blocked && !check.refused) {
                               save();
                           }
                       },
@@ -270,6 +339,7 @@ function WindowStandIn({
                               save();
                           }
                       },
+                      save,
                   };
     });
     // Comme Radix, qui l'écoute sur tout le document, avant tout le reste.
@@ -302,11 +372,19 @@ type Modifiers = Pick<KeyboardEventInit, 'shiftKey' | 'ctrlKey' | 'metaKey' | 'a
 export class Bench {
     readonly slow: SlowServer;
     readonly jira: SlowJira;
-    readonly session: DaySession;
+    /** La mémoire de l'onglet : l'historique de chaque jour, gardé d'un jour à l'autre. */
+    readonly memory: TabMemory;
+    /** Aujourd'hui : la journée du banc, un jour d'après, qui la rend passée, ou la veille, qui la rend à venir. */
+    readonly today: string;
     /** Les menus ouverts, dans l'ordre : le créneau où chacun a été demandé. */
     readonly menus: number[] = [];
     /** Ce que la fenêtre a montré, rendu après rendu : « - », « edit », « new* » en envoi… */
     readonly windows: string[] = [];
+    /**
+     * Chaque fois que Radix a placé la vraie fenêtre : la hauteur qu'elle s'est mesurée, et le
+     * rectangle où elle s'accroche, que sa flèche désigne en son milieu.
+     */
+    readonly placements: { readonly height: number; readonly rect: DOMRect }[] = [];
     editingRef: GridEditing | null = null;
     /** Ce qu'on glisse depuis les favoris, au dernier rendu ; undefined sans favoris montés. */
     favoriteDrag: FavoriteDrag | null | undefined = undefined;
@@ -323,11 +401,27 @@ export class Bench {
     private readonly root: Root;
     private readonly container: HTMLElement;
     private readonly removeEscape: () => void;
+    /** La journée affichée ; un changement de jour en ouvre une autre (switchDay). Null pendant qu'elle se lit (openSlowly). */
+    private shownSession: DaySession | null;
+    /** Le jour qui s'ouvre, tant qu'il se lit (openSlowly). */
+    private openingDate: string | null = null;
+    /** La grille se ferme comme sur l'écran Journée (MountOptions.closes). */
+    closes = false;
+    private readonly sessionListeners = new Set<() => void>();
 
-    constructor(slow: SlowServer, jira: SlowJira, session: DaySession, render: (probe: Probe) => ReactNode) {
+    constructor(
+        slow: SlowServer,
+        jira: SlowJira,
+        session: DaySession,
+        render: (probe: Probe) => ReactNode,
+        today = DATE,
+        memory: TabMemory = tabMemory(memoryStorage()),
+    ) {
         this.slow = slow;
         this.jira = jira;
-        this.session = session;
+        this.shownSession = session;
+        this.memory = memory;
+        this.today = today;
         this.container = document.createElement('div');
         document.body.append(this.container);
         this.root = createRoot(this.container);
@@ -348,7 +442,19 @@ export class Bench {
             document.removeEventListener('contextmenu', onContextMenu, true);
         };
         const probe: Probe = {
-            session,
+            opening: () => this.openingDate,
+            sessions: {
+                current: () => this.shownSession,
+                subscribe: (listener) => {
+                    this.sessionListeners.add(listener);
+
+                    return () => {
+                        this.sessionListeners.delete(listener);
+                    };
+                },
+            },
+            today,
+            closes: () => this.closes,
             gesturesRef: this.windowGestures,
             onRender: (editing) => {
                 this.editingRef = editing;
@@ -381,6 +487,9 @@ export class Bench {
             onMenu: () => {
                 this.menus.push(this.menuQuarter);
             },
+            onPlace: (height, placed) => {
+                this.placements.push({ height, rect: placed.rect });
+            },
         };
         act(() => {
             this.root.render(
@@ -389,6 +498,15 @@ export class Bench {
                 </TicketsProvider>,
             );
         });
+    }
+
+    /** La session de la journée affichée. */
+    get session(): DaySession {
+        if (this.shownSession === null) {
+            throw new Error('La journée se lit encore.');
+        }
+
+        return this.shownSession;
     }
 
     /** Ce que le crochet rend au dernier rendu. */
@@ -641,6 +759,28 @@ export class Bench {
         });
     }
 
+    /** Règle la case « Récurrence » de la fenêtre ouverte, comme on la coche et choisit ses jours. */
+    setRecurrence(draft: RecurrenceDraft): void {
+        if (this.editing.window === null) {
+            throw new Error("Aucune fenêtre n'est ouverte.");
+        }
+        act(() => {
+            this.editing.setRecurrence(draft);
+        });
+    }
+
+    /**
+     * Change une part de la case « Récurrence » de la fenêtre ouverte — ses jours, sa carte, sa
+     * fin —, le reste tel qu'elle le montre, comme on la règle à la souris.
+     */
+    adjustRecurrence(change: Partial<RecurrenceDraft>): void {
+        const draft = this.editing.windowRecurrence;
+        if (draft === null) {
+            throw new Error("La fenêtre n'a pas de case « Récurrence ».");
+        }
+        this.setRecurrence({ ...draft, ...change });
+    }
+
     /** Entrée dans le champ Ticket de la fenêtre. */
     enter(): void {
         const field = document.querySelector('[role="dialog"] input');
@@ -664,12 +804,135 @@ export class Bench {
         });
     }
 
-    /** Un bouton du pied de la fenêtre : Supprimer, Pause ou Annuler. */
+    /** Un bouton du pied de la fenêtre : Effacer, Pause ou Annuler. */
     button(name: 'delete' | 'pause' | 'cancel'): void {
         act(() => {
             ({ delete: this.editing.deleteWindow, pause: this.editing.pauseWindow, cancel: this.editing.cancelWindow })[
                 name
             ]();
+        });
+    }
+
+    /** La question « quelles fois » de la fenêtre ouverte, si elle la pose. */
+    question(): WindowQuestion | undefined {
+        return this.editing.window?.question;
+    }
+
+    /** Un choix de la question : le bouton radio de la vraie fenêtre, qu'on clique. */
+    chooseScope(choice: ScopeChoice): void {
+        const radio = document.querySelector<HTMLInputElement>(`[role="radiogroup"] input[value="${choice}"]`);
+        act(() => {
+            if (this.real && radio !== null) {
+                radio.click();
+            } else {
+                this.editing.chooseScope(choice);
+            }
+        });
+    }
+
+    /**
+     * Le bouton de droite du pied de la question, ou de la fenêtre : Enregistrer, Arrêter,
+     * Effacer, Couper, Allonger ou Raccourcir.
+     */
+    confirm(): void {
+        const button = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((candidate) =>
+            ['Enregistrer', 'Arrêter', 'Effacer', 'Couper', 'Allonger', 'Raccourcir'].includes(
+                candidate.textContent.trim(),
+            ),
+        );
+        act(() => {
+            if (this.real && button !== undefined) {
+                button.click();
+            } else {
+                this.windowGestures.current.save();
+            }
+        });
+    }
+
+    /** Le bouton de gauche du pied de la question : Retour, ou Annuler. */
+    back(): void {
+        const button = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((candidate) =>
+            ['Retour', 'Annuler'].includes(candidate.textContent.trim()),
+        );
+        act(() => {
+            if (this.real && button !== undefined) {
+                button.click();
+            } else {
+                this.editing.cancelWindow();
+            }
+        });
+    }
+
+    /**
+     * Les flèches de la barre vers un autre jour (useDayNavigation) : la fenêtre ouverte
+     * s'enregistre d'abord, comme sur un clic à côté, et on attend sa réponse ; refusée, ou
+     * sa question posée, on reste. Sinon, la session quittée se ferme et l'autre jour s'ouvre,
+     * lu sur le serveur, avec la même mémoire d'onglet. La promesse dit si on est parti.
+     */
+    switchDay(date: string): Promise<boolean> {
+        let flushing: Promise<boolean> = Promise.resolve(true);
+        act(() => {
+            flushing = this.editing.flushWindow();
+        });
+
+        return flushing.then((closed) => {
+            if (closed) {
+                act(() => {
+                    this.shownSession?.close();
+                    this.openingDate = null;
+                    this.shownSession = new DaySession(this.slow.server.read(date), this.slow.api, this.memory);
+                    this.notifySessions();
+                });
+            }
+
+            return closed;
+        });
+    }
+
+    /**
+     * Un autre jour, qui se lit lentement (useDayNavigation) : la session quittée se ferme, et la
+     * grille attend la journée tant qu'on ne l'a pas lâchée (arrive). La promesse dit si on est
+     * parti.
+     */
+    openSlowly(date: string): Promise<boolean> {
+        let flushing: Promise<boolean> = Promise.resolve(true);
+        if (this.shownSession !== null) {
+            act(() => {
+                flushing = this.editing.flushWindow();
+            });
+        }
+
+        return flushing.then((closed) => {
+            if (closed) {
+                act(() => {
+                    this.shownSession?.close();
+                    this.shownSession = null;
+                    this.openingDate = date;
+                    this.notifySessions();
+                });
+            }
+
+            return closed;
+        });
+    }
+
+    /** La journée qui s'ouvrait est lue, telle que le serveur l'a maintenant ; ou sa lecture échoue. */
+    async arrive(fails = false): Promise<void> {
+        const date = this.openingDate;
+        if (date === null) {
+            throw new Error("Aucune journée ne s'ouvre.");
+        }
+        act(() => {
+            this.openingDate = null;
+            this.shownSession = fails ? null : new DaySession(this.slow.server.read(date), this.slow.api, this.memory);
+            this.notifySessions();
+        });
+        await this.settle();
+    }
+
+    private notifySessions(): void {
+        this.sessionListeners.forEach((listener) => {
+            listener();
         });
     }
 
@@ -706,6 +969,57 @@ export class Bench {
         this.slow.server.changeSlots(DATE, this.slow.server.read(DATE).version, changes);
     }
 
+    /**
+     * Un autre onglet, sur un autre jour, enregistre la fenêtre d'un bloc qui revient : sa case
+     * décochée l'arrête à partir de ce jour-là (null), d'autres jours la coupent en deux. La
+     * journée du banc n'en sait rien avant de la relire, mais sa version a changé si elle
+     * prévoyait cette récurrence. Coupée puis collée, elle ne repart pas au-delà de son collage :
+     * le serveur le refuse sous « Jusqu'au », rien ne change, et l'appel rend false.
+     */
+    recurrenceElsewhere(id: string, on: string, rule: RecurrenceRule | null): boolean {
+        const { server } = this.slow;
+        const day = server.read(on);
+        const block = day.grid.blocks().find((candidate) => candidate.content.recurrence === id);
+        const recurrence = server.recurrence(id);
+        if (block === undefined || recurrence === undefined) {
+            throw new Error(`La récurrence ${id} ne pose rien le ${on}.`);
+        }
+        // Ce que la fenêtre écrit : le bloc tel qu'il est, sans son lien, que le serveur pose.
+        const changes = toSlotChanges(
+            new Map(Quarter.between(block.start, block.end).map((quarter) => [quarter, unlinked(block.content)])),
+        );
+        const result = server.saveRecurrence(on, day.version, changes, rule, {
+            id,
+            weekdays: recurrence.weekdays,
+            until: recurrence.until,
+        });
+        if (
+            result.status === 'invalid' &&
+            result.violations.every(
+                (violation) =>
+                    violation.field === 'recurrence.until' &&
+                    violation.message.startsWith("Annulez d'abord le collage du "),
+            )
+        ) {
+            return false;
+        }
+        if (result.status !== 'saved') {
+            throw new Error(`L'autre onglet n'a pas changé ${id} : ${JSON.stringify(result)}.`);
+        }
+
+        return true;
+    }
+
+    /** L'envoi sur Jira, confirmé dans sa fenêtre : il part à son tour, derrière les gestes d'avant. */
+    sendToJira(): Promise<SendOutcome> {
+        let sent: Promise<SendOutcome> = Promise.resolve({ kind: 'abandoned' });
+        act(() => {
+            sent = this.session.sendToJira();
+        });
+
+        return sent;
+    }
+
     /** Un favori déposé sur ce quart d'heure. */
     dropFavorite(ticket: string, quarter: number): void {
         act(() => {
@@ -725,10 +1039,36 @@ export class Bench {
 interface MountOptions {
     /** Ce que la journée contient au départ, écrit en base avant le montage. */
     readonly blocks?: readonly SlotChange[];
+    /**
+     * Des récurrences nées la veille, du lundi au vendredi, posées sur la journée avant les
+     * blocs : chacune, un créneau qui revient.
+     */
+    readonly recurrences?: readonly SlotChange[];
+    /**
+     * Les récurrences de départ sont nées avant le refus d'un créneau pris : elles peuvent se
+     * croiser, et le serveur les garde.
+     */
+    readonly crossing?: boolean;
+    /**
+     * Des saisies faites sur la journée avant que ses récurrences n'y tombent : elles gardent
+     * leur créneau, et une récurrence s'y pose autour, en deux morceaux s'il le faut. Un jour à
+     * venir, elles y sont, et ses récurrences s'y prévoient autour.
+     */
+    readonly earlier?: readonly SlotChange[];
     /** Les favoris, de haut en bas ; avec mountScreen seulement. */
     readonly favorites?: readonly string[];
     /** L'heure en haut de la vue : le clavier y commence. */
     readonly top?: number;
+    /**
+     * Aujourd'hui ; un jour d'après rend la journée du banc passée. La veille (EVE) la rend à
+     * venir : ses récurrences n'y sont pas posées, mais prévues.
+     */
+    readonly today?: string;
+    /**
+     * La grille se ferme comme sur l'écran Journée : un jour non travaillé ou mis à 0h00, vide
+     * (assets/day/dayClosure.ts).
+     */
+    readonly closes?: boolean;
     readonly slow?: SlowServer;
     readonly jira?: SlowJira;
 }
@@ -743,17 +1083,79 @@ export function unmountAll(): void {
 }
 
 function open(
-    { blocks = [], top = 600, slow = new SlowServer(), jira = new SlowJira() }: MountOptions,
+    {
+        blocks = [],
+        recurrences = [],
+        crossing = false,
+        earlier = [],
+        top = 600,
+        today = DATE,
+        closes = false,
+        slow = new SlowServer(),
+        jira = new SlowJira(),
+    }: MountOptions,
     render: (probe: Probe, top: number) => ReactNode,
 ): Bench {
+    const seed = () => {
+        seedRecurrences(slow.server, recurrences, null);
+    };
+    if (crossing) {
+        slow.server.beforeClashRule(seed);
+    } else {
+        seed();
+    }
+    if (earlier.length > 0) {
+        slow.server.changeSlots(DATE, slow.server.read(DATE).version, earlier);
+    }
+    // Le jour venu, ses récurrences s'y posent ; à venir, il les prévoit.
+    if (today >= DATE) {
+        slow.server.pose(DATE);
+    }
+    // Le serveur a ensuite la même horloge que l'écran : un jour passé y change à partir de
+    // demain, un jour à venir prévoit ses récurrences.
+    slow.server.setToday(today);
     if (blocks.length > 0) {
         slow.server.changeSlots(DATE, slow.server.read(DATE).version, blocks);
     }
-    const session = new DaySession(slow.server.read(DATE), slow.api, tabMemory(memoryStorage()));
-    const bench = new Bench(slow, jira, session, (probe) => render(probe, top));
+    const memory = tabMemory(memoryStorage());
+    const session = new DaySession(slow.server.read(DATE), slow.api, memory);
+    const bench = new Bench(slow, jira, session, (probe) => render(probe, top), today, memory);
+    bench.closes = closes;
     mounted.push(bench);
 
     return bench;
+}
+
+/** La veille de la journée du banc, un lundi. */
+export const EVE = '2026-10-05';
+
+/**
+ * Chaque créneau devient une récurrence née la veille, du lundi au vendredi, que le serveur
+ * pose sur la journée du banc comme le jour venu : ses blocs y reviennent.
+ *
+ * @param poseOn le jour venu, où elles se posent ; null pour ne rien poser : la journée du
+ *               banc, à venir, les prévoit
+ */
+export function seedRecurrences(
+    server: FakeDayServer,
+    recurrences: readonly SlotChange[],
+    poseOn: string | null = DATE,
+): void {
+    for (const change of recurrences) {
+        const result = server.saveRecurrence(
+            EVE,
+            server.read(EVE).version,
+            [change],
+            weeklyRule([1, 2, 3, 4, 5]),
+            null,
+        );
+        if (result.status !== 'saved') {
+            throw new Error(`La récurrence de ${change.start} n'est pas née : ${JSON.stringify(result)}.`);
+        }
+    }
+    if (poseOn !== null) {
+        server.pose(poseOn);
+    }
 }
 
 /** Le crochet seul, sous une colonne et une liste nues, avec ce que la fenêtre fait des gestes. */
@@ -798,43 +1200,64 @@ function drawFavorites(lane: () => HTMLElement | null): () => void {
 
 /** Ce que les composants du banc lui disent : ce qu'ils rendent, leurs éléments, le menu ouvert. */
 interface Probe {
-    readonly session: DaySession;
+    /** La session de la journée affichée, qu'un changement de jour remplace ; null pendant qu'elle se lit. */
+    readonly sessions: {
+        readonly current: () => DaySession | null;
+        readonly subscribe: (listener: () => void) => () => void;
+    };
+    /** Aujourd'hui : la journée du banc, un jour d'après, qui la rend passée, ou la veille, qui la rend à venir. */
+    readonly today: string;
+    /** La grille se ferme quand le jour, vide, n'est pas travaillé. */
+    readonly closes: () => boolean;
     readonly gesturesRef: RefObject<WindowGestures>;
     onRender(editing: GridEditing): void;
     onElements(lane: HTMLElement | null, listbox: HTMLElement | null): void;
+    /** Radix place la vraie fenêtre, à cette hauteur, là. */
+    onPlace(height: number, placed: PlacedWindow): void;
     /** Ce qu'on glisse depuis les favoris, leur colonne, et la zone qui fait défiler la grille. */
     onFavorites(drag: FavoriteDrag | null, side: HTMLElement | null, scroller: HTMLElement | null): void;
     onMenu(): void;
+    /** Le jour qui s'ouvre, tant qu'il se lit. */
+    readonly opening: () => string | null;
 }
 
 function useEditing(probe: Probe, top: number) {
-    const { session } = probe;
+    const session = useSyncExternalStore(probe.sessions.subscribe, probe.sessions.current);
     const snapshot = useSyncExternalStore(
-        (listener) => session.subscribe(listener),
-        () => session.current(),
+        (listener) => session?.subscribe(listener) ?? (() => undefined),
+        () => session?.current() ?? null,
     );
     const laneRef = useRef<HTMLDivElement | null>(null);
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const listboxRef = useRef<HTMLDivElement | null>(null);
+    // Le jour qui s'ouvre, suivi comme la session : une lecture qui échoue se rend aussi.
+    const opening = useSyncExternalStore(probe.sessions.subscribe, probe.opening);
     const editing = useGridEditing({
         session,
-        day: snapshot.day,
+        day: snapshot?.day ?? null,
+        openingDay: opening,
+        today: probe.today,
         laneRef,
         scrollerRef,
         listboxRef,
         visibleTop: () => top,
         onWindowOpen: () => undefined,
+        closed:
+            snapshot !== null &&
+            probe.closes() &&
+            (!snapshot.day.working || snapshot.day.declaredOff) &&
+            snapshot.day.grid.blocks().length === 0,
     });
     probe.onRender(editing);
     useLayoutEffect(() => {
         probe.onElements(laneRef.current, listboxRef.current);
     });
 
-    return { snapshot, editing, laneRef, scrollerRef, listboxRef };
+    return { session, snapshot, editing, laneRef, scrollerRef, listboxRef };
 }
 
 function BareGrid({ probe, top }: { probe: Probe; top: number }) {
-    const { editing, laneRef, listboxRef } = useEditing(probe, top);
+    const { session, editing, laneRef, listboxRef } = useEditing(probe, top);
 
     return (
         <>
@@ -861,7 +1284,14 @@ function BareGrid({ probe, top }: { probe: Probe; top: number }) {
                     onFocus={editing.onListboxFocus}
                 />
             </div>
-            <WindowStandIn editing={editing} checkRef={editing.windowCheckRef} gesturesRef={probe.gesturesRef} />
+            {session !== null && (
+                <WindowStandIn
+                    session={session}
+                    editing={editing}
+                    checkRef={editing.windowCheckRef}
+                    gesturesRef={probe.gesturesRef}
+                />
+            )}
         </>
     );
 }
@@ -871,6 +1301,24 @@ function RealScreen({ probe, top, favorites }: { probe: Probe; top: number; favo
     const returnFocus = () => {
         editing.focusGrid();
     };
+    // Ce que la fenêtre mesure, et où elle se place, chaque fois que Radix la place.
+    const { placeWindow } = editing;
+    const place = useMemo(
+        () =>
+            placeWindow === null
+                ? null
+                : (height: number) => {
+                      const placed = placeWindow(height);
+                      probe.onPlace(height, placed);
+
+                      return placed;
+                  },
+        [placeWindow, probe],
+    );
+    // Une journée ne s’ouvre lentement que sous la grille nue (mountGrid).
+    if (snapshot === null) {
+        return null;
+    }
 
     return (
         <>
@@ -887,7 +1335,10 @@ function RealScreen({ probe, top, favorites }: { probe: Probe; top: number; favo
                 scrollerRef={scrollerRef}
                 laneRef={laneRef}
                 listboxRef={listboxRef}
+                date={snapshot.day.date}
                 grid={snapshot.day.grid}
+                recurrences={snapshot.day.recurrences}
+                recurrencesHeld={snapshot.day.recurrencesHeld}
                 loading={false}
                 busy={snapshot.busy}
                 now={null}
@@ -917,10 +1368,20 @@ function RealScreen({ probe, top, favorites }: { probe: Probe; top: number; favo
                 }
             />
             <TicketWindow
-                date={DATE}
+                date={snapshot.day.date}
+                today={probe.today}
+                workingDays={snapshot.day.workingDays}
                 window={editing.window}
+                recurrence={editing.windowRecurrence}
+                initialRecurrence={
+                    editing.window === null ? null : initialRecurrence(editing.window.target, snapshot.day)
+                }
+                linked={editing.window === null ? null : linkedRecurrence(editing.window.target, snapshot.day)}
+                ongoing={snapshot.day.ongoing}
+                settledAhead={snapshot.day.settledAhead}
+                onRecurrence={editing.setRecurrence}
                 note={editing.windowNote}
-                place={editing.placeWindow}
+                place={place}
                 gridRef={laneRef}
                 checkRef={editing.windowCheckRef}
                 onDraft={editing.setDraft}
@@ -928,6 +1389,7 @@ function RealScreen({ probe, top, favorites }: { probe: Probe; top: number; favo
                 onCancel={editing.cancelWindow}
                 onPause={editing.pauseWindow}
                 onDelete={editing.deleteWindow}
+                onChooseScope={editing.chooseScope}
                 onCheckTicket={editing.checkTicket}
                 returnFocus={returnFocus}
             />

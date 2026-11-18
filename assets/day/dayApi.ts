@@ -1,9 +1,14 @@
 import type { SlotChange } from '../grid/changes';
 import { type DayState, readDay } from '../grid/day';
-import type { DayApi, SendResult, WriteResult } from '../grid/daySession';
+import type { DayApi, RecurrenceResult, SendResult, WriteResult } from '../grid/daySession';
+import { readUntils, type UntilRewind } from '../grid/history';
 import { isRecord } from '../grid/json';
 import { type TicketInfo, ticketsOf } from '../jira/ticketInfo';
 import { refused, serverApi } from '../serverApi';
+
+function unreadable(message: string): never {
+    throw new TypeError(message);
+}
 
 /**
  * L'API des journées (src/Controller/Api/DayController.php), vue du moteur.
@@ -44,8 +49,42 @@ export function httpDayApi(
 
     return {
         read: (date) => server.read(url(date), day),
-        changeSlots(date, version, changes: readonly SlotChange[]) {
-            return write('PATCH', url(date, '/slots'), { version, changes });
+        changeSlots(
+            date,
+            version,
+            changes: readonly SlotChange[],
+            untils: readonly UntilRewind[] = [],
+            restores = false,
+            detaches: readonly string[] = [],
+        ) {
+            return write('PATCH', url(date, '/slots'), {
+                version,
+                changes,
+                ...(untils.length === 0 ? {} : { recurrences: untils }),
+                ...(restores ? { restores } : {}),
+                ...(detaches.length === 0 ? {} : { detaches }),
+            });
+        },
+        saveRecurrence(date, version, changes, rule, replaces, follows = null) {
+            return server.request<RecurrenceResult>(
+                'PUT',
+                url(date, '/recurrence'),
+                {
+                    200: (json) => ({
+                        status: 'saved',
+                        day: day(json),
+                        untils:
+                            readUntils(isRecord(json) && json.untils !== undefined ? json.untils : null) ??
+                            unreadable("L'API n'a pas rendu les fins des récurrences."),
+                    }),
+                    409: (json) => ({ status: 'stale', day: dayIn(json) }),
+                    422: refused,
+                },
+                {
+                    body: { version, changes, recurrence: rule, replaces, ...(follows === null ? {} : { follows }) },
+                    keepalive: true,
+                },
+            );
         },
         setObjective(date, version, objective) {
             return write('PUT', url(date, '/objective'), { version, objective });

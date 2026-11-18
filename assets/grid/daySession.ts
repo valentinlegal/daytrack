@@ -1,5 +1,13 @@
 import { fill, type QuarterChanges, type SlotChange, toSlotChanges } from './changes';
-import { type Clipboard, clipboardOf, type ClipboardStore, copy, paste, storedClipboard } from './clipboard';
+import {
+    type Clipboard,
+    clipboardOf,
+    type ClipboardStore,
+    copy,
+    paste,
+    storedClipboard,
+    withoutRecurrence,
+} from './clipboard';
 import type { DayState } from './day';
 import { type Cell, type Grid, normalizeCell, sameCell, type SlotContent } from './grid';
 import {
@@ -15,8 +23,11 @@ import {
     stepBetween,
     storedHistory,
     undone,
+    type UntilRewind,
+    type UntilStep,
 } from './history';
 import * as Quarter from './quarter';
+import { detach, followRhythm, keepingOccurrences, type RecurrenceRule, type SeenRecurrence } from './recurrence';
 import type { Refused, Violation } from '../serverApi';
 import type { Selection } from './selection';
 import type { TabStorage } from './tabStore';
@@ -37,10 +48,45 @@ export type SendResult =
     /** Rien n'est parti : la journée avait changé ailleurs, un autre onglet envoie déjà, ou il n'y a rien à envoyer (409). */
     | { readonly status: 'stale' | 'sending' | 'nothing'; readonly day: DayState };
 
+/** Une récurrence enregistrée depuis la fenêtre : la journée, et les fins qu'annuler rendra. */
+export type RecurrenceResult =
+    | { readonly status: 'saved'; readonly day: DayState; readonly untils: readonly UntilStep[] }
+    | { readonly status: 'stale'; readonly day: DayState }
+    | Refused;
+
 /** L'API des journées, vue du moteur. Une panne — réseau, erreur du serveur — lève. */
 export interface DayApi {
     read(date: string): Promise<DayState>;
-    changeSlots(date: string, version: number, changes: readonly SlotChange[]): Promise<WriteResult>;
+    /**
+     * Un geste ; annuler et rétablir y joignent les fins à rendre aux récurrences. Annuler
+     * dit aussi qu'il rend une journée d'avant (`restores`) : une fois prévue d'un jour à
+     * venir que le geste annulé avait montrée cède à ce qu'il réécrit, au lieu de se détacher
+     * (src/Day/DayWriter.php, changeOccurrences). Rétablir nomme les récurrences dont
+     * l'annulation a rendu la fois à sa série sans l'écrire (`detaches`) : il la détache de
+     * nouveau (DayWriter::detachAgain).
+     */
+    changeSlots(
+        date: string,
+        version: number,
+        changes: readonly SlotChange[],
+        untils?: readonly UntilRewind[],
+        restores?: boolean,
+        detaches?: readonly string[],
+    ): Promise<WriteResult>;
+    /**
+     * « Enregistrer » dans la fenêtre d'un bloc, sa case « Récurrence » cochée — `rule` —
+     * ou décochée — null —, sur le bloc que portait `replaces`, s'il en portait une, telle
+     * que la fenêtre l'a vue. Une récurrence coupée qu'on colle nomme celle dont elle vient
+     * (`follows`) : au même rythme, elle en reprend les fois effacées ou détachées.
+     */
+    saveRecurrence(
+        date: string,
+        version: number,
+        changes: readonly SlotChange[],
+        rule: RecurrenceRule | null,
+        replaces: SeenRecurrence | null,
+        follows?: string | null,
+    ): Promise<RecurrenceResult>;
     setObjective(date: string, version: number, objective: number): Promise<WriteResult>;
     send(date: string, version: number): Promise<SendResult>;
 }
@@ -49,10 +95,16 @@ export interface DayApi {
 export interface TabMemory {
     readonly histories: HistoryStore;
     readonly clipboard: ClipboardStore;
+    /**
+     * Le bloc qu'un collage en route a laissé au presse-papier, et la coupée dont il emporte la
+     * récurrence : annuler la coupe pendant le voyage la lui retire pour de bon (DaySession.undo).
+     * Rien ne voyage plus après un rechargement : il ne se garde pas.
+     */
+    readonly pasting: WeakMap<Clipboard, string>;
 }
 
 export function tabMemory(storage: TabStorage): TabMemory {
-    return { histories: storedHistory(storage), clipboard: storedClipboard(storage) };
+    return { histories: storedHistory(storage), clipboard: storedClipboard(storage), pasting: new WeakMap() };
 }
 
 /** Ce qu'est devenu un geste, pour que l'écran le dise. */
@@ -104,6 +156,17 @@ export interface SessionSnapshot {
     readonly canRedo: boolean;
     /** Un geste attend sa réponse. */
     readonly busy: boolean;
+}
+
+/** Une fin changée sans quart d'heure changé : rien à rendre dans la grille. */
+const EMPTY_STEP: Step = { quarters: [], before: [], after: [] };
+
+/**
+ * La journée ne reçoit aucune récurrence : mise à 0h00, ou non travaillée. Ce qu'annuler y relie
+ * revient à sa série sans s'y écrire (src/Day/DayWriter.php, returned).
+ */
+function withholds(day: DayState): boolean {
+    return day.declaredOff || !day.working;
 }
 
 function saved(before: Grid, after: Grid, quarters: Iterable<number>): Outcome {
@@ -212,12 +275,26 @@ export class DaySession {
      * @param seen la journée sur laquelle il a été décidé (seen) ; relue changée depuis, il
      *             est refusé
      */
-    apply(changes: QuarterChanges, seen = this.rereads): Promise<Outcome> {
+    apply(changes: QuarterChanges, seen = this.rereads, cuts: Clipboard | null = null): Promise<Outcome> {
         for (const quarter of changes.keys()) {
             Quarter.assertQuarter(quarter);
         }
 
-        return this.enqueue(() => this.write(changes), ABANDONED, { seen, stale: STALE });
+        return this.enqueue(() => this.write(changes).then((outcome) => this.cutDone(outcome, cuts)), ABANDONED, {
+            seen,
+            stale: STALE,
+        });
+    }
+
+    /**
+     * Un favori déposé, à son tour dans la file : son ticket sur une fois qui revient du même
+     * ticket, sans commentaire, la laisse telle qu'elle est (keepingOccurrences).
+     */
+    drop(changes: QuarterChanges): Promise<Outcome> {
+        return this.enqueue(() => this.write(keepingOccurrences(this.day.grid, changes)), ABANDONED, {
+            seen: this.rereads,
+            stale: STALE,
+        });
     }
 
     /** Copier la sélection, telle qu'elle est une fois les gestes d'avant enregistrés. */
@@ -242,6 +319,32 @@ export class DaySession {
         }, null);
     }
 
+    /**
+     * « Enregistrer » dans la fenêtre d'un bloc, avec sa case « Récurrence » : créer la
+     * récurrence, la changer ou l'arrêter à partir de cette fois. Annuler la défait d'un
+     * coup — le bloc, et la fin des récurrences touchées.
+     *
+     * @param replaces la récurrence que portait le bloc, telle que la fenêtre l'a vue :
+     *                 changée depuis ailleurs, le serveur refuse comme une journée en retard
+     */
+    saveRecurrence(
+        changes: QuarterChanges,
+        rule: RecurrenceRule | null,
+        replaces: SeenRecurrence | null,
+        seen = this.rereads,
+        cuts: Clipboard | null = null,
+    ): Promise<Outcome> {
+        for (const quarter of changes.keys()) {
+            Quarter.assertQuarter(quarter);
+        }
+
+        return this.enqueue(
+            () => this.writeRecurrence(changes, rule, replaces).then((outcome) => this.cutDone(outcome, cuts)),
+            ABANDONED,
+            { seen, stale: STALE },
+        );
+    }
+
     /** Couper : copier puis effacer, un seul geste, sur la même journée. */
     cut(selection: Selection): Promise<Outcome> {
         return this.enqueue(
@@ -259,19 +362,41 @@ export class DaySession {
         );
     }
 
-    /** Coller sur la sélection ce que le presse-papier tient à son tour dans la file. */
-    paste(selection: Selection): Promise<PasteOutcome> {
+    /**
+     * Coller sur la sélection ce que le presse-papier tient à son tour dans la file.
+     *
+     * Une récurrence coupée avec les suivantes repart du jour du collage, son bloc et elle dans
+     * une seule écriture, au rythme que ce jour permet (followRhythm), et reprend les fois
+     * effacées ou détachées de celle dont elle vient. Le presse-papier ne la garde plus, dès
+     * l'envoi (withoutCut). Un jour passé, non travaillé ou mis à 0h00, d'avant la coupe ou
+     * après sa fin, ou qui ne lui laisse aucun jour travaillé, le bloc se colle seul, et elle
+     * attend un autre collage. Refusée — un créneau déjà pris —, rien n'est collé.
+     *
+     * @param today le jour de l'utilisateur ; sans lui, une récurrence ne repart pas
+     */
+    paste(selection: Selection, today: string | null = null): Promise<PasteOutcome> {
         return this.enqueue(
             async () => {
                 const clipboard = this.memory.clipboard.read();
                 const result = clipboard === null ? null : paste(clipboard, selection);
-                if (result === null || result.kind === 'nothing') {
+                if (result === null || clipboard === null || result.kind === 'nothing') {
                     return { outcome: NOTHING, pasted: [] };
                 }
                 if (result.kind === 'overflow') {
                     return { outcome: OVERFLOW, pasted: [] };
                 }
-                const outcome = await this.write(result.changes);
+                const revived = today === null ? null : this.revival(clipboard, today);
+                if (revived !== null) {
+                    const outcome = await this.withoutCut(
+                        clipboard,
+                        () => this.writeRecurrence(result.changes, revived.rule, null, revived.follows),
+                        revived.follows,
+                    );
+
+                    return { outcome, pasted: outcome.kind === 'saved' ? result.quarters : [] };
+                }
+                // Le même contenu collé sur une fois qui revient la laisse telle qu'elle est.
+                const outcome = await this.write(keepingOccurrences(this.day.grid, result.changes));
 
                 return {
                     outcome,
@@ -283,9 +408,24 @@ export class DaySession {
         );
     }
 
+    /**
+     * Annuler le dernier geste de la journée. Celui qui rend sa fin à la récurrence coupée que le
+     * presse-papier emporte — la coupe elle-même — la lui retire : le presse-papier garde son
+     * bloc, et un collage ne la ferait pas revenir une seconde fois. De même pendant qu'un collage
+     * l'emporte : refusé ensuite, il ne la rend pas au presse-papier. Rétablir ne la remet pas.
+     *
+     * Une coupe dont le collage est encore là, ailleurs, ne s'annule pas : le serveur le refuse,
+     * et dit d'annuler le collage d'abord. Rétablir ce collage attend de même que la coupe le soit.
+     */
     undo(): Promise<Outcome> {
         return this.enqueue(
-            () => this.rewind(planUndo, (history) => history.undo.at(-1), undone),
+            () =>
+                this.rewind(
+                    planUndo,
+                    (history) => history.undo.at(-1),
+                    (history, day) => undone(history, day.grid, withholds(day)),
+                    true,
+                ),
             ABANDONED,
             this.unseen(STALE),
         );
@@ -293,7 +433,12 @@ export class DaySession {
 
     redo(): Promise<Outcome> {
         return this.enqueue(
-            () => this.rewind(planRedo, (history) => history.redo.at(-1), redone),
+            () =>
+                this.rewind(
+                    planRedo,
+                    (history) => history.redo.at(-1),
+                    (history, day) => redone(history, day.grid),
+                ),
             ABANDONED,
             this.unseen(STALE),
         );
@@ -365,25 +510,103 @@ export class DaySession {
         return this.memory.clipboard.read() !== null;
     }
 
+    /** Ce que tient le presse-papier de l'onglet, tel qu'un collage le lirait maintenant. */
+    clipboard(): Clipboard | null {
+        return this.memory.clipboard.read();
+    }
+
     close(): void {
         this.closed = true;
         this.listeners.clear();
     }
 
-    private write(changes: QuarterChanges): Promise<Outcome> {
-        const before = this.day;
-        const diff = new Map<number, Cell>();
-        for (const [quarter, content] of changes) {
-            const wanted = normalizeCell(content);
-            if (!sameCell(before.grid.at(quarter), wanted)) {
-                diff.set(quarter, wanted);
-            }
-        }
-        if (diff.size === 0) {
-            return Promise.resolve(UNCHANGED);
+    /** Une coupe passée met ce qu'elle a coupé dans le presse-papier ; refusée, il reste tel quel. */
+    private cutDone(outcome: Outcome, cuts: Clipboard | null): Outcome {
+        if (cuts !== null && outcome.kind === 'saved') {
+            this.memory.clipboard.write(cuts);
         }
 
-        return this.writeSlots(before, diff, (day) => {
+        return outcome;
+    }
+
+    /**
+     * Ce que la récurrence coupée du presse-papier deviendrait, collée sur cette journée-ci — son
+     * rythme suivi, et celle dont elle vient —, ou null si elle n'en repart pas : un jour passé ou
+     * d'avant la coupe, non travaillé, mis à 0h00, après sa fin, ou qui ne lui laisse aucun jour
+     * que les réglages travaillent.
+     */
+    private revival(
+        clipboard: Clipboard,
+        today: string,
+    ): { readonly rule: RecurrenceRule; readonly follows: string } | null {
+        const { recurrence: rule, source } = clipboard;
+        if (
+            rule === undefined ||
+            source === undefined ||
+            this.date < today ||
+            this.date < source.date ||
+            !this.day.working ||
+            this.day.declaredOff ||
+            (rule.until !== null && rule.until < this.date)
+        ) {
+            return null;
+        }
+        const rhythm = followRhythm(rule, this.date, this.day.workingDays);
+
+        return rhythm === null ? null : { rule: { ...rhythm, until: rule.until }, follows: source.id };
+    }
+
+    /**
+     * Une écriture qui fait repartir la récurrence coupée du presse-papier, ou qui défait sa
+     * coupe : le presse-papier la perd avant l'envoi, et garde son bloc. Un collage lancé
+     * entre-temps sur une autre journée colle le bloc seul : jamais deux récurrences d'une même
+     * coupe. Refusée pour de bon — rien n'est écrit —, elle y revient, si rien n'a été copié,
+     * coupé ni annulé de sa coupe depuis ; sans réponse, l'écriture a pu passer, et elle n'y
+     * revient pas. Un collage que le serveur refuse parce que la coupe a été annulée ailleurs —
+     * un onglet dupliqué — ne la rend pas non plus : elle est revenue à sa place.
+     *
+     * @param pasting la coupée qu'emporte un collage : annuler sa coupe pendant le voyage la lui retire
+     */
+    private async withoutCut(
+        clipboard: Clipboard,
+        write: () => Promise<Outcome>,
+        pasting: string | null = null,
+    ): Promise<Outcome> {
+        const left = withoutRecurrence(clipboard);
+        if (pasting !== null) {
+            this.memory.pasting.set(left, pasting);
+        }
+        this.memory.clipboard.write(left);
+        const outcome = await write();
+        const uncut = outcome.kind === 'invalid' && outcome.violations.some(({ field }) => field === 'follows');
+        if (
+            (outcome.kind === 'invalid' || outcome.kind === 'stale' || outcome.kind === 'conflict') &&
+            !uncut &&
+            this.memory.clipboard.read() === left
+        ) {
+            this.memory.clipboard.write(clipboard);
+        }
+
+        return outcome;
+    }
+
+    private write(changes: QuarterChanges): Promise<Outcome> {
+        const before = this.day;
+        const wanted = new Map<number, Cell>();
+        for (const [quarter, content] of changes) {
+            const cell = normalizeCell(content);
+            if (!sameCell(before.grid.at(quarter), cell)) {
+                wanted.set(quarter, cell);
+            }
+        }
+        if (wanted.size === 0) {
+            return Promise.resolve(UNCHANGED);
+        }
+        // Un quart d'heure pris à une récurrence détache sa fois entière : le geste le dit,
+        // et annuler la rendra entière.
+        const diff = detach(before.grid, wanted);
+
+        return this.writeSlots(before, diff, [], false, [], (day) => {
             const outcome = saved(before.grid, day.grid, diff.keys());
             if (outcome.kind === 'saved' && outcome.step !== null) {
                 this.memory.histories.write(this.date, record(this.memory.histories.read(this.date), outcome.step));
@@ -396,7 +619,8 @@ export class DaySession {
     private rewind(
         plan: (history: History, grid: Grid) => Rewind,
         top: (history: History) => Step | undefined,
-        done: (history: History, grid: Grid) => History,
+        done: (history: History, day: DayState) => History,
+        restores = false,
     ): Promise<Outcome> {
         const before = this.day;
         const histories = this.memory.histories;
@@ -412,33 +636,132 @@ export class DaySession {
             return Promise.resolve(this.refuse(CONFLICT));
         }
         const step = top(history);
+        const written = (): Promise<Outcome> => this.rewritten(before, rewind, step, top, done, restores);
+        // Annuler la coupe d'une récurrence que le presse-papier emporte, ou qu'un collage en route
+        // lui a prise, la lui retire (undo).
+        const clipboard = restores ? this.memory.clipboard.read() : null;
+        const cut =
+            clipboard === null
+                ? undefined
+                : clipboard.recurrence === undefined
+                  ? this.memory.pasting.get(clipboard)
+                  : clipboard.source?.id;
+        const uncuts = cut !== undefined && rewind.untils.some(({ recurrence }) => recurrence === cut);
 
-        return this.writeSlots(before, rewind.changes, (day) => {
+        return clipboard !== null && uncuts ? this.withoutCut(clipboard, written) : written();
+    }
+
+    /** Écrit ce qui défait, ou refait, le dernier geste (rewind). */
+    private rewritten(
+        before: DayState,
+        rewind: Extract<Rewind, { readonly kind: 'changes' }>,
+        step: Step | undefined,
+        top: (history: History) => Step | undefined,
+        done: (history: History, day: DayState) => History,
+        restores: boolean,
+    ): Promise<Outcome> {
+        const histories = this.memory.histories;
+
+        return this.writeSlots(before, rewind.changes, rewind.untils, restores, rewind.detaches ?? [], (day) => {
             // Une autre session du même jour a pu ranger un geste entre-temps : on ne
             // déplace que celui qui vient d'être défait, sinon on oublie tout.
             const now = histories.read(this.date);
             const current = top(now);
             histories.write(
                 this.date,
-                step !== undefined && current !== undefined && sameStep(step, current)
-                    ? done(now, day.grid)
-                    : EMPTY_HISTORY,
+                step !== undefined && current !== undefined && sameStep(step, current) ? done(now, day) : EMPTY_HISTORY,
             );
 
             return saved(before.grid, day.grid, rewind.changes.keys());
+        }).then((outcome) => {
+            // Refusé sans que la journée ait changé : la fin d'une récurrence a changé ailleurs,
+            // depuis un autre jour, ou elle ne tombe plus ce jour-là — retirée depuis le jour
+            // où elle est née —, et le lien qu'il rendait n'a plus où aller. Le geste ne se
+            // défera plus : il est oublié, avec ceux d'avant, plutôt que de redire à chaque
+            // Ctrl+Z que la journée a changé.
+            const relinks = [...rewind.changes.values()].some((cell) => cell !== null && cell.recurrence !== null);
+            if (
+                outcome.kind === 'stale' &&
+                (rewind.untils.length > 0 || relinks || rewind.detaches !== undefined) &&
+                this.day.version === before.version
+            ) {
+                histories.write(this.date, EMPTY_HISTORY);
+
+                return CONFLICT;
+            }
+
+            return outcome;
         });
     }
 
     private writeSlots(
         before: DayState,
         changes: QuarterChanges,
+        untils: readonly UntilRewind[],
+        restores: boolean,
+        detaches: readonly string[],
         onSaved: (day: DayState) => Outcome,
     ): Promise<Outcome> {
         return this.send(
             before,
-            () => this.api.changeSlots(this.date, before.version, toSlotChanges(changes)),
+            () =>
+                restores
+                    ? this.api.changeSlots(this.date, before.version, toSlotChanges(changes), untils, true)
+                    : detaches.length > 0
+                      ? this.api.changeSlots(this.date, before.version, toSlotChanges(changes), untils, false, detaches)
+                      : untils.length === 0
+                        ? this.api.changeSlots(this.date, before.version, toSlotChanges(changes))
+                        : this.api.changeSlots(this.date, before.version, toSlotChanges(changes), untils),
             true,
             onSaved,
+        );
+    }
+
+    /**
+     * Le geste rangé est tout ce qui a changé dans la journée : la version qu'il portait
+     * garantit que rien d'autre ne l'a écrite entre-temps. Il garde les fins d'avant et
+     * d'après des récurrences touchées.
+     */
+    private writeRecurrence(
+        changes: QuarterChanges,
+        rule: RecurrenceRule | null,
+        replaces: SeenRecurrence | null,
+        follows: string | null = null,
+    ): Promise<Outcome> {
+        const before = this.day;
+        const cells = new Map<number, Cell>();
+        for (const [quarter, content] of changes) {
+            cells.set(quarter, normalizeCell(content));
+        }
+        let untils: readonly UntilStep[] = [];
+
+        return this.send(
+            before,
+            async () => {
+                const result = await this.api.saveRecurrence(
+                    this.date,
+                    before.version,
+                    toSlotChanges(cells),
+                    rule,
+                    replaces,
+                    follows,
+                );
+                if (result.status === 'saved') {
+                    untils = result.untils;
+                }
+
+                return result;
+            },
+            true,
+            (day) => {
+                const step = stepBetween(before.grid, day.grid, Quarter.all());
+                const kept = step === null && untils.length === 0 ? null : { ...(step ?? EMPTY_STEP), untils };
+                if (kept !== null) {
+                    this.memory.histories.write(this.date, record(this.memory.histories.read(this.date), kept));
+                }
+
+                return { kind: 'saved', step };
+            },
         );
     }
 

@@ -17,6 +17,8 @@ export interface SlotChange {
     readonly kind: 'work' | 'pause' | 'empty';
     readonly ticket: string | null;
     readonly comment: string | null;
+    /** La récurrence qui le pose, quand annuler ou rétablir la lui rend ; tout autre geste n'en envoie pas. */
+    readonly recurrence?: string;
 }
 
 /** Chaque quart d'heure nommé prend le même contenu : effacer, convertir en pause, remplir une plage. */
@@ -55,5 +57,6 @@ export function toSlotChanges(changes: QuarterChanges): SlotChange[] {
         kind: content === null ? 'empty' : content.kind,
         ticket: content?.kind === 'work' ? content.ticket : null,
         comment: content?.kind === 'work' ? content.comment : null,
+        ...(content?.recurrence == null ? {} : { recurrence: content.recurrence }),
     }));
 }

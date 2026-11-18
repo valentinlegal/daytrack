@@ -1,3 +1,4 @@
+import { isDate } from '../day/calendar';
 import type { QuarterChanges } from './changes';
 import { type Cell, type Grid, sameCell } from './grid';
 import { isRecord, readCell, readQuarters } from './json';
@@ -17,6 +18,31 @@ export interface Step {
     readonly quarters: readonly number[];
     readonly before: readonly Cell[];
     readonly after: readonly Cell[];
+    /**
+     * Les fins des récurrences qu'un geste de la fenêtre a créées, coupées ou arrêtées :
+     * annuler leur rend celle d'avant, rétablir celle d'après (src/Recurrence/UntilChange.php).
+     */
+    readonly untils?: readonly UntilStep[];
+    /**
+     * Les récurrences dont l'annulation de ce geste a rendu la fois à sa série sans l'écrire —
+     * une journée à 0h00, ou à venir et non travaillée : rétablir la leur détache de nouveau
+     * (src/Day/DayWriter.php, detachAgain).
+     */
+    readonly detaches?: readonly string[];
+}
+
+/** La fin d'une récurrence avant et après un geste ; une récurrence retirée finit la veille de son premier jour. */
+export interface UntilStep {
+    readonly recurrence: string;
+    readonly before: string | null;
+    readonly after: string | null;
+}
+
+/** Une fin à rendre : seulement si la récurrence a encore celle de `from` (src/Recurrence/UntilRewind.php). */
+export interface UntilRewind {
+    readonly recurrence: string;
+    readonly from: string | null;
+    readonly to: string | null;
 }
 
 export interface History {
@@ -28,7 +54,13 @@ export const EMPTY_HISTORY: History = { undo: [], redo: [] };
 
 export type Rewind =
     /** Ce qu'il faut écrire pour défaire, ou refaire, le dernier geste. */
-    | { readonly kind: 'changes'; readonly changes: QuarterChanges }
+    | {
+          readonly kind: 'changes';
+          readonly changes: QuarterChanges;
+          readonly untils: readonly UntilRewind[];
+          /** Rétablir : les récurrences dont la fois redevient détachée. */
+          readonly detaches?: readonly string[];
+      }
     /** Rien à annuler, ou à rétablir. */
     | { readonly kind: 'nothing' }
     /** Les quarts d'heure du geste ont changé depuis, ailleurs : rien ne s'écrit. */
@@ -55,25 +87,67 @@ export function record(history: History, step: Step): History {
 export function planUndo(history: History, grid: Grid): Rewind {
     const step = history.undo.at(-1);
 
-    return step === undefined ? { kind: 'nothing' } : rewind(grid, step.quarters, step.after, step.before);
+    return step === undefined
+        ? { kind: 'nothing' }
+        : rewind(
+              grid,
+              step.quarters,
+              step.after,
+              step.before,
+              (step.untils ?? []).map(({ recurrence, before, after }) => ({ recurrence, from: after, to: before })),
+              [],
+          );
 }
 
 export function planRedo(history: History, grid: Grid): Rewind {
     const step = history.redo.at(-1);
 
-    return step === undefined ? { kind: 'nothing' } : rewind(grid, step.quarters, step.before, step.after);
+    return step === undefined
+        ? { kind: 'nothing' }
+        : rewind(
+              grid,
+              step.quarters,
+              // Une fois rendue à sa série ne se montre pas : la grille y est vide.
+              step.before.map((cell) => (detached(cell, step.detaches) ? null : cell)),
+              step.after,
+              (step.untils ?? []).map(({ recurrence, before, after }) => ({ recurrence, from: before, to: after })),
+              step.detaches ?? [],
+          );
 }
 
-/** Le dernier geste est défait : il passe dans rétablir, avec ce que la grille vaut désormais. */
-export function undone(history: History, grid: Grid): History {
+function detached(cell: Cell, detaches: readonly string[] | undefined): boolean {
+    return cell?.recurrence != null && (detaches ?? []).includes(cell.recurrence);
+}
+
+/**
+ * Le dernier geste est défait : il passe dans rétablir, avec ce que la grille vaut désormais. Sur
+ * une journée qui ne reçoit aucune récurrence (`withholds`), une fois qu'il rendait et que la
+ * grille ne montre pas est revenue à sa série : rétablir la détachera de nouveau. Le geste garde
+ * alors la fois telle qu'elle était, pour qu'annuler de nouveau la rende encore.
+ */
+export function undone(history: History, grid: Grid, withholds = false): History {
     const step = history.undo.at(-1);
     if (step === undefined) {
         return history;
     }
+    const shown = new Set(grid.blocks().map((block) => block.content.recurrence));
+    const detaches = withholds
+        ? [...new Set(step.before.map((cell) => cell?.recurrence ?? null))].filter(
+              (id): id is string => id !== null && !shown.has(id),
+          )
+        : [];
+    const redo = {
+        ...withoutDetaches(step),
+        before: step.quarters.map((quarter, index) => {
+            const cell = step.before[index] ?? null;
+
+            return detached(cell, detaches) ? cell : grid.at(quarter);
+        }),
+    };
 
     return {
         undo: history.undo.slice(0, -1),
-        redo: [...history.redo, { ...step, before: step.quarters.map((quarter) => grid.at(quarter)) }],
+        redo: [...history.redo, detaches.length === 0 ? redo : { ...redo, detaches }],
     };
 }
 
@@ -85,12 +159,25 @@ export function redone(history: History, grid: Grid): History {
     }
 
     return {
-        undo: [...history.undo, { ...step, after: step.quarters.map((quarter) => grid.at(quarter)) }],
+        undo: [...history.undo, { ...withoutDetaches(step), after: step.quarters.map((quarter) => grid.at(quarter)) }],
         redo: history.redo.slice(0, -1),
     };
 }
 
-function rewind(grid: Grid, quarters: readonly number[], expected: readonly Cell[], target: readonly Cell[]): Rewind {
+function withoutDetaches(step: Step): Step {
+    return step.untils === undefined
+        ? { quarters: step.quarters, before: step.before, after: step.after }
+        : { quarters: step.quarters, before: step.before, after: step.after, untils: step.untils };
+}
+
+function rewind(
+    grid: Grid,
+    quarters: readonly number[],
+    expected: readonly Cell[],
+    target: readonly Cell[],
+    untils: readonly UntilRewind[],
+    detaches: readonly string[],
+): Rewind {
     const changes = new Map<number, Cell>();
     for (const [index, quarter] of quarters.entries()) {
         if (!sameCell(grid.at(quarter), expected[index] ?? null)) {
@@ -99,7 +186,9 @@ function rewind(grid: Grid, quarters: readonly number[], expected: readonly Cell
         changes.set(quarter, target[index] ?? null);
     }
 
-    return { kind: 'changes', changes };
+    return detaches.length === 0
+        ? { kind: 'changes', changes, untils }
+        : { kind: 'changes', changes, untils, detaches };
 }
 
 /** L'historique de chaque journée, gardé par l'onglet : il survit à un rechargement. */
@@ -165,13 +254,69 @@ function readSteps(json: unknown): Step[] | undefined {
         const quarters = isRecord(step) ? readQuarters(step.quarters) : undefined;
         const before = isRecord(step) ? readCells(step.before, quarters?.length) : undefined;
         const after = isRecord(step) ? readCells(step.after, quarters?.length) : undefined;
-        if (quarters === undefined || quarters.length === 0 || before === undefined || after === undefined) {
+        const untils = isRecord(step) ? readUntils(step.untils) : undefined;
+        const detaches = isRecord(step) ? readDetaches(step.detaches) : undefined;
+        // Un geste qui n'a changé que la fin d'une récurrence n'a touché aucun quart d'heure.
+        if (
+            quarters === undefined ||
+            untils === undefined ||
+            (quarters.length === 0 && untils.length === 0) ||
+            before === undefined ||
+            after === undefined ||
+            detaches === undefined
+        ) {
             return undefined;
         }
-        steps.push({ quarters, before, after });
+        steps.push({
+            quarters,
+            before,
+            after,
+            ...(untils.length === 0 ? {} : { untils }),
+            ...(detaches.length === 0 ? {} : { detaches }),
+        });
     }
 
     return steps;
+}
+
+/**
+ * Les fins rangées avec un geste, ou rendues par le serveur avec la récurrence enregistrée :
+ * aucune pour un geste de la grille. Undefined si elles n'en ont pas la forme.
+ */
+export function readUntils(json: unknown): UntilStep[] | undefined {
+    if (json === undefined) {
+        return [];
+    }
+    if (!Array.isArray(json)) {
+        return undefined;
+    }
+    const untils: UntilStep[] = [];
+    for (const until of json as unknown[]) {
+        if (
+            !isRecord(until) ||
+            typeof until.recurrence !== 'string' ||
+            !isUntil(until.before) ||
+            !isUntil(until.after)
+        ) {
+            return undefined;
+        }
+        untils.push({ recurrence: until.recurrence, before: until.before, after: until.after });
+    }
+
+    return untils;
+}
+
+/** Les récurrences qu'un geste à rétablir détache de nouveau : aucune le plus souvent. */
+function readDetaches(json: unknown): string[] | undefined {
+    if (json === undefined) {
+        return [];
+    }
+
+    return Array.isArray(json) && json.every((id) => typeof id === 'string') ? json : undefined;
+}
+
+function isUntil(value: unknown): value is string | null {
+    return value === null || (typeof value === 'string' && isDate(value));
 }
 
 function readCells(json: unknown, length: number | undefined): Cell[] | undefined {

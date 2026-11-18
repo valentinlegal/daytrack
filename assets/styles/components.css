@@ -23,6 +23,12 @@
 }
 
 @layer components {
+    /* Le contenu d'une fenêtre plus haute que la place défile sous une barre fine (Popover.tsx). */
+    .popover-body {
+        scrollbar-width: thin;
+        scrollbar-color: var(--line-strong) transparent;
+    }
+
     .tip-motion {
         --tip-from: 0 calc(var(--s-half) * -1);
 

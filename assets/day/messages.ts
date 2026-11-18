@@ -5,6 +5,7 @@ import { type ObjectiveReading } from '../grid/objective';
 import * as Quarter from '../grid/quarter';
 import { type Selection, selectQuarters } from '../grid/selection';
 import { firstRefusal, UNSAVED } from '../serverApi';
+import { dayLabel } from './calendar';
 import { duration } from './format';
 
 /**
@@ -28,7 +29,7 @@ export type UndoableGesture = 'delete' | 'clear' | 'cut' | 'paste' | 'pause' | '
 
 /** Le participe de chaque geste : un ticket, la pause, plusieurs créneaux. */
 const VERBS: Record<UndoableGesture, readonly [string, string, string]> = {
-    delete: ['supprimé', 'supprimée', 'supprimés'],
+    delete: ['effacé', 'effacée', 'effacés'],
     clear: ['effacé', 'effacée', 'effacés'],
     cut: ['coupé', 'coupée', 'coupés'],
     paste: ['remplacé', 'remplacée', 'remplacés'],
@@ -121,6 +122,20 @@ export function refusalMessage(outcome: Outcome, rewinding: 'undo' | 'redo' | nu
         case 'abandoned':
             return null;
     }
+}
+
+/**
+ * Le refus d'un geste dont la réponse arrive après qu'on a changé de jour : la journée
+ * affichée le dit, le jour du geste devant — « Mardi 17 novembre : ce créneau est déjà pris
+ * par la récurrence « Daily ». » —, sans rien changer à ce qu'elle montre. Un texte qui
+ * commence par un identifiant le garde tel quel.
+ */
+export function elsewhereRefusal(date: string, said: GridMessage): GridMessage {
+    const text = /^\p{Lu}(?:\p{Ll}|['’])/u.test(said.text)
+        ? `${said.text.charAt(0).toLowerCase()}${said.text.slice(1)}`
+        : said.text;
+
+    return notice(`${dayLabel(date)}\u{a0}: ${said.ticket === null ? '' : `${said.ticket} `}${text}`);
 }
 
 /** Ce qu'une fenêtre dit sous ses champs quand elle n'a pas pu enregistrer. */

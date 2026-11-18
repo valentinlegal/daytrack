@@ -8,7 +8,7 @@ import { LIMIT } from '../../../assets/grid/history';
 import * as Quarter from '../../../assets/grid/quarter';
 import { extendTo, selectQuarter } from '../../../assets/grid/selection';
 import { FakeDayServer, type Request, type Transport } from './fakeDayServer';
-import { memoryStorage, minutes, rangesOf } from './support';
+import { memoryStorage, minutes, rangesOf, weeklyRule } from './support';
 
 const TODAY = '2026-10-06';
 const TOMORROW = '2026-10-07';
@@ -311,6 +311,64 @@ describe('DaySession', () => {
         await sent();
         release();
         await expect(undo).resolves.toMatchObject({ kind: 'saved' });
+    });
+
+    it('n’applique pas à la journée affichée la réponse d’un jour à venir quitté pendant un geste sur sa fois prévue', async () => {
+        // Lundi, le Daily naît, chaque jour ouvré : mardi et mercredi le prévoient, sans l'écrire.
+        const monday = '2026-10-05';
+        const server = new FakeDayServer(monday);
+        server.saveRecurrence(
+            monday,
+            0,
+            [{ start: '09:00', end: '09:30', kind: 'work', ticket: 'OPS-12', comment: 'Daily' }],
+            weeklyRule([1, 2, 3, 4, 5]),
+            null,
+        );
+        const id = server.allRecurrences()[0]?.id ?? '';
+        const planned = [['09:00', '09:30', 'work', 'OPS-12', 'Daily', id]];
+        const { transport, sent, release } = held();
+        const sessions = new DaySessions(server.api(transport), tabMemory(memoryStorage()));
+        const opening = sessions.open(TODAY);
+        await sent();
+        release();
+        const today = await opening;
+        if (today === null) {
+            throw new Error('Le jour ne s’est pas ouvert.');
+        }
+        expect(rangesOf(today.current().day.grid)).toEqual(planned);
+        let notified = 0;
+        today.subscribe(() => {
+            notified += 1;
+        });
+
+        const cleared = today.apply(fill([quarterPast], null));
+        await sent();
+        const before = notified;
+        const opened = sessions.open(TOMORROW);
+        // La réponse du mardi arrive une fois le mercredi demandé.
+        release();
+        await expect(cleared).resolves.toMatchObject({ kind: 'saved' });
+        await sent();
+        release();
+        const tomorrow = await opened;
+
+        expect(notified).toBe(before);
+        expect(tomorrow?.date).toBe(TOMORROW);
+        expect(rangesOf(tomorrow?.current().day.grid ?? today.current().day.grid)).toEqual(planned);
+        expect(tomorrow?.current().day.version).toBe(server.read(TOMORROW).version);
+        expect(tomorrow?.current().canUndo).toBe(false);
+        // Le geste n'a touché que le mardi : sa fois s'y est posée détachée, celle du mercredi reste prévue.
+        expect(rangesOf(server.saved(TODAY).grid)).toEqual([['09:00', '09:15', 'work', 'OPS-12', 'Daily']]);
+        expect(server.isSkipped(id, TODAY)).toBe(true);
+        expect(rangesOf(server.saved(TOMORROW).grid)).toEqual([]);
+        expect(server.isSkipped(id, TOMORROW)).toBe(false);
+
+        // Un geste sur le mercredi part de sa propre journée : il n'est pas refusé.
+        const paused = tomorrow?.apply(fill([minutes('10:00')], PAUSE));
+        await sent();
+        release();
+        await expect(paused).resolves.toMatchObject({ kind: 'saved' });
+        expect(rangesOf(server.read(TOMORROW).grid)).toEqual([...planned, ['10:00', '10:15', 'pause', null, null]]);
     });
 
     it('n’ouvre que la dernière journée demandée', async () => {

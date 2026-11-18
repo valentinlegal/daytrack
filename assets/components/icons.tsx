@@ -139,6 +139,25 @@ export function CupIcon({ small = false }: { small?: boolean }) {
 }
 
 /**
+ * La flèche circulaire d'un bloc qui revient, avant sa durée, ou après celle d'une pause.
+ * Elle porte son libellé, que le lecteur d'écran lit : « Revient chaque mardi ».
+ */
+export function RepeatIcon({ label }: { label: string }) {
+    return (
+        <svg
+            {...STROKE}
+            strokeWidth="1.6"
+            role="img"
+            aria-label={label}
+            aria-hidden={undefined}
+            className="size-3 flex-none"
+        >
+            <path d="M13 6.5A5 5 0 0 0 4 4.6L2.5 6M2.5 3v3h3M3 9.5A5 5 0 0 0 12 11.4l1.5-1.4M13.5 13v-3h-3" />
+        </svg>
+    );
+}
+
+/**
  * L'icône d'erreur : un disque --inc et son point d'exclamation. En avertissement, le
  * disque passe en --warn.
  */

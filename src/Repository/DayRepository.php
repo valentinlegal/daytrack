@@ -6,7 +6,6 @@ use App\Database\Lockable;
 use App\Database\LocksItsTable;
 use App\Entity\Day;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
-use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -56,18 +55,17 @@ final class DayRepository extends ServiceEntityRepository implements Lockable
     }
 
     /**
-     * Avance la version de la journée, si $version est bien la dernière qu'elle a
-     * connue. Rend false sinon, et pour une journée qui n'a pas encore de ligne.
-     *
-     * Une écriture, même quand elle ne trouve rien à changer : dans une transaction,
-     * elle prend le verrou de la base jusqu'à la fin de celle-ci (DayWriter).
+     * Avance la version de la journée, sous le verrou, une fois vérifiée celle que l'onglet
+     * a vue (DayWriter), ou pour ce que les récurrences y posent d'elles-mêmes
+     * (RecurrencePoser), qu'aucun onglet n'a encore vu. Rend false pour une journée qui n'a
+     * pas encore de ligne.
      */
-    public function claim(\DateTimeImmutable $date, int $version): bool
+    public function advance(\DateTimeImmutable $date): bool
     {
         return 1 === $this->getEntityManager()->getConnection()->executeStatement(
-            'UPDATE day SET version = version + 1 WHERE date = :date AND version = :version',
-            ['date' => $date, 'version' => $version],
-            ['date' => Types::DATE_IMMUTABLE, 'version' => ParameterType::INTEGER],
+            'UPDATE day SET version = version + 1 WHERE date = :date',
+            ['date' => $date],
+            ['date' => Types::DATE_IMMUTABLE],
         );
     }
 }

@@ -51,7 +51,11 @@ export function Tooltip({
      * survol et le focus décident.
      */
     open?: boolean | undefined;
-    /** Le déclencheur, un seul élément qui reçoit le focus : un bouton. */
+    /**
+     * Le déclencheur, un seul élément : un bouton, qu'elle suit aussi au clavier ; ou ce qui
+     * ne reçoit jamais le focus — la flèche d'un bloc qui revient, que la grille garde hors
+     * du clavier —, qu'elle dit au survol seulement, sans rien ajouter à ce qu'il porte déjà.
+     */
     children: ReactElement;
 }) {
     const shared = useContext(SharedContext);

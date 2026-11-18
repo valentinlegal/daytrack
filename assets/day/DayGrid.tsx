@@ -1,15 +1,18 @@
 import type { ReactNode, Ref, RefObject } from 'react';
 
 import { Button } from '../components/Button';
-import { CupIcon } from '../components/icons';
+import { CupIcon, RepeatIcon } from '../components/icons';
 import { MenuRoot, MenuTrigger } from '../components/Menu';
+import { Tooltip } from '../components/Tooltip';
 import { aimsAtEmptyRange, quartersOf } from '../grid/entry';
 import type { Block, Cell, Grid } from '../grid/grid';
 import * as Quarter from '../grid/quarter';
+import { reaches, type Recurrence } from '../grid/recurrence';
 import { isSelected, selectionRuns } from '../grid/selection';
 import { tintOf } from '../jira/ticketInfo';
 import { useTickets } from '../jira/TicketsContext';
 import { duration } from './format';
+import { recurrenceLabel, recurrenceMention } from './recurrenceText';
 import { TicketId } from './TicketChip';
 import { type GridEditing, optionId } from './useGridEditing';
 
@@ -29,12 +32,14 @@ const TWO_LINES = 30;
  * aria-activedescendant. Les blocs, eux, se lisent dans la liste des saisies.
  *
  * Un jour non travaillé et vide est fermé à la saisie (editing.closed) : la grille
- * grisée ne prend aucun geste, et son message propose « Saisir quand même ».
+ * grisée ne prend aucun geste, sauf annuler et rétablir, et son message propose
+ * « Saisir quand même ».
  */
 export function DayGrid({
     scrollerRef,
     laneRef,
     listboxRef,
+    date,
     grid,
     loading,
     busy,
@@ -45,11 +50,15 @@ export function DayGrid({
     onMenuOpen,
     menu,
     offDay = null,
+    recurrences = NO_RECURRENCES,
+    recurrencesHeld = false,
     openAnywayRef,
 }: {
     scrollerRef: RefObject<HTMLDivElement | null>;
     laneRef: RefObject<HTMLDivElement | null>;
     listboxRef: RefObject<HTMLDivElement | null>;
+    /** Le jour affiché : un bloc dont la récurrence a fini avant lui n'en est plus une fois. */
+    date: string | null;
     /** null tant que la journée n'est pas lue, ou si elle ne se lit pas : la grille reste vide, sans message. */
     grid: Grid | null;
     /** La journée est en cours de lecture. */
@@ -72,11 +81,22 @@ export function DayGrid({
      * travaillé. », ou l'objectif mis à 0h00 —, et ce qui l'ouvre pour ce jour-là.
      */
     offDay?: { readonly reason: string; readonly onOpen: () => void } | null;
+    /** Celles qui ont posé un bloc ce jour-là : la flèche du bloc dit leur rythme. */
+    recurrences?: ReadonlyMap<string, Recurrence> | undefined;
+    /** Fermée et vide, alors qu'une récurrence y serait tombée : le message le dit. */
+    recurrencesHeld?: boolean;
     /** « Saisir quand même », à qui la grille fermée rend le curseur. */
     openAnywayRef?: Ref<HTMLButtonElement> | undefined;
 }) {
     const blocks = grid?.blocks() ?? [];
     const tickets = useTickets();
+    // La récurrence d'un bloc qui revient, si elle va encore jusqu'à ce jour (linkedRecurrence).
+    const repeatOf = (cell: Cell): Recurrence | null => {
+        const id = cell === null ? null : cell.recurrence;
+        const recurrence = id === null ? undefined : recurrences.get(id);
+
+        return recurrence === undefined || date === null || !reaches(recurrence, date) ? null : recurrence;
+    };
     const { selection, window: open } = editing;
     const target = open?.target ?? null;
     // Nouveau ticket sur une plage vide dessine le créneau visé ; sur une sélection déjà
@@ -148,6 +168,7 @@ export function DayGrid({
                                     <BlockItem
                                         key={block.start}
                                         block={block}
+                                        repeat={repeatLabel(repeatOf(block.content))}
                                         ringed={target?.kind === 'edit' && target.block.start === block.start}
                                     />
                                 ))}
@@ -166,7 +187,7 @@ export function DayGrid({
                                 hintStart !== null &&
                                 !(offDay !== null && target !== null) && (
                                     <div
-                                        className={`pointer-events-none col-start-1 mx-2 flex flex-col items-center text-center text-ink-3 ${rows(hintStart, hintStart + (offDay === null ? 2 : 4) * Quarter.MINUTES)}`}
+                                        className={`pointer-events-none col-start-1 mx-2 flex flex-col items-center text-center text-ink-3 ${rows(hintStart, hintStart + (offDay === null ? 2 : recurrencesHeld ? 5 : 4) * Quarter.MINUTES)}`}
                                     >
                                         <b className="block leading-(--h-row) font-semibold text-ink-2">
                                             Aucun ticket pour ce jour
@@ -176,6 +197,11 @@ export function DayGrid({
                                                 ? 'Double-cliquez sur un créneau, ou glissez un favori sur la grille.'
                                                 : offDay.reason}
                                         </span>
+                                        {offDay !== null && recurrencesHeld && (
+                                            <span className="block leading-(--h-row)">
+                                                Vos récurrences ne s'y posent pas.
+                                            </span>
+                                        )}
                                         {offDay !== null && (
                                             // Un calque qui laisse passer les clics les rend à son bouton.
                                             <Button
@@ -239,7 +265,11 @@ export function DayGrid({
                                         className={`${rows(quarter, quarter + Quarter.MINUTES)} scroll-my-3`}
                                     >
                                         <span className="sr-only">
-                                            {optionLabel(quarter, grid?.at(quarter) ?? null)}
+                                            {optionLabel(
+                                                quarter,
+                                                grid?.at(quarter) ?? null,
+                                                repeatOf(grid?.at(quarter) ?? null),
+                                            )}
                                         </span>
                                     </div>
                                 ))}
@@ -253,17 +283,22 @@ export function DayGrid({
     );
 }
 
-/** Ce que le lecteur d'écran dit d'un créneau : « 09:30, SHOP-482, Mapping des colonnes ». */
-function optionLabel(quarter: number, cell: Cell): string {
+/**
+ * Ce que le lecteur d'écran dit d'un créneau : « 09:30, SHOP-482, Mapping des colonnes », et
+ * le rythme d'un bloc qui revient, comme sa flèche : « 09:15, OPS-12, Daily, revient chaque
+ * semaine, du lundi au vendredi ».
+ */
+function optionLabel(quarter: number, cell: Cell, recurrence: Recurrence | null): string {
     const time = Quarter.format(quarter);
     if (cell === null) {
         return `${time}, vide`;
     }
+    const repeat = recurrence === null ? null : recurrenceMention(recurrence.rhythm);
     if (cell.kind === 'pause') {
-        return `${time}, pause`;
+        return [time, 'pause', repeat].filter((part) => part !== null).join(', ');
     }
 
-    return [time, cell.ticket, cell.comment].filter((part) => part !== null).join(', ');
+    return [time, cell.ticket, cell.comment, repeat].filter((part) => part !== null).join(', ');
 }
 
 /**
@@ -272,7 +307,7 @@ function optionLabel(quarter: number, cell: Cell): string {
  *
  * @param ringed la fenêtre Modifier le ticket est ouverte sur ce bloc : il s'entoure
  */
-function BlockItem({ block, ringed }: { block: Block; ringed: boolean }) {
+function BlockItem({ block, ringed, repeat }: { block: Block; ringed: boolean; repeat: string | null }) {
     const tickets = useTickets();
     const { start, end, content } = block;
     const range = `De ${Quarter.format(start)} à ${Quarter.format(end)}, `;
@@ -288,6 +323,13 @@ function BlockItem({ block, ringed }: { block: Block; ringed: boolean }) {
                     <CupIcon small />
                     Pause
                     <span className="font-mono text-ink-3 tabular-nums">{duration(end - start)}</span>
+                    {repeat !== null && (
+                        <Tooltip label={repeat}>
+                            <span className="ml-(--s-half) inline-flex items-center text-ink-3">
+                                <RepeatIcon label={repeat} />
+                            </span>
+                        </Tooltip>
+                    )}
                 </span>
             </li>
         );
@@ -351,12 +393,30 @@ function BlockItem({ block, ringed }: { block: Block; ringed: boolean }) {
                     </span>
                 )}
             </span>
+            {repeat !== null && (
+                <Tooltip label={repeat}>
+                    <span className={`inline-flex flex-none items-center text-ink-3 ${twoLines ? 'h-(--h-line)' : ''}`}>
+                        <span className="sr-only">, </span>
+                        <RepeatIcon label={repeat} />
+                    </span>
+                </Tooltip>
+            )}
             <span className={`flex-none font-mono text-sm text-ink-2 ${twoLines ? 'leading-(--h-line)' : ''}`}>
                 <span className="sr-only">, </span>
                 {duration(end - start)}
             </span>
         </li>
     );
+}
+
+const NO_RECURRENCES: ReadonlyMap<string, Recurrence> = new Map();
+
+/**
+ * Ce que le lecteur d'écran lit de la flèche d'un bloc qui revient, et son infobulle ; null
+ * pour une saisie ordinaire, ou une récurrence finie avant ce jour.
+ */
+function repeatLabel(recurrence: Recurrence | null): string | null {
+    return recurrence === null ? null : recurrenceLabel(recurrence.rhythm);
 }
 
 /** Les rangées d'un quart d'heure à un autre : la première rangée est celle de 07:00. */

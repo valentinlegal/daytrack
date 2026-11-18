@@ -43,19 +43,30 @@ class Slot
     #[ORM\Column(length: self::COMMENT_MAX, nullable: true)]
     public private(set) ?string $comment;
 
-    public function __construct(Day $day, int $start, SlotContent $content)
+    /**
+     * La récurrence qui l'a posé, tant qu'aucun geste ne l'en a détaché : la flèche du
+     * bloc, et ce que « les suivantes » retrouvent. Une récurrence n'est jamais effacée,
+     * mais la base le laisserait sans lien plutôt que de refuser.
+     */
+    #[ORM\ManyToOne]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    public private(set) ?Recurrence $recurrence = null;
+
+    public function __construct(Day $day, int $start, SlotContent $content, ?Recurrence $recurrence = null)
     {
         $this->id = Uuid::v7();
         $this->day = $day;
         $this->start = $start;
-        $this->fill($content);
+        $this->fill($content, $recurrence);
     }
 
-    public function fill(SlotContent $content): void
+    /** Un contenu, et la récurrence qui le pose ; null pour une saisie ordinaire. */
+    public function fill(SlotContent $content, ?Recurrence $recurrence = null): void
     {
         $this->kind = $content->kind;
         $this->ticket = $content->ticket;
         $this->comment = $content->comment;
+        $this->recurrence = $recurrence;
     }
 
     public function content(): SlotContent

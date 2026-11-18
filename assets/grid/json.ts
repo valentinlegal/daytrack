@@ -1,4 +1,4 @@
-import { type Cell, PAUSE, work } from './grid';
+import { type Cell, linkedTo, PAUSE, work } from './grid';
 import * as Quarter from './quarter';
 
 /**
@@ -10,7 +10,12 @@ export function isRecord(json: unknown): json is Record<string, unknown> {
     return typeof json === 'object' && json !== null && !Array.isArray(json);
 }
 
-/** Un contenu de quart d'heure, ou undefined s'il n'en a pas la forme. */
+/** Un identifiant comme le serveur en donne : un UUID, en 8-4-4-4-12 chiffres hexadécimaux. */
+export function isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+/** Un contenu de quart d'heure, ou undefined s'il n'en a pas la forme. Sans récurrence dite, il n'en a pas. */
 export function readCell(json: unknown): Cell | undefined {
     if (json === null) {
         return null;
@@ -18,15 +23,19 @@ export function readCell(json: unknown): Cell | undefined {
     if (!isRecord(json)) {
         return undefined;
     }
+    const recurrence = json.recurrence ?? null;
+    if (recurrence !== null && typeof recurrence !== 'string') {
+        return undefined;
+    }
     if (json.kind === 'pause') {
-        return PAUSE;
+        return recurrence === null ? PAUSE : linkedTo(PAUSE, recurrence);
     }
     if (
         json.kind === 'work' &&
         typeof json.ticket === 'string' &&
         (json.comment === null || typeof json.comment === 'string')
     ) {
-        return work(json.ticket, json.comment);
+        return work(json.ticket, json.comment, recurrence);
     }
 
     return undefined;

@@ -49,10 +49,11 @@ final class SimultaneousWritesTest extends KernelTestCase
 
     public function testLaSecondeEcritureAttendQueLaPremiereSoitFinie(): void
     {
-        // La première écriture, comme DayWriter la mène : la version d'abord, puis la
+        // La première écriture, comme DayWriter la mène : le verrou d'abord, puis la
         // journée qui se crée.
         $this->connection->beginTransaction();
-        self::assertFalse($this->days()->claim(self::date(), 0));
+        $this->days()->lock();
+        self::assertNull($this->days()->findWithSlots(self::date()));
         $this->entityManager()->persist(new Day(self::date(), Objective::HABITUAL));
         $this->entityManager()->flush();
 
@@ -67,7 +68,8 @@ final class SimultaneousWritesTest extends KernelTestCase
     public function testMemeUneJourneeIntrouvableVerrouilleLaBasePourLaVerifier(): void
     {
         $this->connection->beginTransaction();
-        self::assertFalse($this->days()->claim(self::date(), 3), 'Une version 3 d\'une journée qui n\'existe pas est périmée.');
+        $this->days()->lock();
+        self::assertNull($this->days()->findWithSlots(self::date()), 'Une journée qui n\'existe pas se vérifie sous le verrou.');
 
         $this->assertLocked('UPDATE day SET version = version + 1 WHERE date = \'2026-10-06\' AND version = 0');
     }

@@ -1,9 +1,20 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
-import { Grid, normalizeComment, normalizeTicket, PAUSE, sameCell, work } from '../../../assets/grid/grid';
+import {
+    Grid,
+    linkedTo,
+    normalizeCell,
+    normalizeComment,
+    normalizeTicket,
+    PAUSE,
+    sameCell,
+    sameContent,
+    unlinked,
+    work,
+} from '../../../assets/grid/grid';
 import * as Quarter from '../../../assets/grid/quarter';
-import { gridArbitrary, gridOf, minutes, type Range, rangesOf, readCases } from './support';
+import { gridOf, linkedGridArbitrary, minutes, type Range, rangesOf, readCases } from './support';
 
 describe('les cas partagés avec le serveur', () => {
     const cases = readCases('blocks.json') as { name: string; slots: Range[]; blocks: Range[] }[];
@@ -66,7 +77,7 @@ describe('Grid', () => {
 
     it('rend ses blocs tels qu’il les a reçus', () => {
         fc.assert(
-            fc.property(gridArbitrary, (grid) => {
+            fc.property(linkedGridArbitrary, (grid) => {
                 expect(Grid.fromBlocks(grid.blocks()).equals(grid)).toBe(true);
             }),
         );
@@ -74,7 +85,7 @@ describe('Grid', () => {
 
     it('découpe en blocs sans chevauchement, sans trou ni voisins identiques', () => {
         fc.assert(
-            fc.property(gridArbitrary, (grid) => {
+            fc.property(linkedGridArbitrary, (grid) => {
                 const blocks = grid.blocks();
                 blocks.forEach((block, index) => {
                     const next = blocks[index + 1];
@@ -96,7 +107,7 @@ describe('Grid', () => {
 
     it('compte dans le travaillé la somme des blocs de travail, jamais une pause', () => {
         fc.assert(
-            fc.property(gridArbitrary, (grid) => {
+            fc.property(linkedGridArbitrary, (grid) => {
                 const worked = grid
                     .blocks()
                     .filter((block) => block.content.kind === 'work')
@@ -120,7 +131,7 @@ describe('Grid', () => {
 
     it('passe d’une grille à l’autre par ce qui les sépare, et rien d’autre', () => {
         fc.assert(
-            fc.property(gridArbitrary, gridArbitrary, (from, to) => {
+            fc.property(linkedGridArbitrary, linkedGridArbitrary, (from, to) => {
                 const changes = from.changesTo(to);
 
                 expect(from.with(changes).equals(to)).toBe(true);
@@ -151,7 +162,7 @@ describe('Grid', () => {
         expect(gridOf([['07:00', '07:15', 'pause', null, null]]).hasPause()).toBe(true);
         expect(gridOf([['19:45', '20:00', 'pause', null, null]]).hasPause()).toBe(true);
         fc.assert(
-            fc.property(gridArbitrary, (grid) => {
+            fc.property(linkedGridArbitrary, (grid) => {
                 expect(grid.hasPause()).toBe(grid.blocks().some((block) => block.content.kind === 'pause'));
                 expect(grid.tickets()).toEqual([
                     ...new Set(
@@ -168,6 +179,60 @@ describe('Grid', () => {
 
         expect(grid.at(minutes('09:00'))).toBeNull();
         expect(filled.at(minutes('09:00'))).toEqual(PAUSE);
+    });
+});
+
+describe('le lien d’un quart d’heure à la récurrence qui l’a posé', () => {
+    const daily = work('OPS-12', 'Daily');
+
+    it('sépare deux contenus égaux de récurrences différentes, ou l’un à la main, et les lit pareil', () => {
+        expect(sameCell(linkedTo(daily, 'a'), work('OPS-12', 'Daily', 'a'))).toBe(true);
+        expect(sameCell(linkedTo(daily, 'a'), linkedTo(daily, 'b'))).toBe(false);
+        expect(sameCell(linkedTo(daily, 'a'), daily)).toBe(false);
+        expect(sameCell(linkedTo(PAUSE, 'a'), PAUSE)).toBe(false);
+
+        expect(sameContent(linkedTo(daily, 'a'), linkedTo(daily, 'b'))).toBe(true);
+        expect(sameContent(linkedTo(daily, 'a'), daily)).toBe(true);
+        expect(sameContent(linkedTo(PAUSE, 'a'), PAUSE)).toBe(true);
+        expect(sameContent(linkedTo(PAUSE, 'a'), daily)).toBe(false);
+        expect(sameContent(daily, work('OPS-12', 'Revue'))).toBe(false);
+    });
+
+    it('se retire sans toucher au contenu, et rend le même contenu quand il ne change pas', () => {
+        const linked = work('OPS-12', 'Daily', 'a');
+
+        expect(unlinked(linked)).toEqual(daily);
+        expect(unlinked(linkedTo(PAUSE, 'a'))).toEqual(PAUSE);
+        expect(linkedTo(linked, 'a')).toBe(linked);
+        expect(unlinked(PAUSE)).toBe(PAUSE);
+        expect(linkedTo(PAUSE, 'b')).toEqual({ kind: 'pause', recurrence: 'b' });
+    });
+
+    it('survit à la réécriture du ticket et du commentaire', () => {
+        expect(normalizeCell(work(' ops-12 ', 'Daily  du\u{a0}matin', 'a'))).toEqual(
+            work('OPS-12', 'Daily du matin', 'a'),
+        );
+        expect(normalizeCell(linkedTo(PAUSE, 'a'))).toEqual(linkedTo(PAUSE, 'a'));
+    });
+
+    it('ne change rien au temps travaillé ni aux pauses : un quart d’heure lié compte une fois', () => {
+        fc.assert(
+            fc.property(linkedGridArbitrary, fc.integer({ min: 0, max: 1440 }), (grid, minute) => {
+                const hand = Grid.of(
+                    Quarter.all().flatMap((quarter) => {
+                        const cell = grid.at(quarter);
+
+                        return cell === null ? [] : [[quarter, unlinked(cell)] as const];
+                    }),
+                );
+
+                expect(grid.workedMinutes()).toBe(hand.workedMinutes());
+                expect(grid.workedBefore(minute)).toBe(hand.workedBefore(minute));
+                expect(grid.isPauseAt(minute)).toBe(hand.isPauseAt(minute));
+                expect(grid.tickets()).toEqual(hand.tickets());
+                expect(grid.blocks().length).toBeGreaterThanOrEqual(hand.blocks().length);
+            }),
+        );
     });
 });
 

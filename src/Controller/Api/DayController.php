@@ -5,6 +5,7 @@ namespace App\Controller\Api;
 use App\Api\ApiError;
 use App\Api\FieldRefusal;
 use App\Api\Input\ObjectiveInput;
+use App\Api\Input\RecurrenceInput;
 use App\Api\Input\SendInput;
 use App\Api\Input\SlotsInput;
 use App\Api\JsonPayload;
@@ -13,6 +14,8 @@ use App\Day\DayWriter;
 use App\Day\NonWorkingDay;
 use App\Day\StaleDay;
 use App\Day\UserCalendar;
+use App\Recurrence\RecurrenceRefused;
+use App\Recurrence\UntilChange;
 use App\Sending\AlreadySending;
 use App\Sending\DaySender;
 use App\Sending\NothingToSend;
@@ -53,12 +56,41 @@ final class DayController extends AbstractController
         $day = $this->open($date);
 
         try {
-            $written = $this->writer->changeSlots($day, $input->version, $input->quarters());
+            $written = $this->writer->changeSlots($day, $input->version, $input->quarters(), $input->links(), $input->rewinds(), $input->restores, $input->detached());
         } catch (StaleDay) {
             return $this->stale($day);
+        } catch (RecurrenceRefused $refused) {
+            throw FieldRefusal::under($input, $refused->field, new IsTrue(message: $refused->getMessage()), $refused->getMessage());
         }
 
         return $this->json((null === $written ? $this->reader->view($day) : $this->reader->viewOf($written))->toArray());
+    }
+
+    /**
+     * « Enregistrer » dans la fenêtre d'un bloc, la case « Récurrence » cochée ou décochée :
+     * la journée écrite, et les fins des récurrences touchées, avant et après, qu'annuler
+     * leur rendra.
+     */
+    #[Route('/recurrence', name: 'api_day_recurrence', methods: ['PUT'])]
+    public function saveRecurrence(string $date, #[JsonPayload] RecurrenceInput $input): JsonResponse
+    {
+        $day = $this->open($date);
+
+        try {
+            $saved = $this->writer->saveRecurrence($day, $input->version, $input->quarters(), $input->spec(), $input->replaced(), $input->followed());
+        } catch (StaleDay) {
+            return $this->stale($day);
+        } catch (RecurrenceRefused $refused) {
+            $constraint = new IsTrue(message: $refused->getMessage());
+
+            throw FieldRefusal::under($input, $refused->field, $constraint, $refused->getMessage());
+        }
+
+        $view = null === $saved->day ? $this->reader->view($day) : $this->reader->viewOf($saved->day);
+
+        return $this->json($view->toArray() + [
+            'untils' => array_map(static fn (UntilChange $until): array => $until->toArray(), $saved->untils),
+        ]);
     }
 
     #[Route('/objective', name: 'api_day_objective', methods: ['PUT'])]

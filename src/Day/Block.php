@@ -3,7 +3,8 @@
 namespace App\Day;
 
 /**
- * Des quarts d'heure voisins au même contenu, tels que la grille les affiche.
+ * Des quarts d'heure voisins au même contenu, posés par la même récurrence ou par aucune,
+ * tels que la grille les affiche.
  */
 final readonly class Block
 {
@@ -11,6 +12,8 @@ final readonly class Block
         public int $start,
         public int $end,
         public SlotContent $content,
+        /** L'identifiant de la récurrence qui l'a posé ; null pour une saisie ordinaire. */
+        public ?string $recurrence = null,
     ) {
     }
 

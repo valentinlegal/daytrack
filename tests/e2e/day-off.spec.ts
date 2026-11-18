@@ -14,6 +14,7 @@ import {
     objectiveWindow,
     openAnyway,
     recordWrites,
+    rereadBehindGestures,
     savedDay,
     slots,
     ticketWindow,
@@ -153,6 +154,42 @@ test('« Saisir quand même » laisse 0h00 : tout compte en plus, le jour reste 
     await expect(openAnyway(page)).toBeVisible();
     await expect(cell(page, date)).toHaveAccessibleName('15 septembre, jour affiché, non travaillé');
     expect(await savedDay(request, date)).toEqual([]);
+
+    // Fermé, il ne prend ni Ctrl+Z ni Ctrl+Maj+Z, une fois lu comme tapés pendant qu'il s'ouvre.
+    const before = describedWrites(writes).length;
+    await openAnyway(page).focus();
+    await page.keyboard.press('ControlOrMeta+z');
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await rereadBehindGestures(page, date);
+    await page.getByRole('button', { name: 'Jour suivant' }).click();
+    await expect(page).toHaveURL('/2021-09-16');
+    await expect(figures(page)).toHaveCount(1);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    await page.route(`**/api/days/${date}`, async (route) => {
+        await held;
+        await route.continue();
+    });
+    await cell(page, date).click();
+    await expect(page).toHaveURL(`/${date}`);
+    await expect(figures(page)).toHaveCount(0);
+    await page.keyboard.press('ControlOrMeta+z');
+    release();
+    await expect(openAnyway(page)).toBeVisible();
+    await rereadBehindGestures(page, date);
+    await expect(openAnyway(page)).toBeVisible();
+    await expect(blocks(page)).toHaveCount(0);
+    expect(describedWrites(writes)).toHaveLength(before);
+    expect(await savedDay(request, date)).toEqual([]);
+
+    // « Saisir quand même » le rouvre : la saisie effacée y reste à annuler.
+    await openAnyway(page).click();
+    await expect(slots(page)).toBeFocused();
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(blocks(page)).toHaveCount(1);
+    await expectGridMatchesBase(page, request, date);
 });
 
 test('pendant sa lecture, un jour que le calendrier sait mis à 0h00 se montre déjà fermé', async ({

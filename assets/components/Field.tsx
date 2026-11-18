@@ -1,4 +1,4 @@
-import { type ComponentPropsWithoutRef, forwardRef, useId } from 'react';
+import { type ComponentPropsWithoutRef, forwardRef, type Ref, useId } from 'react';
 
 import { ErrorIcon } from './icons';
 
@@ -94,8 +94,8 @@ export function FieldLabel({ htmlFor, label, optional }: { htmlFor: string; labe
 }
 
 // Un message sous un champ peut passer sur deux lignes : son icône reste en face de la
-// première.
-const FIELD_MESSAGE = 'flex items-start gap-2 text-sm leading-(--lh)';
+// première. Amené à l'écran dans une fenêtre qui défile, il garde un espace sous lui.
+const FIELD_MESSAGE = 'flex scroll-mb-4 items-start gap-2 text-sm leading-(--lh)';
 
 /** Le refus sous un champ, que le champ désigne par son identifiant. */
 export function FieldError({ id, error }: { id: string; error: string }) {
@@ -117,15 +117,18 @@ export function GeneralError({
     message,
     instead = false,
     className,
+    ref,
 }: {
     message: string;
     instead?: boolean;
     className?: string;
+    /** Dans une fenêtre qui défile, de quoi l'amener à l'écran. */
+    ref?: Ref<HTMLParagraphElement>;
 }) {
     const look = instead ? 'absolute inset-0 m-auto flex h-fit w-fit items-center gap-2 font-medium' : FIELD_MESSAGE;
 
     return (
-        <p role="alert" className={[look, 'text-inc', className].filter(Boolean).join(' ')}>
+        <p ref={ref} role="alert" className={[look, 'text-inc', className].filter(Boolean).join(' ')}>
             <ErrorIcon />
             {message}
         </p>

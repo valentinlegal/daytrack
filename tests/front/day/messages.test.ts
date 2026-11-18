@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    elsewhereRefusal,
     objectiveRefusal,
     PART_REFUSAL,
     partNote,
@@ -16,6 +17,7 @@ import { fill } from '../../../assets/grid/changes';
 import { type Grid, PAUSE, work } from '../../../assets/grid/grid';
 import { stepBetween } from '../../../assets/grid/history';
 import { lossIn } from '../../../assets/grid/loss';
+import { detach } from '../../../assets/grid/recurrence';
 import { extendTo, selectQuarter } from '../../../assets/grid/selection';
 import { gridOf, minutes } from '../grid/support';
 
@@ -37,7 +39,7 @@ describe('le message d’annulation', () => {
     it('nomme le ticket quand le geste n’en touche qu’un, commentaires compris', () => {
         expect(undoMessage('delete', step('11:15', '11:45', null))).toEqual({
             ticket: 'SHOP-519',
-            text: 'supprimé',
+            text: 'effacé',
             undo: true,
         });
         expect(undoMessage('cut', step('11:30', '11:30', null))).toMatchObject({ ticket: 'SHOP-519', text: 'coupé' });
@@ -146,6 +148,20 @@ describe('une partie de bloc changée par Modifier la sélection', () => {
         });
     });
 
+    it('ne compte pas modifié un quart d’heure seulement délié de sa récurrence', () => {
+        // Le Daily revient ; un autre commentaire sur 09:15 détache la fois entière, 09:00 compris.
+        const daily = gridOf([['09:00', '09:30', 'work', 'OPS-12', 'Daily', 'daily']]);
+        const changes = detach(daily, fill([minutes('09:15')], work('OPS-12', 'Rétro')));
+        const after = daily.with(changes);
+        expect(after.at(minutes('09:00'))).toEqual(work('OPS-12', 'Daily'));
+
+        expect(undoMessage('modify', stepBetween(daily, after, changes.keys()))).toEqual({
+            ticket: 'OPS-12',
+            text: 'modifié de 09:15 à 09:30',
+            undo: true,
+        });
+    });
+
     it('annonce sous les champs que le reste du bloc ne bouge pas', () => {
         expect(partNote('SHOP-482', 3)).toBe('Modifie SHOP-482 sur ces 45 minutes seulement.');
         expect(partNote('OPS-12', 6)).toBe('Modifie OPS-12 sur ces 90 minutes seulement.');
@@ -179,6 +195,36 @@ describe('ce que l’écran dit d’un geste refusé', () => {
             expect(refusalMessage({ kind })).toBeNull();
         }
         expect(refusalMessage({ kind: 'saved', step: null })).toBeNull();
+    });
+
+    it('dit, sur la journée affichée, le refus d’un geste fait sur un autre jour, ce jour devant', () => {
+        const taken = {
+            ticket: null,
+            text: 'Ce créneau est déjà pris par la récurrence «\u{a0}Daily\u{a0}».',
+            undo: false,
+        };
+        expect(elsewhereRefusal('2026-11-17', taken)).toEqual({
+            ticket: null,
+            text: 'Mardi 17 novembre\u{a0}: ce créneau est déjà pris par la récurrence «\u{a0}Daily\u{a0}».',
+            undo: false,
+        });
+        // « L' » perd sa majuscule comme un mot ; un identifiant en tête reste tel quel, et le
+        // ticket nommé passe dans le texte.
+        expect(
+            elsewhereRefusal('2026-11-17', {
+                ticket: null,
+                text: "L'enregistrement n'a pas abouti. Réessayez.",
+                undo: false,
+            }).text,
+        ).toBe("Mardi 17 novembre\u{a0}: l'enregistrement n'a pas abouti. Réessayez.");
+        expect(elsewhereRefusal('2026-11-17', { ticket: null, text: 'SHOP-999 introuvable.', undo: false }).text).toBe(
+            'Mardi 17 novembre\u{a0}: SHOP-999 introuvable.',
+        );
+        expect(elsewhereRefusal('2026-11-02', { ticket: 'SHOP-482', text: 'refusé.', undo: true })).toEqual({
+            ticket: null,
+            text: 'Lundi 2 novembre\u{a0}: SHOP-482 refusé.',
+            undo: false,
+        });
     });
 
     it('garde la fenêtre ouverte avec ce qui s’est passé', () => {

@@ -3,6 +3,7 @@
 namespace App\Day;
 
 use App\Entity\Day;
+use App\Recurrence\RecurrencePoser;
 use App\Repository\DayRepository;
 use App\Repository\DaySendRepository;
 use App\Repository\EmptyDayWatchRepository;
@@ -15,6 +16,10 @@ use Symfony\Component\Clock\ClockInterface;
 /**
  * Les marques des jours que montre le calendrier, date après date, lues sans rien
  * écrire : un jour sans ligne se lit vide, à l'objectif habituel, comme dans la journée.
+ *
+ * Un jour à venir se marque sur ses seules saisies : ses fois prévues ne le disent pas
+ * « Non envoyé ». Déjà envoyé, il n'en prévoit plus aucune (DaySendRepository::closesToRecurrences) :
+ * ses saisies sont tout ce qu'il montre, comme pour son bouton.
  */
 final readonly class CalendarMarks
 {
@@ -29,12 +34,14 @@ final readonly class CalendarMarks
         private UserCalendar $calendar,
         private UserSettings $settings,
         private ClockInterface $clock,
+        private RecurrencePoser $poser,
     ) {
     }
 
-    /** De $from à $to compris. */
+    /** De $from à $to compris, les récurrences posées sur les jours venus. */
     public function between(\DateTimeImmutable $from, \DateTimeImmutable $to): CalendarDays
     {
+        $this->poser->pose();
         $today = $this->calendar->today()->format('Y-m-d');
         $habitual = $this->settings->habitualObjective();
         $workingDays = $this->settings->workingDays();
@@ -60,6 +67,7 @@ final readonly class CalendarMarks
             $key = $date->format('Y-m-d');
             $day = $rows[$key] ?? null;
             $grid = $day?->grid() ?? Grid::empty();
+            $sent = $sends[$key] ?? null;
             if (true === $day?->isDeclaredOff()) {
                 $daysOff[] = $key;
             }
@@ -71,7 +79,7 @@ final readonly class CalendarMarks
                 $key < $today,
                 UserSettings::worksOn($workingDays, $date),
                 null !== $watchedAfter && $key > $watchedAfter,
-                SendState::settled($sends[$key] ?? null, Worklog::ofDay($grid, $date, $this->calendar), $now),
+                SendState::settled($sent, Worklog::ofDay($grid, $date, $this->calendar), $now),
             );
             if (null !== $mark) {
                 $marks[$key] = $mark;

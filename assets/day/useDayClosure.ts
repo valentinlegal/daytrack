@@ -43,7 +43,8 @@ export interface OffDay {
 
 /**
  * Où va le curseur autour d'une grille fermée, qui ne le prend pas. « Saisir quand même »
- * disparaît avec elle : le curseur, perdu, va à la grille. Ce qui le rendrait à une grille
+ * disparaît avec elle — ouverte par lui, ou par le « Annuler » d'un message qui y rend un bloc — : le curseur,
+ * perdu, va à la grille. Ce qui le rendrait à une grille
  * fermée — une fenêtre restée ouverte pendant qu'elle se fermait, un message — le donne à
  * « Saisir quand même », dès qu'il paraît.
  *
@@ -64,12 +65,29 @@ export function useOffDayFocus(
     const openingRef = useRef(false);
     const openAnywayRef = useRef<HTMLButtonElement>(null);
     const focusButtonRef = useRef(false);
+    const wasClosedRef = useRef(closed);
+    // Le bouton avait le curseur : retiré de la page, il ne le dit à personne.
+    const buttonFocusedRef = useRef(false);
 
     useEffect(() => {
-        if (!closed && openingRef.current) {
+        const onFocusIn = (event: FocusEvent) => {
+            buttonFocusedRef.current = event.target !== null && event.target === openAnywayRef.current;
+        };
+        document.addEventListener('focusin', onFocusIn);
+
+        return () => {
+            document.removeEventListener('focusin', onFocusIn);
+        };
+    }, []);
+
+    useEffect(() => {
+        const lost = document.activeElement === null || document.activeElement === document.body;
+        if (!closed && (openingRef.current || (wasClosedRef.current && buttonFocusedRef.current && lost))) {
             openingRef.current = false;
+            buttonFocusedRef.current = false;
             focusGrid();
         }
+        wasClosedRef.current = closed;
     });
 
     useEffect(() => {

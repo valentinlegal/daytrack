@@ -14,6 +14,7 @@ import { dayLabel, type Tense } from './calendar';
 import { figuresLine } from './figuresLine';
 import { duration } from './format';
 import { objectiveRefusal, windowRefusal } from './messages';
+import { withdrawalNote } from './recurrenceText';
 
 /** Une fenêtre ouverte, vue de l'écran qui la porte. */
 export interface OpenWindow {
@@ -152,6 +153,9 @@ function ObjectiveForm({
 
     const reading = readObjective(text);
     const draft = reading.kind === 'ok' ? reading.minutes : null;
+    // À 0h00, le jour se déclare non travaillé, sauf à l'objectif habituel, qu'il suit.
+    const off = draft === 0 && habitual !== 0;
+    const withdrawn = off ? withdrawalNote(day) : null;
     const tail = draft === null ? null : figuresLine(dayFigures(day.grid, draft, now), draft, tense).tail;
     const end = tail?.kind === 'remaining' ? tail.projectedEnd : null;
 
@@ -272,18 +276,22 @@ function ObjectiveForm({
                 }}
             />
             <div className="flex flex-col items-start gap-2">
-                <p className="text-sm leading-(--lh) text-ink-2">
-                    {/* À 0h00, le jour se déclare non travaillé, sauf à l'objectif habituel, qu'il suit. */}
-                    {draft === 0 && habitual !== 0 ? (
-                        'Jour non travaillé. '
-                    ) : end !== null ? (
-                        <>
-                            Fin prévue à <b className="font-semibold text-ink tabular-nums">{Quarter.format(end)}</b>
-                            .{' '}
-                        </>
-                    ) : null}
-                    Les autres jours gardent votre objectif habituel.
-                </p>
+                {/* Ce que la durée tapée change se lit au lecteur d'écran sans quitter le champ :
+                    la fin prévue, le jour non travaillé, et ce que le 0h00 retirera. */}
+                <div role="status" className="flex flex-col gap-2">
+                    <p className="text-sm leading-(--lh) text-ink-2">
+                        {off ? (
+                            'Jour non travaillé. '
+                        ) : end !== null ? (
+                            <>
+                                Fin prévue à{' '}
+                                <b className="font-semibold text-ink tabular-nums">{Quarter.format(end)}</b>.{' '}
+                            </>
+                        ) : null}
+                        Les autres jours gardent votre objectif habituel.
+                    </p>
+                    {withdrawn !== null && <p className="text-sm leading-(--lh) text-ink-2">{withdrawn}</p>}
+                </div>
                 {draft !== habitual && (
                     <Button
                         variant="link"

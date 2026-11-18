@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { type ClosureFacts, closureReason, staysOpen } from '../../../assets/day/dayClosure';
 import type { DayState } from '../../../assets/grid/day';
 import { Grid } from '../../../assets/grid/grid';
+import { weekly } from '../../../assets/grid/recurrence';
 import { NOTHING_SENT } from '../../../assets/grid/send';
 import { gridOf } from '../grid/support';
 
@@ -22,6 +23,10 @@ function dayOf(date: string, overrides: Partial<DayState> = {}): DayState {
         workingDays: WEEK,
         grid: Grid.empty(),
         send: NOTHING_SENT,
+        recurrences: new Map(),
+        recurrencesHeld: false,
+        ongoing: new Map(),
+        settledAhead: new Set(),
         ...overrides,
     };
 }
@@ -93,5 +98,39 @@ describe('staysOpen', () => {
         expect(staysOpen(dayOf(MONDAY))).toBe(false);
         expect(staysOpen(dayOf(MONDAY, { grid: gridOf([['19:45', '20:00', 'pause', null, null]]) }))).toBe(true);
         expect(staysOpen(dayOf(MONDAY, { grid: FILLED }))).toBe(true);
+    });
+
+    it('ne compte pas les blocs de ses récurrences, que le 0h00 retire', () => {
+        const daily = {
+            id: 'r-daily',
+            start: 540,
+            end: 570,
+            rhythm: weekly([1, 2, 3, 4, 5]),
+            firstDay: '2025-10-01',
+            until: null,
+            content: { kind: 'work', ticket: 'OPS-12', comment: 'Daily' },
+        } as const;
+        const recurrences = new Map([[daily.id, daily]]);
+        const withDaily = gridOf([['09:00', '09:30', 'work', 'OPS-12', 'Daily', daily.id]]);
+        const withTicket = gridOf([
+            ['09:00', '09:30', 'work', 'OPS-12', 'Daily', daily.id],
+            ['14:00', '15:00', 'work', 'SHOP-482', null],
+        ]);
+
+        expect(staysOpen(dayOf(MONDAY, { grid: withDaily, recurrences }))).toBe(false);
+        expect(staysOpen(dayOf(MONDAY, { grid: withTicket, recurrences }))).toBe(true);
+        // Un jour déjà fermé — décoché des réglages, ou à 0h00 — les compte : y effacer le
+        // dernier ne le referme pas sous le curseur.
+        expect(staysOpen(dayOf(MONDAY, { grid: withDaily, recurrences, working: false }))).toBe(true);
+        expect(staysOpen(dayOf(MONDAY, { grid: withDaily, recurrences, declaredOff: true, objective: 0 }))).toBe(true);
+        // Finie avant ce jour, la récurrence n'y a plus de flèche : le bloc est une saisie.
+        expect(
+            staysOpen(
+                dayOf(MONDAY, {
+                    grid: withDaily,
+                    recurrences: new Map([[daily.id, { ...daily, until: '2025-10-05' }]]),
+                }),
+            ),
+        ).toBe(true);
     });
 });

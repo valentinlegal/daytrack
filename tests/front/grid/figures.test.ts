@@ -2,13 +2,15 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import { dayFigures } from '../../../assets/grid/figures';
-import { work } from '../../../assets/grid/grid';
+import { PAUSE, work } from '../../../assets/grid/grid';
 import * as Quarter from '../../../assets/grid/quarter';
-import { gridArbitrary, gridOf, type Range, readCases } from './support';
+import { gridArbitrary, gridOf, type Range, readCases, withPlanned } from './support';
 
 interface FiguresCase {
     name: string;
     blocks: [string, string, 'work' | 'pause'][];
+    /** Les fois prévues d'un jour à venir, dans l'ordre de leurs récurrences. */
+    planned?: [string, string, 'work' | 'pause'][];
     objective: number;
     now: string | null;
     expected: { worked: number; remaining: number; balance: number; projectedEnd: string | null };
@@ -17,8 +19,18 @@ interface FiguresCase {
 describe('les cas partagés avec le serveur', () => {
     const cases = readCases('day-figures.json') as FiguresCase[];
 
-    it.each(cases)('$name', ({ blocks, objective, now, expected }) => {
-        const grid = gridOf(blocks.map(([start, end, kind]): Range => [start, end, kind, 'SHOP-482', null]));
+    it.each(cases)('$name', ({ blocks, planned = [], objective, now, expected }) => {
+        const grid = withPlanned(
+            gridOf(blocks.map(([start, end, kind]): Range => [start, end, kind, 'SHOP-482', null])),
+            planned.map(([start, end, kind], index) => ({
+                start: Quarter.parse(start) ?? Number.NaN,
+                end: Quarter.parse(end) ?? Number.NaN,
+                content:
+                    kind === 'pause'
+                        ? { ...PAUSE, recurrence: `r${String(index)}` }
+                        : work('OPS-12', null, `r${String(index)}`),
+            })),
+        );
         const figures = dayFigures(grid, objective, now === null ? null : Quarter.parse(now));
 
         expect({

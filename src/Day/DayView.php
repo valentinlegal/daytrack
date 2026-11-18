@@ -2,6 +2,8 @@
 
 namespace App\Day;
 
+use App\Entity\Recurrence;
+use App\Recurrence\RecurrenceView;
 use App\Sending\SendView;
 
 /**
@@ -42,6 +44,37 @@ final readonly class DayView
          * @var array<string, array{title: ?string, type: ?string, color: ?string}>
          */
         public array $tickets = [],
+        /**
+         * Celles qui ont posé un bloc ce jour-là, par leur identifiant : leur rythme, que la
+         * flèche du bloc et sa fenêtre disent.
+         *
+         * @var array<string, Recurrence>
+         */
+        public array $recurrences = [],
+        /** Fermé et vide, alors qu'une récurrence y serait tombée : la journée vide le dit. */
+        public bool $recurrencesHeld = false,
+        /**
+         * Toutes celles qui ont encore des jours après aujourd'hui : une récurrence qu'on y crée
+         * ou qu'on y change ne doit tomber sur aucune, et la fenêtre le dit avant le serveur
+         * (RecurrenceClash).
+         *
+         * @var array<string, Recurrence>
+         */
+        public array $ongoing = [],
+        /**
+         * Leurs fois détachées ou effacées après aujourd'hui, par récurrence : elles ne prennent
+         * plus leur créneau, et ses prochaines fois ne les montrent pas.
+         *
+         * @var array<string, list<string>>
+         */
+        public array $skipped = [],
+        /**
+         * Les jours à venir déjà envoyés, « AAAA-MM-JJ » : leurs récurrences ne les changent plus
+         * (DaySendRepository::closesToRecurrences), et la fenêtre d'une récurrence ne les annonce pas.
+         *
+         * @var list<string>
+         */
+        public array $settledAhead = [],
     ) {
     }
 
@@ -54,7 +87,11 @@ final readonly class DayView
      *     working: bool,
      *     declaredOff: bool,
      *     workingDays: list<int>,
-     *     blocks: list<array{start: string, end: string, kind: string, ticket: ?string, comment: ?string}>,
+     *     blocks: list<array{start: string, end: string, kind: string, ticket: ?string, comment: ?string, recurrence: ?string}>,
+     *     recurrences: object,
+     *     recurrencesHeld: bool,
+     *     ongoing: object,
+     *     settledAhead: list<string>,
      *     figures: array{worked: int, remaining: int, balance: int, projectedEnd: ?string},
      *     send: array{state: string, sentAt: ?array{date: string, time: string}, attemptedAt: ?array{date: string, time: string}, failure: ?string, outcomes: object, removed: list<string>, inJira: object},
      *     tickets: object,
@@ -76,7 +113,13 @@ final readonly class DayView
                 'kind' => $block->content->kind->value,
                 'ticket' => $block->content->ticket,
                 'comment' => $block->content->comment,
+                'recurrence' => $block->recurrence,
             ], $this->grid->blocks()),
+            // Un objet même vide : le navigateur y cherche une récurrence par son identifiant.
+            'recurrences' => (object) array_map(fn (Recurrence $recurrence): array => RecurrenceView::of($recurrence, $this->skipped[$recurrence->id->toRfc4122()] ?? []), $this->recurrences),
+            'recurrencesHeld' => $this->recurrencesHeld,
+            'ongoing' => (object) array_map(fn (Recurrence $recurrence): array => RecurrenceView::of($recurrence, $this->skipped[$recurrence->id->toRfc4122()] ?? []), $this->ongoing),
+            'settledAhead' => $this->settledAhead,
             'figures' => [
                 'worked' => $this->figures->worked,
                 'remaining' => $this->figures->remaining,

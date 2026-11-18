@@ -92,16 +92,25 @@ export function editTitle(model: Model, quarter: number): string {
 }
 
 /**
- * Ce qu'écrit la fenêtre qu'Entrée ouvre sur la sélection : Nouveau ticket sur toute une
- * plage vide, sinon la fenêtre du créneau où la sélection s'arrête, comme un double-clic —
- * Nouveau ticket sur ce seul créneau s'il est vide, tout son bloc sinon.
+ * Entrée ouvre-t-elle la fenêtre du bloc ? Oui quand toute la sélection tient dans un bloc,
+ * comme un double-clic ; sinon, Nouveau ticket sur toute la sélection — une plage vide, des
+ * morceaux, ou à cheval sur un bloc.
  */
-export function enterQuarters(model: Model, quarters: readonly number[], head: number): readonly number[] {
-    if (quarters.every((quarter) => cellAt(model, quarter) === null)) {
-        return quarters;
+export function entersBlock(model: Model, quarters: readonly number[]): boolean {
+    const [first] = quarters;
+    if (first === undefined || cellAt(model, first) === null) {
+        return false;
     }
+    const block = blockOf(model, first);
 
-    return cellAt(model, head) === null ? [head] : blockOf(model, head);
+    return quarters.every((quarter) => block.includes(quarter));
+}
+
+/** Ce qu'écrit la fenêtre qu'Entrée ouvre sur la sélection : tout le bloc, ou toute la sélection (entersBlock). */
+export function enterQuarters(model: Model, quarters: readonly number[]): readonly number[] {
+    const [first] = quarters;
+
+    return first !== undefined && entersBlock(model, quarters) ? blockOf(model, first) : quarters;
 }
 
 /** Modifier la sélection ne s'ouvre que sur un seul ticket avec un seul commentaire : le voici, ou null. */

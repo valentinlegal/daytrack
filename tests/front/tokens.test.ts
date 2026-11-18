@@ -33,7 +33,7 @@ const TEXT: [string, string][] = [
     ['toast-ink-2', 'btn'],
     ['pause-ink', 'pause-bg'],
     ['ink', 'inc-bg'],
-    // « Supprimer », un message d'erreur sous son champ, « Non envoyé » dans le récapitulatif.
+    // « Effacer », un message d'erreur sous son champ, « Non envoyé » dans le récapitulatif.
     ['inc', 'bg'],
     ['inc', 'bg-side'],
     ['inc', 'bg-raise'],

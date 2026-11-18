@@ -2,9 +2,9 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 
 import { fill, type SlotChange, toSlotChanges } from '../../../assets/grid/changes';
-import { type Cell, PAUSE, work } from '../../../assets/grid/grid';
+import { type Cell, linkedTo, PAUSE, work } from '../../../assets/grid/grid';
 import * as Quarter from '../../../assets/grid/quarter';
-import { cellArbitrary, minutes, quarterArbitrary } from './support';
+import { linkedCellArbitrary, minutes, quarterArbitrary } from './support';
 
 describe('toSlotChanges', () => {
     it('regroupe les quarts d’heure voisins qui prennent le même contenu', () => {
@@ -25,6 +25,28 @@ describe('toSlotChanges', () => {
         ]);
     });
 
+    it('ne dit la récurrence que d’un contenu qui en porte une, et sépare deux récurrences', () => {
+        const changes = new Map<number, Cell>([
+            [minutes('09:00'), work('OPS-12', 'Daily', 'a')],
+            [minutes('09:15'), work('OPS-12', 'Daily', 'a')],
+            [minutes('09:30'), work('OPS-12', 'Daily', 'b')],
+            [minutes('09:45'), work('OPS-12', 'Daily')],
+            [minutes('12:30'), linkedTo(PAUSE, 'c')],
+            [minutes('12:45'), PAUSE],
+        ]);
+        const slots = toSlotChanges(changes);
+
+        expect(slots).toEqual([
+            { start: '09:00', end: '09:30', kind: 'work', ticket: 'OPS-12', comment: 'Daily', recurrence: 'a' },
+            { start: '09:30', end: '09:45', kind: 'work', ticket: 'OPS-12', comment: 'Daily', recurrence: 'b' },
+            { start: '09:45', end: '10:00', kind: 'work', ticket: 'OPS-12', comment: 'Daily' },
+            { start: '12:30', end: '12:45', kind: 'pause', ticket: null, comment: null, recurrence: 'c' },
+            { start: '12:45', end: '13:00', kind: 'pause', ticket: null, comment: null },
+        ]);
+        // Le serveur refuse un champ inconnu, et un lien nul n'a rien à lui dire.
+        expect(slots.filter((slot) => 'recurrence' in slot)).toHaveLength(3);
+    });
+
     it('écrit le dernier quart d’heure jusqu’à 20:00', () => {
         expect(toSlotChanges(fill([Quarter.LAST], PAUSE))).toEqual([
             { start: '19:45', end: '20:00', kind: 'pause', ticket: null, comment: null },
@@ -38,7 +60,7 @@ describe('toSlotChanges', () => {
 
     it('rend des créneaux ordonnés, sans recouvrement, qui disent exactement le geste', () => {
         fc.assert(
-            fc.property(fc.array(fc.tuple(quarterArbitrary, cellArbitrary)), (pairs) => {
+            fc.property(fc.array(fc.tuple(quarterArbitrary, linkedCellArbitrary)), (pairs) => {
                 const changes = new Map(pairs);
                 const slots = toSlotChanges(changes);
 
@@ -61,10 +83,9 @@ function expand(slots: readonly SlotChange[]): Map<number, Cell> {
     for (const slot of slots) {
         for (const quarter of Quarter.between(minutes(slot.start), minutes(slot.end))) {
             expect(quarters.has(quarter)).toBe(false);
-            quarters.set(
-                quarter,
-                slot.kind === 'empty' ? null : slot.kind === 'pause' ? PAUSE : work(slot.ticket ?? '', slot.comment),
-            );
+            const content =
+                slot.kind === 'empty' ? null : slot.kind === 'pause' ? PAUSE : work(slot.ticket ?? '', slot.comment);
+            quarters.set(quarter, content === null ? null : linkedTo(content, slot.recurrence ?? null));
         }
     }
 

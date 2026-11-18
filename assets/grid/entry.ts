@@ -1,4 +1,5 @@
 import { fill, type QuarterChanges } from './changes';
+import type { Clipboard } from './clipboard';
 import {
     type Block,
     type Grid,
@@ -6,11 +7,13 @@ import {
     normalizeTicket,
     PAUSE,
     sameCell,
+    sameContent,
     type SlotContent,
     work,
 } from './grid';
 import { type Loss, lossIn } from './loss';
 import * as Quarter from './quarter';
+import type { RecurrenceRule, SeenRecurrence } from './recurrence';
 import { type Selection, selectionRuns } from './selection';
 
 /** Le contenu d'un quart d'heure travaillé : un ticket et son commentaire. */
@@ -62,9 +65,64 @@ export type EntryAction =
      * en modifier le commentaire. Modifier un bloc entier se voit dans la grille : rien à
      * dire.
      */
-    | { readonly kind: 'write'; readonly changes: QuarterChanges; readonly gesture: EntryGesture | null };
+    | {
+          readonly kind: 'write';
+          readonly changes: QuarterChanges;
+          readonly gesture: EntryGesture | null;
+          /** Une coupe : ce qu'elle met dans le presse-papier, une fois l'écriture passée. */
+          readonly cuts?: Clipboard;
+      }
+    /**
+     * La case « Récurrence » : créer la récurrence du bloc écrit, la changer à partir de
+     * cette fois, ou l'arrêter — `rule` null —, sur le bloc que portait `replaces`, telle
+     * que la fenêtre l'a vue.
+     */
+    | {
+          readonly kind: 'recurrence';
+          readonly changes: QuarterChanges;
+          readonly rule: RecurrenceRule | null;
+          readonly replaces: SeenRecurrence | null;
+          readonly gesture: EntryGesture | null;
+          /** Une coupe avec les suivantes : le bloc et son rythme, une fois la récurrence arrêtée. */
+          readonly cuts?: Clipboard;
+      }
+    /**
+     * Un refus connu d'avance, sous les champs de la récurrence : ses jours, sa fin, ou un
+     * créneau qu'une autre récurrence prend déjà, dit sous les prochaines fois. Rien ne part.
+     */
+    | {
+          readonly kind: 'refuse';
+          readonly weekdays: string | null;
+          readonly until: string | null;
+          readonly rhythm: string | null;
+      }
+    /**
+     * Un geste sur un bloc qui revient, qui demande quelles fois il change : « Cette fois
+     * seulement » — un geste ordinaire, qui détache la fois — ou « Cette fois et les
+     * suivantes » — la récurrence coupée ou arrêtée à partir de cette fois.
+     */
+    | {
+          readonly kind: 'ask';
+          readonly question: ScopeQuestion;
+          readonly once: WriteAction;
+          readonly following: RecurrenceAction;
+          /**
+           * Allonger ou raccourcir : le bloc qui revient, et ses heures après le geste, que la
+           * question dit sous son titre.
+           */
+          readonly reshapes?: { readonly content: SlotContent; readonly start: number; readonly end: number };
+      };
 
-export type EntryGesture = 'delete' | 'clear' | 'replace' | 'modify' | 'pause';
+/**
+ * Ce que demande la question : modifier, arrêter — la case décochée —, effacer, couper,
+ * allonger ou raccourcir.
+ */
+export type ScopeQuestion = 'modify' | 'stop' | 'erase' | 'cut' | 'extend' | 'shorten';
+
+export type WriteAction = Extract<EntryAction, { readonly kind: 'write' }>;
+export type RecurrenceAction = Extract<EntryAction, { readonly kind: 'recurrence' }>;
+
+export type EntryGesture = 'delete' | 'clear' | 'cut' | 'paste' | 'replace' | 'modify' | 'pause';
 
 /** Le double-clic : le bloc sous le pointeur, ou ce seul quart d'heure s'il est vide. */
 export function targetAt(grid: Grid, quarter: number): EntryTarget {
@@ -74,18 +132,28 @@ export function targetAt(grid: Grid, quarter: number): EntryTarget {
 }
 
 /**
- * Entrée, au clavier : toute la sélection quand c'est une plage de créneaux vides,
- * sinon le quart d'heure où elle s'est arrêtée — le bloc entier —, comme un
- * double-clic. Rien sans sélection, même si le curseur est resté sur un créneau
- * après Échap : il ne se voit plus.
+ * Entrée, au clavier : une sélection tout entière dans un bloc ouvre le bloc entier, comme
+ * un double-clic ; toute autre — une plage vide, en plusieurs morceaux, ou à cheval sur un
+ * bloc —, Nouveau ticket sur toute la sélection, comme « Nouveau ticket… » ou une lettre
+ * tapée. Le bloc se lit sur la sélection, pas sous le curseur : Ctrl/⌘+clic a pu l'en retirer.
+ * Rien sans sélection, même si le curseur est resté sur un créneau après Échap : il ne se
+ * voit plus.
  */
 export function targetOfSelection(grid: Grid, selection: Selection): EntryTarget | null {
     const range = emptyRange(grid, selection);
     if (range !== null) {
         return { kind: 'new', quarters: range };
     }
+    const [first] = selection.quarters;
+    if (selection.head === null || first === undefined) {
+        return null;
+    }
+    const block = grid.blockAt(first);
+    if (block !== null && selection.quarters.every((quarter) => block.start <= quarter && quarter < block.end)) {
+        return { kind: 'edit', block };
+    }
 
-    return selection.head === null || selection.quarters.length === 0 ? null : targetAt(grid, selection.head);
+    return selectionTarget(selection);
 }
 
 /**
@@ -231,7 +299,9 @@ function savePart(target: PartTarget, ticket: string | null, comment: string | n
         return deleteEntry(target);
     }
     const content = work(ticket, comment);
-    if (sameCell(content, target.content)) {
+    // Le même ticket et le même commentaire, sur une partie d'un bloc qui revient : rien ne
+    // part, et la fois garde sa récurrence.
+    if (sameContent(content, target.content)) {
         return { kind: 'close' };
     }
 
@@ -290,7 +360,7 @@ export function pauseEntry(target: EntryTarget): EntryAction {
     };
 }
 
-/** « Supprimer », ou « Effacer » dans Modifier la sélection. */
+/** La corbeille, « Effacer », dans Modifier le ticket comme dans Modifier la sélection. */
 export function deleteEntry(target: EntryTarget): EntryAction {
     return {
         kind: 'write',
@@ -305,7 +375,8 @@ export function deleteEntry(target: EntryTarget): EntryAction {
  */
 function partOf(grid: Grid, quarters: readonly number[]): PartTarget | null {
     const first = quarters[0] === undefined ? null : grid.at(quarters[0]);
-    if (first?.kind !== 'work' || !quarters.every((quarter) => sameCell(grid.at(quarter), first))) {
+    // Une partie qui revient et une autre posée à la main se lisent pareil : elles se modifient ensemble.
+    if (first?.kind !== 'work' || !quarters.every((quarter) => isSameWork(grid.at(quarter), first))) {
         return null;
     }
     const selected = new Set(quarters);
@@ -328,4 +399,8 @@ function emptyRange(grid: Grid, selection: Selection): number[] | null {
     const quarters = Quarter.between(run.start, run.end);
 
     return quarters.every((quarter) => grid.at(quarter) === null) ? quarters : null;
+}
+
+function isSameWork(cell: SlotContent | null, work: SlotContent): boolean {
+    return cell !== null && sameContent(cell, work);
 }

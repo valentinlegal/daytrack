@@ -14,9 +14,14 @@ use App\Dev\Jira\State;
 use App\Dev\Jira\StateStore;
 use App\Jira\JiraClient;
 use App\Jira\JiraLink;
+use App\Recurrence\RecurrenceForecast;
+use App\Recurrence\RecurrencePoser;
 use App\Repository\DayRepository;
 use App\Repository\DaySendRepository;
+use App\Repository\RecurrenceRepository;
 use App\Sending\DaySender;
+use App\Sending\SendClosure;
+use App\Settings\UserSettings;
 use App\Tests\Support\DayApi;
 use App\Tests\Support\JiraApi;
 use Doctrine\ORM\EntityManagerInterface;
@@ -85,6 +90,11 @@ final class DaySenderTest extends WebTestCase
             new JiraClient(FakeJiraHttpClient::create(new FakeJira($store)), 'https://api.atlassian.com', new NativeClock()),
             $container->get(UserCalendar::class),
             $container->get(ClockInterface::class),
+            $container->get(RecurrencePoser::class),
+            $container->get(RecurrenceForecast::class),
+            $container->get(UserSettings::class),
+            $container->get(SendClosure::class),
+            $container->get(RecurrenceRepository::class),
         );
 
         $date = UserCalendar::date(self::TODAY) ?? throw new \LogicException();
@@ -143,6 +153,11 @@ final class DaySenderTest extends WebTestCase
             new JiraClient(FakeJiraHttpClient::create(new FakeJira($store)), 'https://api.atlassian.com', new NativeClock()),
             $container->get(UserCalendar::class),
             $clock,
+            $container->get(RecurrencePoser::class),
+            $container->get(RecurrenceForecast::class),
+            $container->get(UserSettings::class),
+            $container->get(SendClosure::class),
+            $container->get(RecurrenceRepository::class),
         );
 
         $date = UserCalendar::date(self::TODAY) ?? throw new \LogicException();
